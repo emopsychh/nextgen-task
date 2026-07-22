@@ -72,19 +72,22 @@ export function ProjectTasks() {
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, [token, projectId]);
 
-  // Soft realtime: while the project board is open, keep pulling Bitrix deadlines
+  // Soft realtime: cheap local poll; Bitrix pull only every ~15s
   useEffect(() => {
     if (!token || !projectId) return;
     let cancelled = false;
     let inFlight = false;
+    let tickCount = 0;
 
     async function tick() {
       if (cancelled || inFlight) return;
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       inFlight = true;
+      tickCount += 1;
       try {
+        const pull = tickCount % 5 === 0 ? "&pull=1" : "";
         const taskData = await api<Task[] | { results: Task[] }>(
-          `/api/tasks/?project=${projectId}&pull=1`,
+          `/api/tasks/?project=${projectId}${pull}`,
           {},
           token!
         );

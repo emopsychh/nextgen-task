@@ -94,6 +94,40 @@ class BitrixClient:
     def renew_task(self, task_id: int | str) -> dict:
         return self.call("tasks.task.renew", {"taskId": task_id})
 
+    def start_task_timer(self, task_id: int | str) -> dict:
+        """Start Bitrix task time tracking (Учёт времени)."""
+        try:
+            return self.call("tasks.task.startTimer", {"taskId": task_id})
+        except BitrixAPIError:
+            return self.call("task.timer.start", {"taskId": task_id})
+
+    def pause_task_timer(self, task_id: int | str) -> dict:
+        """Pause Bitrix task time tracking."""
+        try:
+            return self.call("tasks.task.pauseTimer", {"taskId": task_id})
+        except BitrixAPIError:
+            return self.call("task.timer.stop", {"taskId": task_id})
+
+    def add_elapsed_item(
+        self,
+        task_id: int | str,
+        seconds: int,
+        *,
+        comment: str = "",
+        user_id: str | None = None,
+    ) -> dict | str | int:
+        """Post a closed time record into Bitrix task elapsed items."""
+        fields: dict = {
+            "SECONDS": max(0, int(seconds)),
+            "COMMENT_TEXT": comment or "Nextgen timer",
+        }
+        if user_id:
+            fields["USER_ID"] = user_id
+        return self.call(
+            "task.elapseditem.add",
+            {"TASKID": task_id, "FIELDS": fields},
+        )
+
     def add_task_comment(self, task_id: int | str, message: str, author_id: str | None = None) -> dict | str | int:
         fields: dict = {"POST_MESSAGE": message}
         if author_id:

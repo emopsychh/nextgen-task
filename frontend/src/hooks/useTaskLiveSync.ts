@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { api, type Task } from "../api/types";
 
-const POLL_MS = 2000;
+const POLL_MS = 2500;
+const PULL_EVERY = 4; // Bitrix pull ~ every 10s; other ticks read local DB only
 
 function fingerprint(task: Task): string {
   const comments = task.comments || [];
@@ -80,15 +81,18 @@ export function useTaskLiveSync({
 
     let cancelled = false;
     let inFlight = false;
+    let tickCount = 0;
 
     async function tick() {
       if (cancelled || inFlight) return;
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       inFlight = true;
+      tickCount += 1;
       try {
-        // Always pull from Bitrix while the task is open — deadlines on agency
-        // subtasks must appear within one poll interval for agency and client.
-        const data = await api<Task>(`/api/tasks/${taskId}/?pull=1`, {}, token);
+        // Local poll is cheap; Bitrix pull is expensive — use it sparingly.
+        // Webhooks update DB; pull catches missed deadline/status changes.
+        const pull = tickCount === 1 || tickCount % PULL_EVERY === 0 ? "?pull=1" : "";
+        const data = await api<Task>(`/api/tasks/${taskId}/${pull}`, {}, token);
         if (cancelled) return;
         const fp = fingerprint(data);
         if (fp === fpRef.current) return;

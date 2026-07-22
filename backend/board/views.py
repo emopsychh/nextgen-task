@@ -22,7 +22,7 @@ from .serializers import (
     TaskSerializer,
 )
 from .tasks import sync_comment_to_bitrix, sync_project_to_bitrix, sync_task_to_bitrix
-from .timeutils import stop_time_entry
+from .timeutils import enqueue_timer_bitrix_sync, stop_time_entry
 
 logger = logging.getLogger(__name__)
 
@@ -190,8 +190,21 @@ class ProjectViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "description"]
 
     def get_queryset(self):
+        from django.db.models import Count, Q
+
         ids = accessible_portal_ids(self.request.user)
-        return Project.objects.filter(portal_id__in=ids).select_related("portal")
+        return (
+            Project.objects.filter(portal_id__in=ids)
+            .select_related("portal")
+            .annotate(
+                _tasks_count=Count("tasks", distinct=True),
+                _done_count=Count(
+                    "tasks",
+                    filter=Q(tasks__status=Task.Status.DONE),
+                    distinct=True,
+                ),
+            )
+        )
 
     def list(self, request, *args, **kwargs):
         # Soft realtime / first open: pull parent tasks from Bitrix company project
@@ -274,7 +287,11 @@ class TaskViewSet(viewsets.ModelViewSet):
                 try:
                     from board.status_sync import pull_task_status_from_bitrix
 
-                    qs = self.filter_queryset(self.get_queryset()).filter(project_id=project_id)[:80]
+                    qs = (
+                        self.filter_queryset(self.get_queryset())
+                        .filter(project_id=project_id)
+                        .exclude(agency_bitrix_task_id="")[:40]
+                    )
                     for task in qs:
                         try:
                             pull_task_status_from_bitrix(task)
@@ -360,6 +377,9 @@ class TaskViewSet(viewsets.ModelViewSet):
                         author=author,
                         started_at=timezone.now(),
                     )
+                    entry = task.time_entries.filter(ended_at__isnull=True).order_by("-started_at").first()
+                    if entry:
+                        enqueue_timer_bitrix_sync(entry.id, "start")
 
         created_events = append_task_change_events(
             task=task,
@@ -400,6 +420,9 @@ class TaskViewSet(viewsets.ModelViewSet):
             author=author,
             started_at=timezone.now(),
         )
+        entry = task.time_entries.filter(ended_at__isnull=True).order_by("-started_at").first()
+        if entry:
+            enqueue_timer_bitrix_sync(entry.id, "start")
         task.refresh_from_db()
         return Response(TaskSerializer(task, context={"request": request}).data)
 

@@ -75,6 +75,8 @@ def _task_fields(
         fields["GROUP_ID"] = group_id
     if parent_id:
         fields["PARENT_ID"] = parent_id
+    # Enable Bitrix «Учёт времени» so startTimer/pauseTimer work in the UI
+    fields["ALLOW_TIME_TRACKING"] = "Y"
     return fields
 
 
@@ -279,6 +281,7 @@ def _do_sync_project_to_bitrix(project_id: int) -> dict:
         "TITLE": project.name,
         "DESCRIPTION": project.description or "",
         "GROUP_ID": group_id,
+        "ALLOW_TIME_TRACKING": "Y",
     }
     if project.bitrix_task_id:
         client.update_task(project.bitrix_task_id, fields)
@@ -590,6 +593,136 @@ def post_time_entry_to_deal(self, entry_id: int):
                 return {"ok": False, "error": str(exc)}
         # Hours already deducted — keep claim; comment may be missing.
         return {"ok": True, "partial": True, "error": str(exc), "deal_id": binding.deal_id}
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=5)
+def sync_timer_to_bitrix(self, entry_id: int, action: str):
+    """
+    Mirror app timer onto Bitrix task «Учёт времени» (agency subtask).
+    action: start | stop
+    """
+    from board.models import TimeEntry
+
+    try:
+        entry = TimeEntry.objects.select_related(
+            "task",
+            "task__project",
+            "task__project__portal",
+            "author",
+        ).get(pk=entry_id)
+    except TimeEntry.DoesNotExist:
+        return {"ok": False, "reason": "missing"}
+
+    task = entry.task
+    agency = _agency_portal_for_client(task.project.portal)
+    bitrix_id = task.agency_bitrix_task_id or ""
+    if not agency or not agency.access_token or not bitrix_id:
+        # Ensure agency Bitrix task exists, then retry
+        if agency and agency.access_token:
+            try:
+                parent_id, group_id = _ensure_project_agency_parent(task.project)
+                prefix = f"[{task.project.portal.name or task.project.portal.domain}] "
+                bx = _sync_one_portal(
+                    task,
+                    agency,
+                    existing_id=task.agency_bitrix_task_id or "",
+                    title_prefix=prefix,
+                    group_id=group_id,
+                    parent_id=parent_id,
+                )
+                if bx and bx != task.agency_bitrix_task_id:
+                    task.agency_bitrix_task_id = bx
+                    task.save(update_fields=["agency_bitrix_task_id", "updated_at"])
+                    bitrix_id = bx
+            except Exception as exc:
+                try:
+                    raise self.retry(exc=exc)
+                except self.MaxRetriesExceededError:
+                    return {"ok": False, "reason": "no_agency_task", "error": str(exc)}
+        if not bitrix_id:
+            return {"ok": False, "reason": "no_agency_task"}
+
+    client = BitrixClient(agency)
+    try:
+        # Keep time tracking enabled on the Bitrix task
+        try:
+            client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
+        except BitrixAPIError:
+            pass
+
+        if action == "start":
+            # Status in progress helps Bitrix timer UI
+            try:
+                client.start_task(bitrix_id)
+            except BitrixAPIError:
+                pass
+            client.start_task_timer(bitrix_id)
+            return {"ok": True, "action": "start", "bitrix_task_id": bitrix_id}
+
+        if action == "stop":
+            paused_ok = False
+            try:
+                client.pause_task_timer(bitrix_id)
+                paused_ok = True
+            except BitrixAPIError as exc:
+                logger = __import__("logging").getLogger(__name__)
+                logger.info(
+                    "pauseTimer failed task=%s: %s — will post elapseditem", bitrix_id, exc
+                )
+
+            seconds = int(entry.duration_seconds or 0)
+            if seconds <= 0 and entry.ended_at and entry.started_at:
+                seconds = max(0, int((entry.ended_at - entry.started_at).total_seconds()))
+            # If live Bitrix timer couldn't be paused, post a closed elapsed record
+            if (not paused_ok) and seconds > 0 and not entry.bitrix_elapsed_id:
+                user_id = ""
+                if entry.author and entry.author.portal_id == agency.id:
+                    user_id = str(entry.author.bitrix_id or "")
+                if not user_id:
+                    user_id = _bitrix_user_id(client.get_current_user())
+                result = client.add_elapsed_item(
+                    bitrix_id,
+                    seconds,
+                    comment=f"Nextgen: {task.title}",
+                    user_id=user_id or None,
+                )
+                eid = ""
+                if isinstance(result, (int, float)):
+                    eid = str(int(result))
+                elif isinstance(result, str) and result.isdigit():
+                    eid = result
+                elif isinstance(result, dict):
+                    for key in ("id", "ID", "result"):
+                        val = result.get(key)
+                        if isinstance(val, (int, float)):
+                            eid = str(int(val))
+                            break
+                        if isinstance(val, str) and val.isdigit():
+                            eid = val
+                            break
+                if eid:
+                    entry.bitrix_elapsed_id = eid
+                    entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
+            if task.status == "todo":
+                try:
+                    client.pause_task(bitrix_id)
+                except BitrixAPIError:
+                    pass
+            return {
+                "ok": True,
+                "action": "stop",
+                "bitrix_task_id": bitrix_id,
+                "seconds": seconds,
+                "timer_paused": paused_ok,
+                "elapsed_id": entry.bitrix_elapsed_id,
+            }
+
+        return {"ok": False, "reason": "unknown_action", "action": action}
+    except BitrixAPIError as exc:
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": str(exc)}
 
 
 # Backwards-compatible alias (no longer used for hour deduction)

@@ -224,7 +224,7 @@ class TaskListSerializer(serializers.ModelSerializer):
 
 
 class ProjectSerializer(serializers.ModelSerializer):
-    tasks_count = serializers.IntegerField(source="tasks.count", read_only=True)
+    tasks_count = serializers.SerializerMethodField()
     done_count = serializers.SerializerMethodField()
     portal_name = serializers.CharField(source="portal.name", read_only=True)
 
@@ -252,7 +252,16 @@ class ProjectSerializer(serializers.ModelSerializer):
             "updated_at",
         )
 
+    def get_tasks_count(self, obj):
+        annotated = getattr(obj, "_tasks_count", None)
+        if annotated is not None:
+            return annotated
+        return obj.tasks.count()
+
     def get_done_count(self, obj):
+        annotated = getattr(obj, "_done_count", None)
+        if annotated is not None:
+            return annotated
         return obj.tasks.filter(status=Task.Status.DONE).count()
 
     def validate_portal(self, portal: Portal):
