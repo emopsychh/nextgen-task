@@ -15,7 +15,6 @@ import { TaskThread, type ThreadItem, type ThreadRow } from "../../components/ta
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { useTaskLiveSync } from "../../hooks/useTaskLiveSync";
 import { dueMeta } from "../../lib/dates";
-import { scheduleBitrixFit } from "../../lib/bitrixFrame";
 import { formatDayLabel, formatDueFull } from "../../lib/format";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 
@@ -57,13 +56,16 @@ export function TaskDetail() {
 
   async function load() {
     if (!token || !taskId) return;
-    const data = await api<Task>(`/api/tasks/${taskId}/?pull=1`, {}, token);
+    // Fast path: show task from DB immediately. Bitrix pull happens in live sync.
+    const data = await api<Task>(`/api/tasks/${taskId}/`, {}, token);
     setTask(data);
     setDraftTitle(data.title);
     setDraftDescription(data.description || "");
   }
 
   useEffect(() => {
+    setTask(null);
+    setError(null);
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, [token, taskId]);
 
@@ -199,7 +201,6 @@ export function TaskDetail() {
     if (!list?.length) return;
     setPendingFiles((prev) => [...prev, ...Array.from(list)]);
     e.target.value = "";
-    scheduleBitrixFit(0);
   }
 
   function removePending(index: number) {

@@ -101,10 +101,7 @@ export function useTaskLiveSync({
       tickCount += 1;
       try {
         const wantPull =
-          forcePull ||
-          pullNowRef.current ||
-          tickCount === 1 ||
-          tickCount % PULL_EVERY === 0;
+          forcePull || pullNowRef.current || tickCount % PULL_EVERY === 0;
         pullNowRef.current = false;
         const pull = wantPull ? "?pull=1" : "";
         const data = await api<Task>(`/api/tasks/${taskId}/${pull}`, {}, token);
@@ -133,12 +130,15 @@ export function useTaskLiveSync({
       if (document.visibilityState === "visible") void tick(true);
     };
     document.addEventListener("visibilitychange", onVisible);
-    void tick(true);
+    // Fast local poll first; Bitrix pull a few seconds later (does not block UI)
+    void tick(false);
+    const firstPull = window.setTimeout(() => void tick(true), 4000);
     const id = window.setInterval(() => void tick(false), POLL_MS);
 
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisible);
+      window.clearTimeout(firstPull);
       window.clearInterval(id);
     };
   }, [token, taskId, enabled]);

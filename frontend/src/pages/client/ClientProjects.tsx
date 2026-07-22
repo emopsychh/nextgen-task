@@ -79,7 +79,7 @@ export function ClientProjects() {
     if (!token || !portalId) return;
     const [projectData, activityData, portalsData] = await Promise.all([
       api<Project[] | { results: Project[] }>(
-        `/api/projects/?portal=${portalId}&pull=1`,
+        `/api/projects/?portal=${portalId}`,
         {},
         token
       ),

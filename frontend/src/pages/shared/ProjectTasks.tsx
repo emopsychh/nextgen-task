@@ -60,7 +60,7 @@ export function ProjectTasks() {
     const [projectData, taskData] = await Promise.all([
       api<Project>(`/api/projects/${projectId}/`, {}, token),
       api<Task[] | { results: Task[] }>(
-        `/api/tasks/?project=${projectId}&pull=1`,
+        `/api/tasks/?project=${projectId}`,
         {},
         token
       ),

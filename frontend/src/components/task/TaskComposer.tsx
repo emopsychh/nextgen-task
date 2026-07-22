@@ -71,13 +71,17 @@ export const TaskComposer = forwardRef<HTMLTextAreaElement, Props>(function Task
       )}
 
       <div className="msg-composer-bar">
+        {/*
+          Do not use input[hidden]/display:none — Bitrix iframe often blocks
+          the native file dialog for fully hidden inputs. Overlay instead.
+        */}
         <label className="msg-attach" title="Прикрепить файл или фото">
           <PaperclipIcon />
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            hidden
+            className="msg-attach-input"
             onChange={onPickFiles}
           />
         </label>
