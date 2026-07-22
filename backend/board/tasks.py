@@ -429,7 +429,11 @@ def sync_comment_to_bitrix(self, comment_id: int):
     author_name = comment.author_name or (
         comment.author.display_name if comment.author else "Участник"
     )
-    message = f"{author_name}: {comment.text}".strip()
+    body = (comment.text or "").strip()
+    # File-only comments: Bitrix chat message is created by sync_attachment_to_bitrix
+    if not body:
+        return {"ok": True, "skipped": "empty_text"}
+    message = f"{author_name}: {body}".strip()
     if not message:
         return {"ok": False, "reason": "empty"}
 

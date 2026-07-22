@@ -49,18 +49,24 @@ class BitrixClient:
             update_fields=["access_token", "refresh_token", "expires_at", "updated_at"]
         )
 
-    def call(self, method: str, params: dict[str, Any] | None = None) -> dict:
+    def call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: int = 30,
+    ) -> dict:
         self._ensure_token()
         url = f"{self.base_url}/{method}"
         payload = dict(params or {})
         payload["auth"] = self.portal.access_token
-        resp = requests.post(url, json=payload, timeout=30)
+        resp = requests.post(url, json=payload, timeout=timeout)
         data = resp.json()
         if "error" in data:
             if data.get("error") in ("expired_token", "invalid_token"):
                 self.refresh_tokens()
                 payload["auth"] = self.portal.access_token
-                resp = requests.post(url, json=payload, timeout=30)
+                resp = requests.post(url, json=payload, timeout=timeout)
                 data = resp.json()
             if "error" in data:
                 raise BitrixAPIError(data.get("error_description") or data["error"], data)
@@ -258,6 +264,7 @@ class BitrixClient:
                 "data": {"NAME": filename},
                 "fileContent": [filename, base64.b64encode(content).decode("ascii")],
             },
+            timeout=120,
         )
         return result if isinstance(result, dict) else {"ID": result}
 

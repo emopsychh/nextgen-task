@@ -2765,6 +2765,8 @@ a {
   position: relative;
   width: 42px;
   height: 42px;
+  border: 0;
+  background: transparent;
   border-radius: 14px;
   display: grid;
   place-items: center;
@@ -2772,25 +2774,42 @@ a {
   cursor: pointer;
   transition: 0.12s ease;
   overflow: hidden;
+  flex-shrink: 0;
+  padding: 0;
+  font: inherit;
 }
 
-/* Visible to the browser (clickable), invisible to the user — works in Bitrix iframe */
+.msg-attach-icon {
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+/* Keep in DOM (not display:none) so Bitrix iframe allows the dialog;
+   clicks go through the button → input.click() user gesture. */
 .msg-attach-input {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-  font-size: 0;
-  border: 0;
-  margin: 0;
+  width: 1px;
+  height: 1px;
   padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .msg-attach:hover {
   background: #fff;
   color: var(--accent);
+}
+
+.messenger-composer.is-dragover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  background: #f3faf6;
 }
 
 .msg-input {

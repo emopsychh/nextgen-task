@@ -66,6 +66,8 @@ class AttachmentSerializer(serializers.ModelSerializer):
 class CommentSerializer(serializers.ModelSerializer):
     author_display = serializers.SerializerMethodField()
     attachments = AttachmentSerializer(many=True, read_only=True)
+    # Allow empty text when the message is file-only
+    text = serializers.CharField(allow_blank=True, required=False, default="")
 
     class Meta:
         model = Comment

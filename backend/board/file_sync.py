@@ -1,4 +1,4 @@
-"""Sync attachments between Nextgen and Bitrix task files."""
+"""Sync attachments between Nextgen and Bitrix task files / task chat."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_file_id(result) -> str:
+    """Prefer Drive object ID over internal FILE_ID (required by tasks.task.files.attach)."""
     if result is None:
         return ""
     if isinstance(result, (int, float)):
@@ -21,12 +22,10 @@ def _extract_file_id(result) -> str:
     if isinstance(result, str) and result.isdigit():
         return result
     if isinstance(result, dict):
-        # Prefer nested FILE / file / ID
+        # Drive object id first — FILE_ID is a different namespace and breaks attach/chat.
         for key in (
             "ID",
             "id",
-            "FILE_ID",
-            "fileId",
             "OBJECT_ID",
             "objectId",
             "FILE",
@@ -42,7 +41,24 @@ def _extract_file_id(result) -> str:
                 nested = _extract_file_id(val)
                 if nested:
                     return nested
+        # Last resort only
+        for key in ("FILE_ID", "fileId"):
+            val = result.get(key)
+            if isinstance(val, (int, float)):
+                return str(int(val))
+            if isinstance(val, str) and val.isdigit():
+                return val
     return ""
+
+
+def _disk_doc_ref(disk_file_id: str) -> str:
+    """UF_FORUM_MESSAGE_DOC needs `n{driveId}` for newly uploaded Disk files."""
+    fid = str(disk_file_id or "").strip()
+    if not fid:
+        return ""
+    if fid[0] in "nNfF" and fid[1:].isdigit():
+        return fid
+    return f"n{fid}"
 
 
 def _resolve_upload_folder(client: BitrixClient) -> str:
@@ -83,11 +99,90 @@ def _resolve_upload_folder(client: BitrixClient) -> str:
     return ""
 
 
+def _post_file_to_task_chat(
+    *,
+    client: BitrixClient,
+    bitrix_task_id: str,
+    disk_file_id: str,
+    name: str,
+    message: str | None = None,
+) -> None:
+    """
+    Make the file visible in the Bitrix task comment/chat stream
+    (not only on the Files tab).
+    """
+    # Marker lets comment_sync skip echo when pulling Bitrix → app.
+    body = (message or "").strip()
+    text = f"[Файл из Nextgen] {body}" if body else f"[Файл из Nextgen] {name}"
+    doc_ref = _disk_doc_ref(disk_file_id)
+    errors: list[str] = []
+
+    # 1) Classic task comment with Disk attachment (shows in task chat)
+    if doc_ref:
+        for fields in (
+            {"POST_MESSAGE": text, "UF_FORUM_MESSAGE_DOC": [doc_ref]},
+            {"POST_MESSAGE": text, "UF_FORUM_MESSAGE_DOC": [disk_file_id]},
+        ):
+            try:
+                client.call(
+                    "task.commentitem.add",
+                    {"TASKID": bitrix_task_id, "FIELDS": fields},
+                )
+                return
+            except BitrixAPIError as exc:
+                errors.append(f"commentitem: {exc}")
+
+    # 2) IM disk commit into the task chat (modern Bitrix builds)
+    try:
+        task_data = client.get_task(bitrix_task_id) or {}
+        chat_id = (
+            task_data.get("chatId")
+            or task_data.get("CHAT_ID")
+            or task_data.get("chat_id")
+            or ""
+        )
+        if chat_id:
+            try:
+                client.call(
+                    "im.disk.file.commit",
+                    {
+                        "CHAT_ID": int(chat_id) if str(chat_id).isdigit() else chat_id,
+                        "FILE_ID": [int(disk_file_id) if str(disk_file_id).isdigit() else disk_file_id],
+                        "MESSAGE": text,
+                    },
+                )
+                return
+            except BitrixAPIError as exc:
+                errors.append(f"im.disk.file.commit: {exc}")
+            try:
+                client.call(
+                    "im.disk.file.commit",
+                    {
+                        "DIALOG_ID": f"chat{chat_id}",
+                        "FILE_ID": [int(disk_file_id) if str(disk_file_id).isdigit() else disk_file_id],
+                        "MESSAGE": text,
+                    },
+                )
+                return
+            except BitrixAPIError as exc:
+                errors.append(f"im.disk.file.commit dialog: {exc}")
+    except BitrixAPIError as exc:
+        errors.append(f"get_task chat: {exc}")
+
+    if errors:
+        logger.info(
+            "post file to task chat failed task=%s file=%s: %s",
+            bitrix_task_id,
+            disk_file_id,
+            "; ".join(errors),
+        )
+
+
 def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) -> str:
     """
-    Upload local file to Bitrix and attach to the task (Files tab).
-    Tries several REST methods used across Bitrix Cloud builds.
-    Returns Bitrix file id when known.
+    Upload local file to Bitrix Disk, attach to the task Files tab,
+    and post into the task chat stream.
+    Returns Bitrix Drive file id when known.
     """
     name = attachment.original_name or attachment.file.name.split("/")[-1] or "file"
     with attachment.file.open("rb") as fh:
@@ -97,26 +192,37 @@ def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) 
 
     b64 = base64.b64encode(content).decode("ascii")
     errors: list[str] = []
-
-    # 1) Disk upload → attach to task Files tab
-    folder_id = _resolve_upload_folder(client)
     disk_file_id = ""
+
+    # 1) Disk upload
+    folder_id = _resolve_upload_folder(client)
     if folder_id:
         try:
             uploaded = client.upload_file_to_folder(folder_id, name, content)
             disk_file_id = _extract_file_id(uploaded)
-            if disk_file_id:
-                try:
-                    client.attach_file_to_task(bitrix_task_id, disk_file_id)
-                    return disk_file_id
-                except BitrixAPIError as exc:
-                    errors.append(f"attach: {exc}")
-            else:
+            if not disk_file_id:
                 errors.append(f"upload no id: {uploaded}")
         except BitrixAPIError as exc:
             errors.append(f"disk upload: {exc}")
 
-    # 2) Legacy task.item.addfile with base64 payload (works for docs + images)
+    # 2) Attach to Files tab (best-effort)
+    if disk_file_id:
+        try:
+            client.attach_file_to_task(bitrix_task_id, disk_file_id)
+        except BitrixAPIError as exc:
+            errors.append(f"attach: {exc}")
+
+    # 3) Always try to show the file in task chat
+    if disk_file_id:
+        _post_file_to_task_chat(
+            client=client,
+            bitrix_task_id=bitrix_task_id,
+            disk_file_id=disk_file_id,
+            name=name,
+        )
+        return disk_file_id
+
+    # 4) Legacy task.item.addfile with base64 (no separate Drive id)
     for params in (
         {"TASK_ID": bitrix_task_id, "FILE": {"name": name, "content": b64}},
         {"TASKID": bitrix_task_id, "FILE": {"name": name, "content": b64}},
@@ -125,41 +231,18 @@ def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) 
     ):
         try:
             result = client.call("task.item.addfile", params)
-            fid = _extract_file_id(result) or disk_file_id or "ok"
-            return fid
+            fid = _extract_file_id(result)
+            if fid:
+                _post_file_to_task_chat(
+                    client=client,
+                    bitrix_task_id=bitrix_task_id,
+                    disk_file_id=fid,
+                    name=name,
+                )
+                return fid
+            errors.append(f"task.item.addfile no id: {result}")
         except BitrixAPIError as exc:
             errors.append(f"task.item.addfile: {exc}")
-
-    # 3) Comment with attached Disk file (shows in Bitrix task chat)
-    if disk_file_id or folder_id:
-        try:
-            file_id = disk_file_id
-            if not file_id and folder_id:
-                uploaded = client.upload_file_to_folder(folder_id, name, content)
-                file_id = _extract_file_id(uploaded)
-            if file_id:
-                try:
-                    client.call(
-                        "task.commentitem.add",
-                        {
-                            "TASKID": bitrix_task_id,
-                            "FIELDS": {
-                                "POST_MESSAGE": f"[Файл из Nextgen] {name}",
-                                "UF_FORUM_MESSAGE_DOC": [file_id],
-                            },
-                        },
-                    )
-                    return file_id
-                except BitrixAPIError:
-                    try:
-                        client.attach_file_to_task(bitrix_task_id, file_id)
-                        return file_id
-                    except BitrixAPIError as exc:
-                        errors.append(f"comment/attach: {exc}")
-                        # File is on Disk even if not linked to task UI
-                        return file_id
-        except BitrixAPIError as exc:
-            errors.append(f"comment upload: {exc}")
 
     raise BitrixAPIError("; ".join(errors) or "attach failed")
 

@@ -203,6 +203,11 @@ export function TaskDetail() {
     e.target.value = "";
   }
 
+  function onAddFiles(files: File[]) {
+    if (!files.length) return;
+    setPendingFiles((prev) => [...prev, ...files]);
+  }
+
   function removePending(index: number) {
     setPendingFiles((prev) => prev.filter((_, i) => i !== index));
   }
@@ -220,25 +225,24 @@ export function TaskDetail() {
     e?.preventDefault();
     if (!token || !task) return;
     const text = comment.trim();
-    if (!text && pendingFiles.length === 0) return;
+    const files = pendingFiles;
+    if (!text && files.length === 0) return;
 
     setSendBusy(true);
     setError(null);
     try {
-      let commentId: number | undefined;
-      if (text) {
-        const created = await api<Comment>(
-          "/api/comments/",
-          { method: "POST", body: JSON.stringify({ task: task.id, text }) },
-          token
-        );
-        commentId = created.id;
-      }
+      // Always create a comment so files appear in the thread and sync to Bitrix chat.
+      // Empty text is allowed for file-only messages.
+      const created = await api<Comment>(
+        "/api/comments/",
+        { method: "POST", body: JSON.stringify({ task: task.id, text }) },
+        token
+      );
 
-      for (const file of pendingFiles) {
+      for (const file of files) {
         await uploadAttachment(file, {
           taskId: task.id,
-          commentId: text ? commentId : undefined,
+          commentId: created.id,
         });
       }
 
@@ -363,6 +367,7 @@ export function TaskDetail() {
           canSend={canSend}
           onCommentChange={setComment}
           onPickFiles={onPickFiles}
+          onAddFiles={onAddFiles}
           onRemovePending={removePending}
           onSend={(e) => void sendMessage(e)}
           onKeyDown={onComposerKeyDown}

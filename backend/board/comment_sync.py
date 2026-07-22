@@ -37,12 +37,19 @@ _BITRIX_SYSTEM_LOG_RE = re.compile(
     r")"
 )
 
+# Outbound file posts from sync_attachment_to_bitrix — already in app as Attachment.
+_NEXTGEN_FILE_MARKER_RE = re.compile(r"(?i)\[Файл из Nextgen\]")
+
 
 def is_bitrix_system_log_comment(text: str) -> bool:
     cleaned = (text or "").strip()
     if not cleaned:
         return False
     return bool(_BITRIX_SYSTEM_LOG_RE.search(cleaned))
+
+
+def is_nextgen_file_echo(text: str) -> bool:
+    return bool(_NEXTGEN_FILE_MARKER_RE.search(text or ""))
 
 
 def _extract_comment_id(result) -> str:
@@ -129,6 +136,10 @@ def upsert_comment_from_bitrix_payload(
 
     # Skip Bitrix built-in status/deadline/timer log lines — they loop in chat.
     if is_bitrix_system_log_comment(text):
+        return False
+
+    # Skip our own file-sync posts (file already exists as Attachment in app).
+    if is_nextgen_file_echo(text):
         return False
 
     # Echo guard: we just posted this outbound (same text, very recent, still without id)
