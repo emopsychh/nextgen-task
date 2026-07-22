@@ -382,7 +382,7 @@ def post_time_entry_to_deal(self, entry_id: int):
         return {"ok": False, "reason": "no_agency_token"}
 
     binding = get_active_binding(agency_portal=agency, client_portal=client_portal)
-    if not binding and link.bitrix_company_id:
+    if not binding:
         try:
             binding = resolve_or_refresh_binding(
                 agency_portal=agency,

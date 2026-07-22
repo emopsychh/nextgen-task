@@ -349,22 +349,23 @@ class PortalLinkViewSet(viewsets.ModelViewSet):
             agency_portal=self.request.user.portal,
             client_portal=client_portal,
         )
-        company = serializer.validated_data.get("bitrix_company_id")
-        if company is not None:
-            link.bitrix_company_id = str(company).strip()
-            link.save(update_fields=["bitrix_company_id"])
         serializer.instance = link
-
-    def partial_update(self, request, *args, **kwargs):
-        link = self.get_object()
-        if "bitrix_company_id" in request.data:
-            link.bitrix_company_id = str(request.data.get("bitrix_company_id") or "").strip()
-            link.save(update_fields=["bitrix_company_id"])
-        return Response(PortalLinkSerializer(link).data)
+        # Best-effort: bind accompaniment deal by portal-link UF field
+        try:
+            resolve_or_refresh_binding(
+                agency_portal=self.request.user.portal,
+                client_portal=client_portal,
+            )
+        except BitrixAPIError as exc:
+            logger.info(
+                "Auto deal bind skipped for client portal %s: %s",
+                client_portal.id,
+                exc,
+            )
 
 
 class PortalDealBindingViewSet(viewsets.ModelViewSet):
-    """Agency links a client to an accompaniment CRM deal (via company id)."""
+    """Agency links a client to an accompaniment CRM deal (via portal link field)."""
 
     serializer_class = PortalDealBindingSerializer
     permission_classes = [IsPortalAuthenticated, IsAgencyPortal]
@@ -393,28 +394,14 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         if err:
             return err
 
-        company_id = str(request.data.get("bitrix_company_id") or "").strip()
         deal_id = str(request.data.get("deal_id") or "").strip()
 
-        # Preferred: resolve open accompaniment deal by company
-        if company_id or not deal_id:
-            if not company_id:
-                # Fall back to company already stored on the link
-                link = PortalLink.objects.filter(
-                    agency_portal=request.user.portal,
-                    client_portal=client_portal,
-                ).first()
-                company_id = (link.bitrix_company_id if link else "") or ""
-            if not company_id:
-                return Response(
-                    {"detail": "Укажите bitrix_company_id (ID компании в Bitrix)"},
-                    status=400,
-                )
+        # Preferred: resolve open accompaniment deal by portal-link UF field
+        if not deal_id:
             try:
                 binding = resolve_or_refresh_binding(
                     agency_portal=request.user.portal,
                     client_portal=client_portal,
-                    company_id=company_id,
                 )
             except BitrixAPIError as exc:
                 return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
@@ -474,15 +461,15 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         binding = self.get_object()
-        company_id = request.data.get("bitrix_company_id")
+        refresh = request.data.get("refresh") in (True, "1", "true", "yes")
         is_active = request.data.get("is_active")
 
-        if company_id is not None:
+        if refresh or "bitrix_company_id" in request.data:
+            # Re-resolve by portal link (company id no longer used)
             try:
                 binding = resolve_or_refresh_binding(
                     agency_portal=request.user.portal,
                     client_portal=binding.client_portal,
-                    company_id=str(company_id).strip(),
                 )
             except BitrixAPIError as exc:
                 return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
@@ -508,17 +495,14 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         if not request.user.portal.access_token:
             return Response({"detail": "Agency portal has no Bitrix token"}, status=400)
 
-        link = PortalLink.objects.filter(
-            agency_portal=request.user.portal,
-            client_portal=binding.client_portal,
-        ).first()
         try:
-            if link and link.bitrix_company_id:
-                binding = resolve_or_refresh_binding(
-                    agency_portal=request.user.portal,
-                    client_portal=binding.client_portal,
-                )
-            else:
+            binding = resolve_or_refresh_binding(
+                agency_portal=request.user.portal,
+                client_portal=binding.client_portal,
+            )
+        except BitrixAPIError:
+            # Keep existing binding; just refresh hours from current deal_id
+            try:
                 meta = sync_deal_hours_meta(BitrixClient(request.user.portal), binding.deal_id)
                 binding.deal_title = meta["deal_title"] or binding.deal_title
                 binding.category_id = meta["category_id"] or binding.category_id
@@ -533,19 +517,14 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                         "updated_at",
                     ]
                 )
-        except BitrixAPIError as exc:
-            return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
+            except BitrixAPIError as exc:
+                return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
 
         if not binding:
             return Response({"detail": "Сделка не найдена"}, status=404)
         return Response(PortalDealBindingSerializer(binding).data)
 
     def perform_destroy(self, instance):
-        # Clear company id on unlink so auto-resolve stops
-        PortalLink.objects.filter(
-            agency_portal=instance.agency_portal,
-            client_portal=instance.client_portal,
-        ).update(bitrix_company_id="")
         instance.delete()
 
 

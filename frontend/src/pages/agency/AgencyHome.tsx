@@ -10,7 +10,6 @@ import { hueFromId, initialsFromLabel } from "../../lib/portalUi";
 type LinkRow = {
   id: number;
   client_portal: Portal;
-  bitrix_company_id?: string;
 };
 
 type PendingUnlink = {
@@ -34,8 +33,6 @@ export function AgencyHome() {
   const [enteringPortalId, setEnteringPortalId] = useState<number | null>(null);
   const [pendingUnlink, setPendingUnlink] = useState<PendingUnlink | null>(null);
   const [unlinking, setUnlinking] = useState(false);
-  const [companyDrafts, setCompanyDrafts] = useState<Record<number, string>>({});
-  const [editingCompany, setEditingCompany] = useState<Record<number, boolean>>({});
   const [dealBusyId, setDealBusyId] = useState<number | null>(null);
 
   const available = useMemo(
@@ -110,22 +107,8 @@ export function AgencyHome() {
     }
   }
 
-  function companyValueFor(portalId: number, link: LinkRow, binding?: DealBinding) {
-    return (
-      companyDrafts[portalId] ??
-      binding?.bitrix_company_id ??
-      link.bitrix_company_id ??
-      ""
-    );
-  }
-
-  async function findDealByCompany(portalId: number, link: LinkRow) {
+  async function findDealByPortal(portalId: number) {
     if (!token) return;
-    const companyId = companyValueFor(portalId, link, bindingByPortal.get(portalId)).trim();
-    if (!companyId) {
-      setError("Укажите ID компании Bitrix");
-      return;
-    }
     setDealBusyId(portalId);
     setError(null);
     try {
@@ -133,15 +116,14 @@ export function AgencyHome() {
         "/api/deal-bindings/",
         {
           method: "POST",
-          body: JSON.stringify({
-            client_portal_id: portalId,
-            bitrix_company_id: companyId,
-          }),
+          body: JSON.stringify({ client_portal_id: portalId }),
         },
         token
       );
-      toast.show("Открытая сделка найдена в воронке «Сопровождение»", "Сделка привязана");
-      setEditingCompany((prev) => ({ ...prev, [portalId]: false }));
+      toast.show(
+        "Сделка найдена по ссылке на портал в CRM",
+        "Сделка привязана"
+      );
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось найти сделку");
@@ -158,12 +140,6 @@ export function AgencyHome() {
     setError(null);
     try {
       await api(`/api/deal-bindings/${binding.id}/`, { method: "DELETE" }, token);
-      setCompanyDrafts((prev) => {
-        const next = { ...prev };
-        delete next[portalId];
-        return next;
-      });
-      setEditingCompany((prev) => ({ ...prev, [portalId]: true }));
       toast.show("Привязка снята");
       await load();
     } catch (err) {
@@ -224,8 +200,8 @@ export function AgencyHome() {
         <div className="how-step">
           <span className="how-num">3</span>
           <div>
-            <strong>Укажите компанию CRM</strong>
-            <p>Сделку найдём сами, часы спишутся с остатка</p>
+            <strong>Сделка подтянется сама</strong>
+            <p>По полю «Ссылка на портал» в CRM</p>
           </div>
         </div>
       </section>
@@ -291,15 +267,8 @@ export function AgencyHome() {
               const p = link.client_portal;
               const title = p.name || p.domain;
               const binding = bindingByPortal.get(p.id);
-              const companyValue = companyValueFor(p.id, link, binding);
               const dealBusy = dealBusyId === p.id;
               const hasDeal = Boolean(binding);
-              const savedCompanyId = (
-                binding?.bitrix_company_id ||
-                link.bitrix_company_id ||
-                ""
-              ).trim();
-              const showCompanyForm = !savedCompanyId || editingCompany[p.id] === true;
               return (
                 <article
                   key={link.id}
@@ -359,90 +328,52 @@ export function AgencyHome() {
                           </div>
                         )}
                       </div>
-                    ) : null}
+                    ) : (
+                      <p className="deal-bind-hint muted">
+                        Сделка ищется по полю «Ссылка на портал» в CRM
+                      </p>
+                    )}
 
                     <div className="deal-bind-form">
-                      {showCompanyForm ? (
-                        <>
-                          <label className="deal-bind-label" htmlFor={`company-${p.id}`}>
-                            ID компании
-                          </label>
-                          <div className="deal-bind-row">
-                            <input
-                              id={`company-${p.id}`}
-                              className="deal-bind-input"
-                              inputMode="numeric"
-                              placeholder="Напр. 40"
-                              value={companyValue}
-                              onChange={(e) =>
-                                setCompanyDrafts((prev) => ({ ...prev, [p.id]: e.target.value }))
-                              }
-                              disabled={dealBusy}
-                            />
+                      <div className="deal-bind-actions">
+                        {!hasDeal ? (
+                          <button
+                            type="button"
+                            className="btn btn-accent"
+                            disabled={dealBusy}
+                            onClick={() => void findDealByPortal(p.id)}
+                          >
+                            {dealBusy ? "Ищем…" : "Найти сделку"}
+                          </button>
+                        ) : (
+                          <>
                             <button
                               type="button"
-                              className="btn btn-accent"
-                              disabled={dealBusy || !companyValue.trim()}
-                              onClick={() => void findDealByCompany(p.id, link)}
+                              className="deal-bind-linkbtn"
+                              disabled={dealBusy}
+                              onClick={() => void refreshDealHours(p.id)}
                             >
-                              {dealBusy ? "…" : "Найти"}
+                              Обновить часы
                             </button>
-                            {savedCompanyId ? (
-                              <button
-                                type="button"
-                                className="btn btn-ghost"
-                                disabled={dealBusy}
-                                onClick={() =>
-                                  setEditingCompany((prev) => ({ ...prev, [p.id]: false }))
-                                }
-                              >
-                                Отмена
-                              </button>
-                            ) : null}
-                          </div>
-                        </>
-                      ) : (
-                        <div className="deal-company-locked">
-                          <div className="deal-company-locked-text">
-                            <span className="deal-bind-label">ID компании</span>
-                            <strong className="deal-company-id">{savedCompanyId}</strong>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn btn-ghost"
-                            disabled={dealBusy}
-                            onClick={() => {
-                              setCompanyDrafts((prev) => ({
-                                ...prev,
-                                [p.id]: savedCompanyId,
-                              }));
-                              setEditingCompany((prev) => ({ ...prev, [p.id]: true }));
-                            }}
-                          >
-                            Изменить ID
-                          </button>
-                        </div>
-                      )}
-                      {hasDeal ? (
-                        <div className="deal-bind-actions">
-                          <button
-                            type="button"
-                            className="deal-bind-linkbtn"
-                            disabled={dealBusy}
-                            onClick={() => void refreshDealHours(p.id)}
-                          >
-                            Обновить часы
-                          </button>
-                          <button
-                            type="button"
-                            className="deal-bind-linkbtn is-danger"
-                            disabled={dealBusy}
-                            onClick={() => void clearDealBinding(p.id)}
-                          >
-                            Снять привязку
-                          </button>
-                        </div>
-                      ) : null}
+                            <button
+                              type="button"
+                              className="deal-bind-linkbtn"
+                              disabled={dealBusy}
+                              onClick={() => void findDealByPortal(p.id)}
+                            >
+                              Перепривязать
+                            </button>
+                            <button
+                              type="button"
+                              className="deal-bind-linkbtn is-danger"
+                              disabled={dealBusy}
+                              onClick={() => void clearDealBinding(p.id)}
+                            >
+                              Снять привязку
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </article>

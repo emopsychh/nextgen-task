@@ -97,7 +97,7 @@ Vite проксирует `/api` и `/media` на `http://localhost:8000`.
    - `BITRIX_APPLICATION_TOKEN`
 3. После установки откройте приложение из меню Битрикс.
 4. На агентском портале укажите в `.env` `AGENCY_DOMAINS` или `AGENCY_MEMBER_IDS` — роль **Агентство** назначится сама. Остальные порталы = **Клиент**.
-5. В кабинете агентства привяжите клиентские порталы и укажите **ID компании** CRM — открытая сделка в воронке «Сопровождение» найдётся сама.
+5. В кабинете агентства привяжите клиентские порталы — сделка сопровождения найдётся по полю «Ссылка на портал» в CRM.
 
 Подробности: [bitrix/README.md](bitrix/README.md)
 
@@ -110,7 +110,7 @@ Vite проксирует `/api` и `/media` на `http://localhost:8000`.
 | POST | `/api/auth/dev/` | Dev login |
 | GET | `/api/me/` | Текущий portal + user |
 | CRUD | `/api/portals/`, `/api/portal-links/` | Порталы и связи |
-| CRUD | `/api/deal-bindings/` | Привязка по ID компании → сделка сопровождения (agency) |
+| CRUD | `/api/deal-bindings/` | Привязка по ссылке на портал в сделке → сопровождение (agency) |
 | CRUD | `/api/projects/`, `/api/tasks/` | Проекты и задачи |
 | POST | `/api/tasks/{id}/timer/start/`, `…/timer/stop/` | Трекер времени (agency) |
 | CRUD | `/api/comments/`, `/api/attachments/` | Комментарии и файлы |
@@ -132,8 +132,8 @@ Vite проксирует `/api` и `/media` на `http://localhost:8000`.
   - пишет в таймлайн сделки: `Задача «…»: учтено … . Остаток часов: N`
   - уменьшает поле **оставшихся часов** на длительность этой сессии (поле **оплаченных** не меняется)
   - повторно не списывает ту же сессию (`billed_to_deal_at`)
-- В UI у клиента указывается **ID компании** Bitrix; сделка ищется в воронке `BITRIX_ACCOMPANIMENT_CATEGORY_ID`
-- Коды полей в `.env`: `BITRIX_DEAL_PAID_HOURS_FIELD`, `BITRIX_DEAL_REMAINING_HOURS_FIELD` (например `UF_CRM_…`)
+- Сделка ищется по полю «Ссылка на портал» (`BITRIX_DEAL_PORTAL_LINK_FIELD`, по умолчанию `UF_CRM_1784732110930`) в воронке `BITRIX_ACCOMPANIMENT_CATEGORY_ID`
+- Коды полей часов в `.env`: `BITRIX_DEAL_PAID_HOURS_FIELD`, `BITRIX_DEAL_REMAINING_HOURS_FIELD` (например `UF_CRM_…`)
 - Если остаток пуст, а оплачено задано — при поиске/refresh сделки остаток инициализируется из оплаченных
 - Постинг идёт от токена **агентского** портала (scope `crm`)
 

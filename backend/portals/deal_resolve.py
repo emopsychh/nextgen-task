@@ -1,6 +1,9 @@
-"""Resolve accompaniment CRM deals by Bitrix company id."""
+"""Resolve accompaniment CRM deals by portal link field on the deal."""
 
 from __future__ import annotations
+
+import re
+from urllib.parse import urlparse
 
 from django.conf import settings
 
@@ -11,52 +14,130 @@ from portals.deal_hours import (
     remaining_update_fields,
 )
 
+_HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", re.I)
+
 
 def accompaniment_category_id() -> str:
     return (settings.BITRIX_ACCOMPANIMENT_CATEGORY_ID or "").strip()
 
 
-def find_open_deal_for_company(client: BitrixClient, company_id: str) -> dict | None:
-    """
-    Find the newest open deal for a company in the accompaniment funnel.
-    Returns raw deal dict or None.
-    """
-    company_id = str(company_id or "").strip()
-    if not company_id:
-        return None
+def portal_link_field() -> str:
+    return (settings.BITRIX_DEAL_PORTAL_LINK_FIELD or "").strip()
 
-    filt: dict = {
-        "COMPANY_ID": company_id,
-        "CLOSED": "N",
-    }
-    category = accompaniment_category_id()
-    if category:
-        filt["CATEGORY_ID"] = category
 
-    select = ["ID", "TITLE", "CATEGORY_ID", "COMPANY_ID", "STAGE_ID", "DATE_MODIFY", "CLOSED"]
+def normalize_portal_host(value: str) -> str:
+    """Extract comparable host from a portal domain or Bitrix URL."""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if "://" not in text:
+        text = "https://" + text
+    try:
+        host = (urlparse(text).hostname or "").lower().strip(".")
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def portal_link_matches(field_value: str, client_host: str) -> bool:
+    if not client_host:
+        return False
+    field_host = normalize_portal_host(field_value)
+    if not field_host:
+        # Plain text without URL shape — compare as host-ish fragment
+        raw = (field_value or "").strip().lower()
+        return client_host in raw or raw in client_host
+    return field_host == client_host or field_host.endswith("." + client_host) or client_host.endswith(
+        "." + field_host
+    )
+
+
+def _deal_list_select() -> list[str]:
+    select = [
+        "ID",
+        "TITLE",
+        "CATEGORY_ID",
+        "COMPANY_ID",
+        "STAGE_ID",
+        "DATE_MODIFY",
+        "CLOSED",
+    ]
+    link_field = portal_link_field()
+    if link_field:
+        select.append(link_field)
     paid = (settings.BITRIX_DEAL_PAID_HOURS_FIELD or "").strip()
     rem = (settings.BITRIX_DEAL_REMAINING_HOURS_FIELD or "").strip()
     if paid:
         select.append(paid)
     if rem:
         select.append(rem)
+    return select
 
-    result = client.call(
-        "crm.deal.list",
-        {
-            "filter": filt,
-            "order": {"DATE_MODIFY": "DESC"},
-            "select": select,
-            "start": 0,
-        },
-    )
+
+def _unwrap_deal_list(result) -> list[dict]:
     deals = result if isinstance(result, list) else []
     if isinstance(result, dict):
-        deals = result.get("deals") or result.get("items") or []
-    if not deals:
+        deals = result.get("deals") or result.get("items") or result.get("result") or []
+    return [d for d in deals if isinstance(d, dict)]
+
+
+def find_open_deal_for_portal(client: BitrixClient, client_portal) -> dict | None:
+    """
+    Find the newest open accompaniment deal whose portal-link field
+    points at this client Bitrix portal.
+    """
+    link_field = portal_link_field()
+    client_host = normalize_portal_host(getattr(client_portal, "domain", "") or "")
+    if not link_field or not client_host or not _HOST_RE.match(client_host):
         return None
-    deal = deals[0]
-    return deal if isinstance(deal, dict) else None
+
+    base_filter: dict = {"CLOSED": "N"}
+    category = accompaniment_category_id()
+    if category:
+        base_filter["CATEGORY_ID"] = category
+
+    select = _deal_list_select()
+    order = {"DATE_MODIFY": "DESC"}
+
+    # Prefer Bitrix LIKE filter on the portal-link UF field.
+    candidates: list[dict] = []
+    try:
+        result = client.call(
+            "crm.deal.list",
+            {
+                "filter": {**base_filter, f"%{link_field}": client_host},
+                "order": order,
+                "select": select,
+                "start": 0,
+            },
+        )
+        candidates = _unwrap_deal_list(result)
+    except BitrixAPIError:
+        candidates = []
+
+    # Fallback: list open deals in the funnel and match in Python
+    if not candidates:
+        result = client.call(
+            "crm.deal.list",
+            {
+                "filter": base_filter,
+                "order": order,
+                "select": select,
+                "start": 0,
+            },
+        )
+        candidates = _unwrap_deal_list(result)
+
+    matched = [
+        d
+        for d in candidates
+        if portal_link_matches(str(d.get(link_field) or ""), client_host)
+    ]
+    if not matched:
+        return None
+    return matched[0]
 
 
 def sync_deal_hours_meta(client: BitrixClient, deal_id: str, deal: dict | None = None) -> dict:
@@ -87,8 +168,10 @@ def sync_deal_hours_meta(client: BitrixClient, deal_id: str, deal: dict | None =
 def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str | None = None):
     """
     Ensure an active PortalDealBinding exists for the client.
-    Uses PortalLink.bitrix_company_id (or explicit company_id) to find the deal.
+    Finds the open accompaniment deal by UF portal-link field → client portal domain.
+    `company_id` is ignored (kept for call-site compatibility).
     """
+    del company_id  # no longer used
     from portals.models import PortalDealBinding, PortalLink
 
     link = (
@@ -101,31 +184,20 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
     if not link:
         return None
 
-    cid = str(company_id or link.bitrix_company_id or "").strip()
-    if company_id is not None:
-        link.bitrix_company_id = cid
-        link.save(update_fields=["bitrix_company_id"])
-
-    if not cid:
-        return (
-            PortalDealBinding.objects.filter(
-                agency_portal=agency_portal,
-                client_portal=client_portal,
-                is_active=True,
-            )
-            .order_by("-updated_at")
-            .first()
-        )
+    if not portal_link_field():
+        raise BitrixAPIError("Не задано BITRIX_DEAL_PORTAL_LINK_FIELD")
 
     if not agency_portal.access_token:
         raise BitrixAPIError("Agency portal has no Bitrix token")
 
     client = BitrixClient(agency_portal)
-    deal = find_open_deal_for_company(client, cid)
+    deal = find_open_deal_for_portal(client, client_portal)
     if not deal:
+        host = normalize_portal_host(client_portal.domain or "")
         raise BitrixAPIError(
-            f"Не найдена открытая сделка сопровождения для компании #{cid}"
+            f"Не найдена открытая сделка с ссылкой на портал «{host}»"
             + (f" (воронка {accompaniment_category_id()})" if accompaniment_category_id() else "")
+            + f" в поле {portal_link_field()}"
         )
 
     deal_id = str(deal.get("ID") or deal.get("id") or "")
