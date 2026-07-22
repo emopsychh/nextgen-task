@@ -98,41 +98,45 @@ def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) 
     b64 = base64.b64encode(content).decode("ascii")
     errors: list[str] = []
 
-    # 1) Disk upload → tasks.task.files.attach (preferred)
+    # 1) Disk upload → attach to task Files tab
     folder_id = _resolve_upload_folder(client)
+    disk_file_id = ""
     if folder_id:
         try:
             uploaded = client.upload_file_to_folder(folder_id, name, content)
-            file_id = _extract_file_id(uploaded)
-            if file_id:
+            disk_file_id = _extract_file_id(uploaded)
+            if disk_file_id:
                 try:
-                    client.attach_file_to_task(bitrix_task_id, file_id)
+                    client.attach_file_to_task(bitrix_task_id, disk_file_id)
+                    return disk_file_id
                 except BitrixAPIError as exc:
                     errors.append(f"attach: {exc}")
-                    # Still return file id — file exists on Disk
-                return file_id
-            errors.append(f"upload no id: {uploaded}")
+            else:
+                errors.append(f"upload no id: {uploaded}")
         except BitrixAPIError as exc:
             errors.append(f"disk upload: {exc}")
 
-    # 2) Legacy task.item.addfile with base64 payload
+    # 2) Legacy task.item.addfile with base64 payload (works for docs + images)
     for params in (
         {"TASK_ID": bitrix_task_id, "FILE": {"name": name, "content": b64}},
         {"TASKID": bitrix_task_id, "FILE": {"name": name, "content": b64}},
         {"TASK_ID": bitrix_task_id, "NAME": name, "CONTENT": b64},
+        {"taskId": bitrix_task_id, "file": {"name": name, "content": b64}},
     ):
         try:
             result = client.call("task.item.addfile", params)
-            fid = _extract_file_id(result) or "ok"
+            fid = _extract_file_id(result) or disk_file_id or "ok"
             return fid
         except BitrixAPIError as exc:
             errors.append(f"task.item.addfile: {exc}")
 
     # 3) Comment with attached Disk file (shows in Bitrix task chat)
-    if folder_id:
+    if disk_file_id or folder_id:
         try:
-            uploaded = client.upload_file_to_folder(folder_id, name, content)
-            file_id = _extract_file_id(uploaded)
+            file_id = disk_file_id
+            if not file_id and folder_id:
+                uploaded = client.upload_file_to_folder(folder_id, name, content)
+                file_id = _extract_file_id(uploaded)
             if file_id:
                 try:
                     client.call(
@@ -145,13 +149,15 @@ def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) 
                             },
                         },
                     )
+                    return file_id
                 except BitrixAPIError:
-                    # Comment without UF — file still on disk; try attach again
                     try:
                         client.attach_file_to_task(bitrix_task_id, file_id)
+                        return file_id
                     except BitrixAPIError as exc:
                         errors.append(f"comment/attach: {exc}")
-                return file_id
+                        # File is on Disk even if not linked to task UI
+                        return file_id
         except BitrixAPIError as exc:
             errors.append(f"comment upload: {exc}")
 

@@ -1,7 +1,7 @@
-import { forwardRef } from "react";
+import { forwardRef, useState } from "react";
 import type { Attachment, Comment } from "../../api/types";
 import { FileGlyph } from "../icons";
-import { isImageName } from "../../lib/files";
+import { isImageAttachment } from "../../lib/files";
 import { formatClock } from "../../lib/format";
 import { initialsFromLabel } from "../../lib/portalUi";
 
@@ -17,40 +17,22 @@ type Props = {
   rows: ThreadRow[];
 };
 
-function AttachmentView({
-  attachment,
-  compact = false,
+function FileChip({
+  url,
+  name,
+  compact,
   time,
 }: {
-  attachment: Attachment;
+  url: string;
+  name: string;
   compact?: boolean;
   time?: string;
 }) {
-  const url = attachment.url || "#";
-  const name = attachment.original_name || "Файл";
-  const image = isImageName(name) || isImageName(url);
-
-  if (image && attachment.url) {
-    return (
-      <a
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        className={`msg-image${compact ? " compact" : ""}`}
-        title={name}
-      >
-        <img src={url} alt={name} loading="lazy" />
-        {time ? <span className="msg-image-time muted">{time}</span> : null}
-      </a>
-    );
-  }
-
   return (
     <a
       href={url}
       target="_blank"
       rel="noreferrer"
-      download={name}
       className={`msg-file${compact ? " compact" : ""}`}
     >
       <span className="msg-file-icon">
@@ -62,6 +44,43 @@ function AttachmentView({
       </span>
     </a>
   );
+}
+
+function AttachmentView({
+  attachment,
+  compact = false,
+  time,
+}: {
+  attachment: Attachment;
+  compact?: boolean;
+  time?: string;
+}) {
+  const url = attachment.url || "#";
+  const name = attachment.original_name || "Файл";
+  const looksLikeImage = isImageAttachment(attachment.original_name, attachment.url);
+  const [imgFailed, setImgFailed] = useState(false);
+
+  if (looksLikeImage && attachment.url && !imgFailed) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className={`msg-image${compact ? " compact" : ""}`}
+        title={name}
+      >
+        <img
+          src={url}
+          alt={name}
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+        />
+        {time ? <span className="msg-image-time muted">{time}</span> : null}
+      </a>
+    );
+  }
+
+  return <FileChip url={url} name={name} compact={compact} time={time} />;
 }
 
 export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(

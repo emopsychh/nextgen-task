@@ -517,7 +517,13 @@ class AttachmentViewSet(viewsets.ModelViewSet):
         publish_task_event(task, kind="attachment")
         from board.tasks import sync_attachment_to_bitrix
 
-        if settings.CELERY_TASK_ALWAYS_EAGER:
-            sync_attachment_to_bitrix(attachment.id)
-        else:
-            sync_attachment_to_bitrix.delay(attachment.id)
+        # Never fail the HTTP upload if Bitrix/Celery is down
+        try:
+            if settings.CELERY_TASK_ALWAYS_EAGER:
+                sync_attachment_to_bitrix(attachment.id)
+            else:
+                sync_attachment_to_bitrix.delay(attachment.id)
+        except Exception:
+            logger.exception(
+                "Failed to enqueue Bitrix sync for attachment %s", attachment.id
+            )

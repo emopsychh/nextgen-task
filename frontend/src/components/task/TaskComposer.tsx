@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useRef, useState } from "react";
 import { FileGlyph, PaperclipIcon, SendIcon } from "../icons";
 import { isImageFile } from "../../lib/files";
 
@@ -41,10 +41,6 @@ export const TaskComposer = forwardRef<HTMLTextAreaElement, Props>(function Task
   ref
 ) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const accept = useMemo(
-    () => "image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar,.7z",
-    []
-  );
 
   return (
     <form
@@ -81,7 +77,6 @@ export const TaskComposer = forwardRef<HTMLTextAreaElement, Props>(function Task
             ref={fileInputRef}
             type="file"
             multiple
-            accept={accept}
             hidden
             onChange={onPickFiles}
           />
