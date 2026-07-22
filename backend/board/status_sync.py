@@ -111,10 +111,7 @@ def apply_inbound_status(task, new_status: str, *, stop_timers: bool = True) -> 
     Apply status that originated in Bitrix. Does not push back to Bitrix.
     Returns True if the local row changed.
     """
-    from django.conf import settings
-
     from board.models import Task
-    from board.tasks import post_task_complete_to_deal
     from board.timeutils import stop_time_entry
 
     if new_status not in (
@@ -139,12 +136,6 @@ def apply_inbound_status(task, new_status: str, *, stop_timers: bool = True) -> 
     ):
         for running in task.time_entries.filter(ended_at__isnull=True):
             stop_time_entry(running)
-
-    if new_status == Task.Status.DONE and old != Task.Status.DONE:
-        if settings.CELERY_TASK_ALWAYS_EAGER:
-            post_task_complete_to_deal(task.id)
-        else:
-            post_task_complete_to_deal.delay(task.id)
 
     return True
 

@@ -151,9 +151,11 @@ BITRIX_CLIENT_ID = os.getenv("BITRIX_CLIENT_ID", "")
 BITRIX_CLIENT_SECRET = os.getenv("BITRIX_CLIENT_SECRET", "")
 BITRIX_APPLICATION_TOKEN = os.getenv("BITRIX_APPLICATION_TOKEN", "")
 # Custom deal number fields (UF_CRM_…) in воронка «Сопровождение»
-# Paid hours are never overwritten; remaining hours are decremented on task complete.
+# Paid hours are never overwritten; remaining hours are decremented per closed timer session.
 BITRIX_DEAL_PAID_HOURS_FIELD = os.getenv("BITRIX_DEAL_PAID_HOURS_FIELD", "").strip()
 BITRIX_DEAL_REMAINING_HOURS_FIELD = os.getenv("BITRIX_DEAL_REMAINING_HOURS_FIELD", "").strip()
+# CRM category (funnel) id for «Сопровождение» — used to auto-find the deal by company
+BITRIX_ACCOMPANIMENT_CATEGORY_ID = os.getenv("BITRIX_ACCOMPANIMENT_CATEGORY_ID", "").strip()
 PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "http://localhost:8000").rstrip("/")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 DEV_AUTH_BYPASS = os.getenv("DEV_AUTH_BYPASS", "0") == "1"

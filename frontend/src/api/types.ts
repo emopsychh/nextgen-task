@@ -121,6 +121,7 @@ export type DealBinding = {
   category_id: string;
   paid_hours: string | number | null;
   remaining_hours: string | number | null;
+  bitrix_company_id?: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;

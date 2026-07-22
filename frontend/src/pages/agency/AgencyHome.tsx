@@ -10,6 +10,7 @@ import { hueFromId, initialsFromLabel } from "../../lib/portalUi";
 type LinkRow = {
   id: number;
   client_portal: Portal;
+  bitrix_company_id?: string;
 };
 
 type PendingUnlink = {
@@ -33,7 +34,7 @@ export function AgencyHome() {
   const [enteringPortalId, setEnteringPortalId] = useState<number | null>(null);
   const [pendingUnlink, setPendingUnlink] = useState<PendingUnlink | null>(null);
   const [unlinking, setUnlinking] = useState(false);
-  const [dealDrafts, setDealDrafts] = useState<Record<number, string>>({});
+  const [companyDrafts, setCompanyDrafts] = useState<Record<number, string>>({});
   const [dealBusyId, setDealBusyId] = useState<number | null>(null);
 
   const available = useMemo(
@@ -108,11 +109,20 @@ export function AgencyHome() {
     }
   }
 
-  async function saveDealBinding(portalId: number) {
+  function companyValueFor(portalId: number, link: LinkRow, binding?: DealBinding) {
+    return (
+      companyDrafts[portalId] ??
+      binding?.bitrix_company_id ??
+      link.bitrix_company_id ??
+      ""
+    );
+  }
+
+  async function findDealByCompany(portalId: number, link: LinkRow) {
     if (!token) return;
-    const dealId = (dealDrafts[portalId] ?? bindingByPortal.get(portalId)?.deal_id ?? "").trim();
-    if (!dealId) {
-      setError("Укажите ID сделки Bitrix");
+    const companyId = companyValueFor(portalId, link, bindingByPortal.get(portalId)).trim();
+    if (!companyId) {
+      setError("Укажите ID компании Bitrix");
       return;
     }
     setDealBusyId(portalId);
@@ -122,14 +132,17 @@ export function AgencyHome() {
         "/api/deal-bindings/",
         {
           method: "POST",
-          body: JSON.stringify({ client_portal_id: portalId, deal_id: dealId }),
+          body: JSON.stringify({
+            client_portal_id: portalId,
+            bitrix_company_id: companyId,
+          }),
         },
         token
       );
-      toast.show("Сообщения о закрытых задачах пойдут в эту сделку", "Сделка привязана");
+      toast.show("Открытая сделка найдена в воронке «Сопровождение»", "Сделка привязана");
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось привязать сделку");
+      setError(err instanceof Error ? err.message : "Не удалось найти сделку");
     } finally {
       setDealBusyId(null);
     }
@@ -143,7 +156,7 @@ export function AgencyHome() {
     setError(null);
     try {
       await api(`/api/deal-bindings/${binding.id}/`, { method: "DELETE" }, token);
-      setDealDrafts((prev) => {
+      setCompanyDrafts((prev) => {
         const next = { ...prev };
         delete next[portalId];
         return next;
@@ -201,50 +214,42 @@ export function AgencyHome() {
         <div className="how-step">
           <span className="how-num">2</span>
           <div>
-            <strong>Клиент ставит приложение</strong>
-            <p>Локальное приложение на своём портале Bitrix</p>
+            <strong>Подключите клиента здесь</strong>
+            <p>Выберите портал из списка ниже</p>
           </div>
         </div>
         <div className="how-step">
           <span className="how-num">3</span>
           <div>
-            <strong>Привяжите здесь</strong>
-            <p>Клиент появится в панели слева</p>
+            <strong>Укажите компанию CRM</strong>
+            <p>Сделку сопровождения найдём сами; часы спишутся с остатка</p>
           </div>
         </div>
       </section>
 
-      <section className="connect-panel" data-tour="tour-connect-client">
-        <div className="connect-panel-head">
-          <div>
-            <h2 className="section-title">Добавить клиента</h2>
-            <p className="muted">Выберите портал из доступных и подтвердите.</p>
-          </div>
+      <section className="connect-card">
+        <div className="connect-head">
+          <h2 className="section-title">Подключить клиента</h2>
+          <p className="muted">Портал должен уже установить приложение Nextgen manager.</p>
         </div>
 
         {available.length === 0 ? (
-          <div className="empty-connect">
-            <div className="empty-connect-icon" aria-hidden>
-              +
-            </div>
-            <h3>Пока нечего привязывать</h3>
-            <p className="muted">
-              Когда клиент установит приложение и выберет роль «Клиент», его портал появится здесь.
-            </p>
-          </div>
+          <p className="muted connect-empty">
+            Нет свободных клиентских порталов. Когда клиент установит приложение — он появится здесь.
+          </p>
         ) : (
-          <form onSubmit={linkClient} className="connect-form">
-            <div className="portal-pick-grid">
+          <form className="connect-form" onSubmit={linkClient}>
+            <div className="portal-pick-list" role="listbox" aria-label="Клиентские порталы">
               {available.map((p) => {
                 const selected = clientId === String(p.id);
                 return (
                   <button
                     key={p.id}
                     type="button"
-                    className={`portal-pick${selected ? " selected" : ""}`}
-                    onClick={() =>
-                      setClientId((prev) => (prev === String(p.id) ? "" : String(p.id)))
-                    }
+                    role="option"
+                    aria-selected={selected}
+                    className={`portal-pick${selected ? " is-selected" : ""}`}
+                    onClick={() => setClientId(String(p.id))}
                   >
                     <span
                       className="portal-pick-avatar"
@@ -276,8 +281,8 @@ export function AgencyHome() {
         <div className="linked-head">
           <h2 className="section-title">Ваши клиенты</h2>
           <p className="muted">
-            Откройте проекты или укажите ID сделки «Сопровождение» — туда уйдут сообщения о закрытых
-            задачах.
+            Укажите ID компании в Bitrix — найдём открытую сделку в воронке «Сопровождение». Учтённое
+            время задач спишется с остатка часов.
           </p>
         </div>
 
@@ -291,7 +296,7 @@ export function AgencyHome() {
               const p = link.client_portal;
               const title = p.name || p.domain;
               const binding = bindingByPortal.get(p.id);
-              const dealValue = dealDrafts[p.id] ?? binding?.deal_id ?? "";
+              const companyValue = companyValueFor(p.id, link, binding);
               const dealBusy = dealBusyId === p.id;
               return (
                 <div
@@ -312,11 +317,14 @@ export function AgencyHome() {
                   </Link>
 
                   <div className="deal-bind">
-                    <label className="deal-bind-label" htmlFor={`deal-${p.id}`}>
-                      Сделка сопровождения
+                    <label className="deal-bind-label" htmlFor={`company-${p.id}`}>
+                      Компания CRM
                     </label>
                     {binding?.deal_title ? (
-                      <span className="deal-bind-title muted">{binding.deal_title}</span>
+                      <span className="deal-bind-title muted">
+                        Сделка: {binding.deal_title}
+                        {binding.deal_id ? ` (#${binding.deal_id})` : ""}
+                      </span>
                     ) : null}
                     {binding &&
                     (binding.paid_hours != null || binding.remaining_hours != null) ? (
@@ -334,23 +342,23 @@ export function AgencyHome() {
                     ) : null}
                     <div className="deal-bind-row">
                       <input
-                        id={`deal-${p.id}`}
+                        id={`company-${p.id}`}
                         className="deal-bind-input"
                         inputMode="numeric"
-                        placeholder="ID сделки, напр. 152"
-                        value={dealValue}
+                        placeholder="ID компании, напр. 42"
+                        value={companyValue}
                         onChange={(e) =>
-                          setDealDrafts((prev) => ({ ...prev, [p.id]: e.target.value }))
+                          setCompanyDrafts((prev) => ({ ...prev, [p.id]: e.target.value }))
                         }
                         disabled={dealBusy}
                       />
                       <button
                         type="button"
                         className="btn btn-ghost"
-                        disabled={dealBusy || !dealValue.trim()}
-                        onClick={() => void saveDealBinding(p.id)}
+                        disabled={dealBusy || !companyValue.trim()}
+                        onClick={() => void findDealByCompany(p.id, link)}
                       >
-                        {dealBusy ? "…" : "Сохранить"}
+                        {dealBusy ? "…" : "Найти сделку"}
                       </button>
                       {binding ? (
                         <button

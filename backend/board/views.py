@@ -20,7 +20,7 @@ from .serializers import (
     TaskListSerializer,
     TaskSerializer,
 )
-from .tasks import post_task_complete_to_deal, sync_comment_to_bitrix, sync_task_to_bitrix
+from .tasks import sync_comment_to_bitrix, sync_task_to_bitrix
 from .timeutils import stop_time_entry
 
 
@@ -29,13 +29,6 @@ def enqueue_bitrix_sync(task_id: int) -> None:
         sync_task_to_bitrix(task_id)
     else:
         sync_task_to_bitrix.delay(task_id)
-
-
-def enqueue_deal_timeline(task_id: int) -> None:
-    if settings.CELERY_TASK_ALWAYS_EAGER:
-        post_task_complete_to_deal(task_id)
-    else:
-        post_task_complete_to_deal.delay(task_id)
 
 
 def enqueue_comment_sync(comment_id: int) -> None:
@@ -307,8 +300,6 @@ class TaskViewSet(viewsets.ModelViewSet):
         enqueue_bitrix_sync(task.id)
         for event in created_events:
             enqueue_comment_sync(event.id)
-        if task.status == Task.Status.DONE and old_status != Task.Status.DONE:
-            enqueue_deal_timeline(task.id)
         task.refresh_from_db()
         serializer.instance = task
 

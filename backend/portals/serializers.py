@@ -34,7 +34,14 @@ class PortalLinkSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PortalLink
-        fields = ("id", "agency_portal", "client_portal", "client_portal_id", "created_at")
+        fields = (
+            "id",
+            "agency_portal",
+            "client_portal",
+            "client_portal_id",
+            "bitrix_company_id",
+            "created_at",
+        )
         read_only_fields = ("id", "agency_portal", "client_portal", "created_at")
 
 
@@ -45,6 +52,7 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
         source="client_portal",
         write_only=True,
     )
+    bitrix_company_id = serializers.SerializerMethodField()
 
     class Meta:
         model = PortalDealBinding
@@ -58,6 +66,7 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
             "category_id",
             "paid_hours",
             "remaining_hours",
+            "bitrix_company_id",
             "is_active",
             "created_at",
             "updated_at",
@@ -66,13 +75,22 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
             "id",
             "agency_portal",
             "client_portal",
+            "deal_id",
             "deal_title",
             "category_id",
             "paid_hours",
             "remaining_hours",
+            "bitrix_company_id",
             "created_at",
             "updated_at",
         )
+
+    def get_bitrix_company_id(self, obj):
+        link = PortalLink.objects.filter(
+            agency_portal_id=obj.agency_portal_id,
+            client_portal_id=obj.client_portal_id,
+        ).first()
+        return link.bitrix_company_id if link else ""
 
 
 class BitrixUserSerializer(serializers.ModelSerializer):

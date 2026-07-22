@@ -304,23 +304,38 @@ def sync_comment_to_bitrix(self, comment_id: int):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
-def post_task_complete_to_deal(self, task_id: int):
-    """Post timeline comment and decrement remaining hours on the linked CRM deal."""
-    from board.models import Task
-    from board.timeutils import format_duration_ru, task_tracked_seconds
+def post_time_entry_to_deal(self, entry_id: int):
+    """
+    Deduct a closed time session from the accompaniment deal remaining hours.
+    Idempotent via TimeEntry.billed_to_deal_at.
+    """
+    from board.models import TimeEntry
+    from board.timeutils import format_duration_ru
     from portals.deal_hours import (
         compute_remaining_after_spend,
         hours_fields_configured,
         read_deal_hours,
         remaining_update_fields,
     )
-    from portals.models import PortalDealBinding, PortalLink
+    from portals.deal_resolve import get_active_binding, resolve_or_refresh_binding
+    from portals.models import PortalLink
+    from django.utils import timezone
 
     try:
-        task = Task.objects.select_related("project", "project__portal").get(pk=task_id)
-    except Task.DoesNotExist:
+        entry = TimeEntry.objects.select_related(
+            "task",
+            "task__project",
+            "task__project__portal",
+        ).get(pk=entry_id)
+    except TimeEntry.DoesNotExist:
         return {"ok": False, "reason": "missing"}
 
+    if entry.billed_to_deal_at is not None:
+        return {"ok": True, "skipped": "already_billed"}
+    if entry.ended_at is None or entry.duration_seconds <= 0:
+        return {"ok": True, "skipped": "no_duration"}
+
+    task = entry.task
     client_portal = task.project.portal
     link = (
         PortalLink.objects.filter(client_portal=client_portal)
@@ -331,29 +346,33 @@ def post_task_complete_to_deal(self, task_id: int):
         return {"ok": False, "reason": "no_agency_link"}
 
     agency = link.agency_portal
-    binding = (
-        PortalDealBinding.objects.filter(
-            agency_portal=agency,
-            client_portal=client_portal,
-            is_active=True,
-        )
-        .order_by("-updated_at")
-        .first()
-    )
-    if not binding:
-        return {"ok": False, "reason": "no_deal_binding"}
-
     if not agency.access_token:
         return {"ok": False, "reason": "no_agency_token"}
 
-    seconds = task_tracked_seconds(task)
-    duration = format_duration_ru(seconds) if seconds > 0 else "не указано"
-    comment = f"Закрыта задача «{task.title}»: затрачено {duration}"
+    binding = get_active_binding(agency_portal=agency, client_portal=client_portal)
+    if not binding and link.bitrix_company_id:
+        try:
+            binding = resolve_or_refresh_binding(
+                agency_portal=agency,
+                client_portal=client_portal,
+            )
+        except BitrixAPIError as exc:
+            try:
+                raise self.retry(exc=exc)
+            except self.MaxRetriesExceededError:
+                return {"ok": False, "error": str(exc)}
+
+    if not binding:
+        return {"ok": False, "reason": "no_deal_binding"}
+
+    seconds = int(entry.duration_seconds)
+    duration_label = format_duration_ru(seconds)
+    comment = f"Задача «{task.title}»: учтено {duration_label}"
 
     client = BitrixClient(agency)
     try:
         hours_result = None
-        if hours_fields_configured() and seconds > 0:
+        if hours_fields_configured():
             deal = client.get_deal(binding.deal_id)
             new_remaining, spent = compute_remaining_after_spend(deal, seconds)
             if new_remaining is not None:
@@ -371,9 +390,12 @@ def post_task_complete_to_deal(self, task_id: int):
                 }
 
         result = client.add_deal_timeline_comment(binding.deal_id, comment)
+        entry.billed_to_deal_at = timezone.now()
+        entry.save(update_fields=["billed_to_deal_at", "updated_at"])
         return {
             "ok": True,
             "deal_id": binding.deal_id,
+            "entry_id": entry.id,
             "result": result,
             "hours": hours_result,
         }
@@ -382,3 +404,10 @@ def post_task_complete_to_deal(self, task_id: int):
             raise self.retry(exc=exc)
         except self.MaxRetriesExceededError:
             return {"ok": False, "error": str(exc)}
+
+
+# Backwards-compatible alias (no longer used for hour deduction)
+@shared_task(bind=True, max_retries=3, default_retry_delay=30)
+def post_task_complete_to_deal(self, task_id: int):
+    """Deprecated: hours are billed per TimeEntry. Kept as no-op for old queue messages."""
+    return {"ok": True, "skipped": "deprecated_use_post_time_entry_to_deal", "task_id": task_id}

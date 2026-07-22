@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
 
@@ -22,8 +23,17 @@ def format_duration_ru(total_seconds: int) -> str:
     return " ".join(parts) if parts else "0 мин"
 
 
-def stop_time_entry(entry, ended_at=None) -> int:
-    """Close a running entry and return duration_seconds."""
+def enqueue_time_entry_billing(entry_id: int) -> None:
+    from board.tasks import post_time_entry_to_deal
+
+    if settings.CELERY_TASK_ALWAYS_EAGER:
+        post_time_entry_to_deal(entry_id)
+    else:
+        post_time_entry_to_deal.delay(entry_id)
+
+
+def stop_time_entry(entry, ended_at=None, *, bill: bool = True) -> int:
+    """Close a running entry, optionally bill its duration to the CRM deal."""
     if entry.ended_at is not None:
         return entry.duration_seconds
     end = ended_at or timezone.now()
@@ -31,6 +41,8 @@ def stop_time_entry(entry, ended_at=None) -> int:
     entry.ended_at = end
     entry.duration_seconds = duration
     entry.save(update_fields=["ended_at", "duration_seconds", "updated_at"])
+    if bill and duration > 0 and getattr(entry, "billed_to_deal_at", None) is None:
+        enqueue_time_entry_billing(entry.id)
     return duration
 
 

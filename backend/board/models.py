@@ -122,6 +122,11 @@ class TimeEntry(models.Model):
     ended_at = models.DateTimeField(null=True, blank=True)
     duration_seconds = models.PositiveIntegerField(default=0)
     note = models.CharField(max_length=500, blank=True)
+    billed_to_deal_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this session was deducted from the CRM deal remaining hours",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
