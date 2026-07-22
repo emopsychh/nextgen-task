@@ -1,11 +1,10 @@
-/** Bitrix24 iframe helpers — expand placement frame so UI/file picker work. */
+/** Bitrix24 iframe helpers — expand placement without resize loops. */
 
 type Bx24Api = {
   init: (cb: () => void) => void;
   fitWindow: (cb?: () => void) => void;
   resizeWindow: (width: number, height: number, cb?: () => void) => void;
   getScrollSize?: () => { scrollWidth: number; scrollHeight: number };
-  isAdmin?: () => boolean;
 };
 
 declare global {
@@ -15,98 +14,102 @@ declare global {
 }
 
 let started = false;
-let resizeTimer: number | undefined;
+let busy = false;
+let fitTimer: number | undefined;
 
-const MIN_FRAME_W = 1100;
-const MIN_FRAME_H = 920;
-
-function measuredSize(): { w: number; h: number } {
-  const bx = window.BX24;
+function inBitrixFrame(): boolean {
   try {
-    if (bx?.getScrollSize) {
-      const s = bx.getScrollSize();
-      return {
-        w: Number(s.scrollWidth) || MIN_FRAME_W,
-        h: Number(s.scrollHeight) || MIN_FRAME_H,
-      };
-    }
+    if (window !== window.parent) return true;
   } catch {
-    // ignore
+    return true; // cross-origin parent ⇒ embedded
   }
-  const doc = document.documentElement;
-  const body = document.body;
-  return {
-    w: Math.max(doc?.scrollWidth || 0, body?.scrollWidth || 0, window.innerWidth || 0, MIN_FRAME_W),
-    h: Math.max(doc?.scrollHeight || 0, body?.scrollHeight || 0, MIN_FRAME_H),
-  };
+  const params = new URLSearchParams(window.location.search);
+  return Boolean(
+    params.get("AUTH_ID") ||
+      params.get("auth_id") ||
+      params.get("DOMAIN") ||
+      params.get("domain") ||
+      params.get("APP_SID")
+  );
 }
 
+function markEmbedded() {
+  document.documentElement.classList.add("bx-frame");
+}
+
+/**
+ * Ask Bitrix to size the iframe to content.
+ * No ResizeObserver — that loops with resizeWindow and freezes the UI.
+ */
 export function resizeBitrixFrame() {
   const bx = window.BX24;
-  if (!bx || typeof bx.resizeWindow !== "function") return;
+  if (!bx || busy) return;
+  busy = true;
   try {
-    const { w, h } = measuredSize();
-    // Always request a usable frame — height:100% layouts report tiny scrollHeight
-    // inside a collapsed Bitrix placement iframe (breaks file picker).
-    bx.resizeWindow(Math.max(w, MIN_FRAME_W), Math.max(h, MIN_FRAME_H));
+    markEmbedded();
+    if (typeof bx.fitWindow === "function") {
+      bx.fitWindow();
+    }
+    // Only rescue a collapsed placement (~file picker broken under ~400px)
+    const h = window.innerHeight || 0;
+    if (h > 0 && h < 420 && typeof bx.resizeWindow === "function") {
+      const w = Math.max(window.innerWidth || 0, 960);
+      bx.resizeWindow(w, 680);
+    }
   } catch {
-    // Outside Bitrix iframe — ignore
+    // opened outside Bitrix
+  } finally {
+    window.setTimeout(() => {
+      busy = false;
+    }, 250);
   }
 }
 
-function scheduleResize() {
-  if (resizeTimer != null) window.clearTimeout(resizeTimer);
-  resizeTimer = window.setTimeout(() => resizeBitrixFrame(), 80);
+export function scheduleBitrixFit(delayMs = 120) {
+  if (fitTimer != null) window.clearTimeout(fitTimer);
+  fitTimer = window.setTimeout(() => resizeBitrixFrame(), delayMs);
 }
 
-function loadBx24Script(): Promise<void> {
-  if (window.BX24) return Promise.resolve();
+function loadBx24Script(): Promise<Bx24Api | null> {
+  if (window.BX24) return Promise.resolve(window.BX24);
   return new Promise((resolve) => {
     const existing = document.querySelector<HTMLScriptElement>("script[data-bx24]");
     if (existing) {
-      existing.addEventListener("load", () => resolve(), { once: true });
-      if (window.BX24) resolve();
+      const done = () => resolve(window.BX24 || null);
+      existing.addEventListener("load", done, { once: true });
+      existing.addEventListener("error", () => resolve(null), { once: true });
+      if (window.BX24) resolve(window.BX24);
       return;
     }
     const s = document.createElement("script");
     s.src = "https://api.bitrix24.com/api/v1/";
     s.async = true;
     s.dataset.bx24 = "1";
-    s.onload = () => resolve();
-    s.onerror = () => resolve();
+    s.onload = () => resolve(window.BX24 || null);
+    s.onerror = () => resolve(null);
     document.head.appendChild(s);
   });
 }
 
-/**
- * Init BX24 and keep iframe tall enough for the app (and file dialogs).
- * Safe no-op when opened outside Bitrix.
- */
-export async function initBitrixFrame(): Promise<void> {
+/** Fire-and-forget; never blocks React mount. */
+export function initBitrixFrame(): void {
   if (started) {
-    scheduleResize();
+    scheduleBitrixFit();
     return;
   }
   started = true;
 
-  await loadBx24Script();
-  const bx = window.BX24;
-  if (!bx || typeof bx.init !== "function") {
+  if (!inBitrixFrame()) {
     return;
   }
 
-  bx.init(() => {
-    resizeBitrixFrame();
-    try {
-      const ro = new ResizeObserver(() => scheduleResize());
-      if (document.body) ro.observe(document.body);
-      const root = document.getElementById("root");
-      if (root) ro.observe(root);
-    } catch {
-      // older browsers
-    }
-    window.addEventListener("resize", scheduleResize);
-    window.setTimeout(resizeBitrixFrame, 300);
-    window.setTimeout(resizeBitrixFrame, 1200);
+  markEmbedded();
+
+  void loadBx24Script().then((bx) => {
+    if (!bx || typeof bx.init !== "function") return;
+    bx.init(() => {
+      scheduleBitrixFit(50);
+      scheduleBitrixFit(400);
+    });
   });
 }

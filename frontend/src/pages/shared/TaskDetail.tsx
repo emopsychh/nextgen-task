@@ -15,7 +15,7 @@ import { TaskThread, type ThreadItem, type ThreadRow } from "../../components/ta
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { useTaskLiveSync } from "../../hooks/useTaskLiveSync";
 import { dueMeta } from "../../lib/dates";
-import { resizeBitrixFrame } from "../../lib/bitrixFrame";
+import { scheduleBitrixFit } from "../../lib/bitrixFrame";
 import { formatDayLabel, formatDueFull } from "../../lib/format";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 
@@ -199,7 +199,7 @@ export function TaskDetail() {
     if (!list?.length) return;
     setPendingFiles((prev) => [...prev, ...Array.from(list)]);
     e.target.value = "";
-    resizeBitrixFrame();
+    scheduleBitrixFit(0);
   }
 
   function removePending(index: number) {

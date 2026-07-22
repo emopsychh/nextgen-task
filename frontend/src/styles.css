@@ -29,6 +29,40 @@ body,
   height: auto;
 }
 
+/* Inside Bitrix placement: size to content so fitWindow works and chat isn't a huge empty column */
+html.bx-frame,
+html.bx-frame body,
+html.bx-frame #root {
+  height: auto;
+  min-height: 0;
+}
+
+html.bx-frame .app-shell {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+
+html.bx-frame .main {
+  overflow: visible;
+}
+
+html.bx-frame .main:has(.task-detail-page.chat-mode) {
+  overflow: visible;
+}
+
+html.bx-frame .task-detail-page.chat-mode {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+
+html.bx-frame .messenger {
+  flex: none;
+  height: min(640px, 70vh);
+  min-height: 420px;
+}
+
 body {
   margin: 0;
   font-family: var(--font);

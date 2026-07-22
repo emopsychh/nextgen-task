@@ -1,9 +1,11 @@
-import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { useEffect } from "react";
 import { useAuth } from "./auth/AuthContext";
 import { Brand } from "./components/Brand";
 import { ClientRail } from "./components/ClientRail";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ProjectSidebarNav } from "./components/ProjectSidebar";
+import { scheduleBitrixFit } from "./lib/bitrixFrame";
 import { LoginPage } from "./pages/LoginPage";
 import { AgencyHome } from "./pages/agency/AgencyHome";
 import { ClientProjects } from "./pages/client/ClientProjects";
@@ -41,6 +43,11 @@ function LogoutRail() {
 function AppLayout() {
   const { portal, error } = useAuth();
   const isAgency = portal?.role === "agency";
+  const location = useLocation();
+
+  useEffect(() => {
+    scheduleBitrixFit(80);
+  }, [location.pathname]);
 
   return (
     <div className={`app-shell${isAgency ? " with-client-rail" : " with-logout-rail"}`}>
