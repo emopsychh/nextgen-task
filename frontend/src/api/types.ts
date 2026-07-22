@@ -94,6 +94,8 @@ export type Task = {
   attachments?: Attachment[];
   total_tracked_seconds?: number;
   active_timer?: TimeEntry | null;
+  deal_paid_hours?: number | null;
+  deal_remaining_hours?: number | null;
   created_at: string;
   updated_at: string;
 };

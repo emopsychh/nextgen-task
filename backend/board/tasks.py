@@ -219,27 +219,26 @@ def sync_task_to_bitrix(self, task_id: int):
         except Exception as exc:
             errors.append(f"агентство: {exc}")
 
-    if errors and not task.bitrix_task_id and not task.agency_bitrix_task_id:
+    if errors:
         task.sync_status = Task.SyncStatus.ERROR
         task.sync_error = "; ".join(errors)
         task.save(update_fields=list(set(update_fields)))
         try:
             raise self.retry(exc=BitrixAPIError(task.sync_error))
         except self.MaxRetriesExceededError:
-            return {"ok": False, "error": task.sync_error}
+            return {"ok": False, "error": task.sync_error, "partial_ids": {
+                "bitrix_task_id": task.bitrix_task_id,
+                "agency_bitrix_task_id": task.agency_bitrix_task_id,
+            }}
 
-    if errors:
-        task.sync_status = Task.SyncStatus.ERROR
-        task.sync_error = "; ".join(errors)
-    else:
-        task.sync_status = Task.SyncStatus.SYNCED
-        task.sync_error = ""
+    task.sync_status = Task.SyncStatus.SYNCED
+    task.sync_error = ""
     task.save(update_fields=list(set(update_fields)))
     return {
-        "ok": not errors,
+        "ok": True,
         "bitrix_task_id": task.bitrix_task_id,
         "agency_bitrix_task_id": task.agency_bitrix_task_id,
-        "errors": errors,
+        "errors": [],
     }
 
 
@@ -307,8 +306,10 @@ def sync_comment_to_bitrix(self, comment_id: int):
 def post_time_entry_to_deal(self, entry_id: int):
     """
     Deduct a closed time session from the accompaniment deal remaining hours.
-    Idempotent via TimeEntry.billed_to_deal_at.
+    Idempotent via atomic claim on TimeEntry.billed_to_deal_at.
     """
+    from django.utils import timezone
+
     from board.models import TimeEntry
     from board.timeutils import format_duration_ru
     from portals.deal_hours import (
@@ -319,7 +320,6 @@ def post_time_entry_to_deal(self, entry_id: int):
     )
     from portals.deal_resolve import get_active_binding, resolve_or_refresh_binding
     from portals.models import PortalLink
-    from django.utils import timezone
 
     try:
         entry = TimeEntry.objects.select_related(
@@ -365,9 +365,18 @@ def post_time_entry_to_deal(self, entry_id: int):
     if not binding:
         return {"ok": False, "reason": "no_deal_binding"}
 
+    # Claim before Bitrix writes so retries cannot double-spend.
+    claimed_at = timezone.now()
+    claimed = TimeEntry.objects.filter(pk=entry.id, billed_to_deal_at__isnull=True).update(
+        billed_to_deal_at=claimed_at
+    )
+    if not claimed:
+        return {"ok": True, "skipped": "already_billed"}
+
     seconds = int(entry.duration_seconds)
     duration_label = format_duration_ru(seconds)
     comment = f"Задача «{task.title}»: учтено {duration_label}"
+    deal_updated = False
 
     client = BitrixClient(agency)
     try:
@@ -377,6 +386,7 @@ def post_time_entry_to_deal(self, entry_id: int):
             new_remaining, spent = compute_remaining_after_spend(deal, seconds)
             if new_remaining is not None:
                 client.update_deal(binding.deal_id, remaining_update_fields(new_remaining))
+                deal_updated = True
                 hours = read_deal_hours(deal)
                 paid = hours.paid
                 binding.paid_hours = paid
@@ -390,8 +400,6 @@ def post_time_entry_to_deal(self, entry_id: int):
                 }
 
         result = client.add_deal_timeline_comment(binding.deal_id, comment)
-        entry.billed_to_deal_at = timezone.now()
-        entry.save(update_fields=["billed_to_deal_at", "updated_at"])
         return {
             "ok": True,
             "deal_id": binding.deal_id,
@@ -400,10 +408,17 @@ def post_time_entry_to_deal(self, entry_id: int):
             "hours": hours_result,
         }
     except BitrixAPIError as exc:
-        try:
-            raise self.retry(exc=exc)
-        except self.MaxRetriesExceededError:
-            return {"ok": False, "error": str(exc)}
+        # Allow retry only if the deal was not modified yet.
+        if not deal_updated:
+            TimeEntry.objects.filter(pk=entry.id, billed_to_deal_at=claimed_at).update(
+                billed_to_deal_at=None
+            )
+            try:
+                raise self.retry(exc=exc)
+            except self.MaxRetriesExceededError:
+                return {"ok": False, "error": str(exc)}
+        # Hours already deducted — keep claim; comment may be missing.
+        return {"ok": True, "partial": True, "error": str(exc), "deal_id": binding.deal_id}
 
 
 # Backwards-compatible alias (no longer used for hour deduction)

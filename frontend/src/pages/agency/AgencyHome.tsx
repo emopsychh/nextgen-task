@@ -227,7 +227,7 @@ export function AgencyHome() {
         </div>
       </section>
 
-      <section className="connect-card">
+      <section className="connect-card" data-tour="tour-connect-client">
         <div className="connect-head">
           <h2 className="section-title">Подключить клиента</h2>
           <p className="muted">Портал должен уже установить приложение Nextgen manager.</p>

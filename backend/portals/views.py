@@ -8,6 +8,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+import logging
 
 from .bitrix import BitrixAPIError, BitrixClient
 from .deal_resolve import resolve_or_refresh_binding, sync_deal_hours_meta
@@ -22,6 +23,8 @@ from .serializers import (
     upsert_bitrix_user,
     upsert_portal_from_auth,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _bitrix_install_finish_html() -> HttpResponse:
@@ -137,10 +140,10 @@ class BitrixInstallView(APIView):
                         if p:
                             ensure_task_event_bindings(p)
                 except Exception:
-                    pass
+                    logger.exception("event.bind during install failed")
             except Exception:
                 # Still finish install UI so Bitrix does not loop forever
-                pass
+                logger.exception("Bitrix install upsert failed")
 
         return _bitrix_install_finish_html()
 
@@ -184,7 +187,7 @@ class BitrixAuthView(APIView):
 
                 ensure_task_event_bindings(portal)
             except Exception:
-                pass
+                logger.exception("event.bind during auth failed for portal %s", portal.id)
         except (BitrixAPIError, Exception) as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -583,6 +586,21 @@ class BitrixEventView(APIView):
             portal = Portal.objects.filter(domain__icontains=str(domain).replace("https://", "")).first()
         if portal is None:
             return Response({"ok": False, "reason": "unknown_portal"}, status=200)
+
+        app_token = str(
+            (auth or {}).get("application_token")
+            or (auth or {}).get("applicationToken")
+            or request.data.get("application_token")
+            or request.POST.get("application_token")
+            or ""
+        )
+        expected_token = (portal.application_token or settings.BITRIX_APPLICATION_TOKEN or "").strip()
+        if expected_token:
+            if not app_token or app_token != expected_token:
+                return Response({"ok": False, "reason": "forbidden"}, status=403)
+        elif not settings.DEBUG:
+            # Production should always verify; misconfigured install = refuse events
+            return Response({"ok": False, "reason": "app_token_not_configured"}, status=403)
 
         # Refresh tokens from event auth when provided
         access = (auth or {}).get("access_token") or (auth or {}).get("AUTH_ID")

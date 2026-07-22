@@ -14,13 +14,6 @@ export const STATUS_TONE: Record<TaskStatus, string> = {
   done: "status-done",
 };
 
-export const SYNC_LABEL: Record<string, string> = {
-  pending: "Ожидает синхронизации",
-  synced: "Синхронизировано с Bitrix",
-  error: "Ошибка синхронизации",
-  skipped: "Без Bitrix",
-};
-
 export function isTaskOverdue(dueDate: string | null | undefined, status: TaskStatus): boolean {
   if (!dueDate || status === "done") return false;
   const today = startOfDay(new Date());

@@ -7,6 +7,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
+import logging
 
 from portals.models import Portal, PortalLink
 from portals.permissions import IsPortalAuthenticated, can_access_client_portal
@@ -22,6 +23,8 @@ from .serializers import (
 )
 from .tasks import sync_comment_to_bitrix, sync_task_to_bitrix
 from .timeutils import stop_time_entry
+
+logger = logging.getLogger(__name__)
 
 
 def enqueue_bitrix_sync(task_id: int) -> None:
@@ -239,7 +242,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                 if pull_task_status_from_bitrix(instance):
                     instance.refresh_from_db()
             except Exception:
-                pass
+                logger.exception("Bitrix status pull failed for task %s", instance.id)
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 

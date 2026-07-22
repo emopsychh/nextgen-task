@@ -5,11 +5,31 @@ type Props = {
   /** Sum of finished time entries (seconds), without the active run. */
   closedSeconds: number;
   activeStartedAt: string | null;
-  /** Task is in progress — shows live “recording” state. */
   isWorking: boolean;
+  /** Paid hours on the accompaniment deal (package size). */
+  paidHours?: number | null;
+  /** Remaining hours on the deal. */
+  remainingHours?: number | null;
 };
 
-export function TaskTimer({ closedSeconds, activeStartedAt, isWorking }: Props) {
+function asHours(value: number | string | null | undefined): number | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(String(value).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+function hoursLabel(h: number): string {
+  const n = Math.round(h * 100) / 100;
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
+export function TaskTimer({
+  closedSeconds,
+  activeStartedAt,
+  isWorking,
+  paidHours,
+  remainingHours,
+}: Props) {
   const [now, setNow] = useState(() => Date.now());
   const isRunning = Boolean(activeStartedAt);
 
@@ -19,24 +39,69 @@ export function TaskTimer({ closedSeconds, activeStartedAt, isWorking }: Props) 
     return () => window.clearInterval(id);
   }, [isRunning]);
 
-  const live = activeStartedAt
-    ? Math.max(0, Math.floor((now - new Date(activeStartedAt).getTime()) / 1000))
-    : 0;
-  const display = closedSeconds + live;
+  const startedMs = activeStartedAt ? new Date(activeStartedAt).getTime() : NaN;
+  const live =
+    Number.isFinite(startedMs)
+      ? Math.max(0, Math.floor((now - startedMs) / 1000))
+      : 0;
+  const displaySec = Math.max(0, closedSeconds + live);
+  const clock = isRunning ? formatTimerClock(displaySec) : formatDuration(displaySec);
 
-  let label = "ещё не учитывалось";
-  if (isRunning) label = "сейчас идёт учёт";
-  else if (display > 0) label = "всего затрачено";
+  const paid = asHours(paidHours);
+  const remaining = asHours(remainingHours);
+  const hasPackage = paid != null && paid > 0;
+  // Package consumption across all billed work (not this task alone)
+  const usedHours =
+    hasPackage && remaining != null ? Math.max(0, paid - remaining) : null;
+  const pct =
+    hasPackage && usedHours != null ? Math.min(100, (usedHours / paid) * 100) : 0;
+  const overBudget = hasPackage && remaining != null && remaining <= 0;
+
+  let status = "ещё не учитывалось";
+  if (isRunning) status = "идёт учёт";
+  else if (displaySec > 0) status = "по этой задаче";
 
   return (
-    <div className={`task-timer${isRunning ? " is-running" : ""}`} data-working={isWorking || undefined}>
-      <span className="task-timer-dot" aria-hidden />
-      <div className="task-timer-readout">
-        <span className="task-timer-clock">
-          {isRunning ? formatTimerClock(display) : formatDuration(display)}
-        </span>
-        <span className="task-timer-label">{label}</span>
+    <div
+      className={`task-timer-scale${isRunning ? " is-running" : ""}${overBudget ? " is-over" : ""}`}
+      data-working={isWorking || undefined}
+    >
+      <div className="task-timer-scale-head">
+        <div className="task-timer-scale-main">
+          <span className="task-timer-scale-clock">{clock}</span>
+          <span className="task-timer-scale-status">{status}</span>
+        </div>
+        {hasPackage ? (
+          <div className="task-timer-scale-meta">
+            <span>
+              пакет: {usedHours != null ? hoursLabel(usedHours) : "—"} / {hoursLabel(paid)} ч
+            </span>
+            {remaining != null ? (
+              <span className="task-timer-scale-remain">остаток {hoursLabel(remaining)} ч</span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
+
+      {hasPackage ? (
+        <div
+          className="task-timer-track"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(pct)}
+          aria-label="Использование оплаченного пакета часов"
+        >
+          <div
+            className="task-timer-fill"
+            style={{ width: `${Math.max(pct, usedHours && usedHours > 0 ? 1.5 : 0)}%` }}
+          />
+        </div>
+      ) : (
+        <div className="task-timer-track is-empty" aria-hidden>
+          <div className="task-timer-fill is-soft" style={{ width: displaySec > 0 ? "8%" : "0%" }} />
+        </div>
+      )}
     </div>
   );
 }

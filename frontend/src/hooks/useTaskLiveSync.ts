@@ -10,6 +10,8 @@ function fingerprint(task: Task): string {
   const lastFile = files.length ? files[files.length - 1]?.id : 0;
   const timer = task.active_timer?.started_at || "";
   const tracked = task.total_tracked_seconds || 0;
+  const paid = task.deal_paid_hours ?? "";
+  const remaining = task.deal_remaining_hours ?? "";
   return [
     task.updated_at,
     task.status,
@@ -22,6 +24,8 @@ function fingerprint(task: Task): string {
     lastFile,
     timer,
     tracked,
+    paid,
+    remaining,
   ].join("|");
 }
 

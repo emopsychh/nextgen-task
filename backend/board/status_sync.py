@@ -122,6 +122,9 @@ def apply_inbound_status(task, new_status: str, *, stop_timers: bool = True) -> 
         return False
     if task.status == new_status:
         return False
+    # Avoid clobbering an in-flight local→Bitrix push
+    if task.sync_status == Task.SyncStatus.PENDING:
+        return False
 
     old = task.status
     task.status = new_status

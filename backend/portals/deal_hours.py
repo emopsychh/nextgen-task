@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from django.conf import settings
 
@@ -25,7 +25,7 @@ def parse_hours(raw) -> Decimal | None:
         return None
     try:
         return Decimal(str(raw).replace(",", ".")).quantize(Decimal("0.01"))
-    except Exception:
+    except (InvalidOperation, ValueError, TypeError):
         return None
 
 

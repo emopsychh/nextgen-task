@@ -100,6 +100,8 @@ class TaskSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     total_tracked_seconds = serializers.SerializerMethodField()
     active_timer = serializers.SerializerMethodField()
+    deal_paid_hours = serializers.SerializerMethodField()
+    deal_remaining_hours = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
@@ -122,6 +124,8 @@ class TaskSerializer(serializers.ModelSerializer):
             "attachments",
             "total_tracked_seconds",
             "active_timer",
+            "deal_paid_hours",
+            "deal_remaining_hours",
             "created_at",
             "updated_at",
         )
@@ -135,6 +139,8 @@ class TaskSerializer(serializers.ModelSerializer):
             "created_by_name",
             "total_tracked_seconds",
             "active_timer",
+            "deal_paid_hours",
+            "deal_remaining_hours",
             "created_at",
             "updated_at",
         )
@@ -154,6 +160,36 @@ class TaskSerializer(serializers.ModelSerializer):
         if not running:
             return None
         return TimeEntrySerializer(running).data
+
+    def _deal_binding(self, obj):
+        cache = self.context.setdefault("_deal_binding_by_portal", {})
+        portal_id = obj.project.portal_id
+        if portal_id in cache:
+            return cache[portal_id]
+        from portals.models import PortalDealBinding
+
+        binding = (
+            PortalDealBinding.objects.filter(
+                client_portal_id=portal_id,
+                is_active=True,
+            )
+            .order_by("-updated_at")
+            .first()
+        )
+        cache[portal_id] = binding
+        return binding
+
+    def get_deal_paid_hours(self, obj):
+        binding = self._deal_binding(obj)
+        if not binding or binding.paid_hours is None:
+            return None
+        return float(binding.paid_hours)
+
+    def get_deal_remaining_hours(self, obj):
+        binding = self._deal_binding(obj)
+        if not binding or binding.remaining_hours is None:
+            return None
+        return float(binding.remaining_hours)
 
 
 class TaskListSerializer(serializers.ModelSerializer):
