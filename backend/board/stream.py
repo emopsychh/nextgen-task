@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 import time
 
-from django.http import StreamingHttpResponse
+from django.http import JsonResponse, StreamingHttpResponse
+from django.utils.decorators import method_decorator
+from django.views import View
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework.permissions import AllowAny
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import AccessToken
@@ -23,11 +27,8 @@ def _user_from_request(request):
     user = getattr(request, "user", None)
     if user and getattr(user, "is_authenticated", False) and getattr(user, "portal", None):
         return user
-    raw = (
-        request.query_params.get("access_token")
-        or request.query_params.get("token")
-        or ""
-    )
+    params = getattr(request, "query_params", None) or getattr(request, "GET", {})
+    raw = (params.get("access_token") or params.get("token") or "") if params is not None else ""
     if not raw:
         auth = request.META.get("HTTP_AUTHORIZATION") or ""
         if auth.lower().startswith("bearer "):
@@ -52,6 +53,7 @@ class SyncCursorView(APIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
+    renderer_classes = [JSONRenderer]
 
     def get(self, request):
         user = _user_from_request(request)
@@ -66,22 +68,25 @@ class SyncCursorView(APIView):
         return Response({"portal": int(portal_id), "v": get_cursor(int(portal_id))})
 
 
-class PortalStreamView(APIView):
-    """Server-Sent Events for a portal. Heartbeat every ~15s."""
+@method_decorator(csrf_exempt, name="dispatch")
+class PortalStreamView(View):
+    """
+    Server-Sent Events for a portal. Heartbeat every ~15s.
 
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    Plain Django View (not DRF APIView) so EventSource Accept: text/event-stream
+    does not trigger DRF content-negotiation 406.
+    """
 
     def get(self, request):
         user = _user_from_request(request)
         if not user:
-            return Response({"detail": "Unauthorized"}, status=401)
-        portal_id = request.query_params.get("portal")
+            return JsonResponse({"detail": "Unauthorized"}, status=401)
+        portal_id = request.GET.get("portal")
         if not portal_id:
-            return Response({"detail": "portal required"}, status=400)
+            return JsonResponse({"detail": "portal required"}, status=400)
         portal = Portal.objects.filter(pk=portal_id).first()
         if not portal or not can_access_client_portal(user, portal):
-            return Response({"detail": "No access"}, status=403)
+            return JsonResponse({"detail": "No access"}, status=403)
 
         channel = portal_channel(int(portal_id))
         last_v = get_cursor(int(portal_id))

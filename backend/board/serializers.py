@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 
 from portals.models import Portal
@@ -46,12 +47,20 @@ class AttachmentSerializer(serializers.ModelSerializer):
         read_only_fields = ("id", "uploaded_by", "created_at", "url", "original_name")
 
     def get_url(self, obj):
+        if not obj.file:
+            return None
         request = self.context.get("request")
-        if obj.file and request:
-            return request.build_absolute_uri(obj.file.url)
-        if obj.file:
-            return obj.file.url
-        return None
+        if request:
+            uri = request.build_absolute_uri(obj.file.url)
+        else:
+            uri = obj.file.url
+        # Behind TLS-terminating proxy nginx may report http — force public scheme
+        public = (settings.PUBLIC_APP_URL or "").rstrip("/")
+        if public.startswith("https://") and isinstance(uri, str) and uri.startswith("http://"):
+            uri = "https://" + uri[len("http://") :]
+        elif public and isinstance(uri, str) and uri.startswith("/"):
+            uri = f"{public}{uri}"
+        return uri
 
 
 class CommentSerializer(serializers.ModelSerializer):

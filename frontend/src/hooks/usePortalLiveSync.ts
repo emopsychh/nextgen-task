@@ -46,9 +46,13 @@ export function usePortalLiveSync({ token, portalId, enabled = true, onEvent }: 
       es.onmessage = (ev) => {
         if (!cancelled) handlePayload(ev.data);
       };
+    // Fall back to cursor poll if SSE dies (close to stop browser auto-reconnect storm)
       es.onerror = () => {
-        // Fall back to cursor poll if SSE dies
-        es?.close();
+        try {
+          es?.close();
+        } catch {
+          // ignore
+        }
         es = null;
         if (!cancelled && pollTimer == null) startPoll();
       };

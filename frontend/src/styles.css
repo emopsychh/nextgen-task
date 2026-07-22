@@ -24,8 +24,9 @@
 html,
 body,
 #root {
-  height: 100%;
+  /* min-height only — fixed height:100% traps Bitrix iframe at a tiny viewport */
   min-height: 100%;
+  height: auto;
 }
 
 body {
@@ -52,6 +53,7 @@ a {
 
 .app-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   height: 100%;
   display: grid;
   grid-template-columns: 260px 1fr;
