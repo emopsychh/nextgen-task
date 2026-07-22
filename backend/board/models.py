@@ -8,6 +8,9 @@ class Project(models.Model):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    # Agency Bitrix: parent task inside company workgroup (GROUP_ID)
+    bitrix_task_id = models.CharField(max_length=64, blank=True)
+    bitrix_group_id = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

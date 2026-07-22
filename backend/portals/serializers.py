@@ -40,9 +40,17 @@ class PortalLinkSerializer(serializers.ModelSerializer):
             "client_portal",
             "client_portal_id",
             "bitrix_company_id",
+            "bitrix_group_id",
             "created_at",
         )
-        read_only_fields = ("id", "agency_portal", "client_portal", "created_at")
+        read_only_fields = (
+            "id",
+            "agency_portal",
+            "client_portal",
+            "bitrix_company_id",
+            "bitrix_group_id",
+            "created_at",
+        )
 
 
 class PortalDealBindingSerializer(serializers.ModelSerializer):

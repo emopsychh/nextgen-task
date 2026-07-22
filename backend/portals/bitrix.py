@@ -123,6 +123,10 @@ class BitrixClient:
                     return [r for r in val if isinstance(r, dict)]
         return []
 
+    def get_company(self, company_id: int | str) -> dict:
+        result = self.call("crm.company.get", {"id": company_id})
+        return result if isinstance(result, dict) else {}
+
     def get_deal(self, deal_id: int | str) -> dict:
         result = self.call("crm.deal.get", {"id": deal_id})
         return result if isinstance(result, dict) else {}

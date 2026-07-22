@@ -21,7 +21,7 @@ from .serializers import (
     TaskListSerializer,
     TaskSerializer,
 )
-from .tasks import sync_comment_to_bitrix, sync_task_to_bitrix
+from .tasks import sync_comment_to_bitrix, sync_project_to_bitrix, sync_task_to_bitrix
 from .timeutils import stop_time_entry
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,13 @@ def enqueue_bitrix_sync(task_id: int) -> None:
         sync_task_to_bitrix(task_id)
     else:
         sync_task_to_bitrix.delay(task_id)
+
+
+def enqueue_project_sync(project_id: int) -> None:
+    if settings.CELERY_TASK_ALWAYS_EAGER:
+        sync_project_to_bitrix(project_id)
+    else:
+        sync_project_to_bitrix.delay(project_id)
 
 
 def enqueue_comment_sync(comment_id: int) -> None:
@@ -187,20 +194,32 @@ class ProjectViewSet(viewsets.ModelViewSet):
         return Project.objects.filter(portal_id__in=ids).select_related("portal")
 
     def perform_create(self, serializer):
+        if not self.request.user.is_agency:
+            raise PermissionDenied("Создавать проекты может только агентство")
         portal = serializer.validated_data["portal"]
         if not can_access_client_portal(self.request.user, portal):
             raise PermissionDenied("No access to this portal")
-        serializer.save()
+        project = serializer.save()
+        enqueue_project_sync(project.id)
+        project.refresh_from_db()
+        serializer.instance = project
 
     def perform_update(self, serializer):
         project = self.get_object()
         if not can_access_client_portal(self.request.user, project.portal):
             raise PermissionDenied("No access to this portal")
-        serializer.save()
+        if self.request.user.is_client:
+            raise PermissionDenied("Клиент не может изменять проекты")
+        project = serializer.save()
+        enqueue_project_sync(project.id)
+        project.refresh_from_db()
+        serializer.instance = project
 
     def perform_destroy(self, instance):
         if not can_access_client_portal(self.request.user, instance.portal):
             raise PermissionDenied("No access to this portal")
+        if self.request.user.is_client:
+            raise PermissionDenied("Клиент не может удалять проекты")
         instance.delete()
 
 

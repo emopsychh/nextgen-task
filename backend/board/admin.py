@@ -23,9 +23,9 @@ class TimeEntryInline(admin.TabularInline):
 
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):
-    list_display = ("name", "portal", "is_active", "created_at")
+    list_display = ("name", "portal", "bitrix_task_id", "bitrix_group_id", "is_active", "created_at")
     list_filter = ("portal", "is_active")
-    search_fields = ("name",)
+    search_fields = ("name", "bitrix_task_id")
 
 
 @admin.register(Task)

@@ -132,7 +132,8 @@ Vite проксирует `/api` и `/media` на `http://localhost:8000`.
   - пишет в таймлайн сделки: `Задача «…»: учтено … . Остаток часов: N`
   - уменьшает поле **оставшихся часов** на длительность этой сессии (поле **оплаченных** не меняется)
   - повторно не списывает ту же сессию (`billed_to_deal_at`)
-- Сделка ищется по полю «Ссылка на портал» (`BITRIX_DEAL_PORTAL_LINK_FIELD`, по умолчанию `UF_CRM_1784732110930`) в воронке `BITRIX_ACCOMPANIMENT_CATEGORY_ID`
+- Сделка ищется по полю «Ссылка на портал» (`BITRIX_DEAL_PORTAL_LINK_FIELD`) в воронке `BITRIX_ACCOMPANIMENT_CATEGORY_ID`
+- Проект компании (Bitrix workgroup) читается из `BITRIX_COMPANY_PROJECT_ID_FIELD` на компании сделки
 - Коды полей часов в `.env`: `BITRIX_DEAL_PAID_HOURS_FIELD`, `BITRIX_DEAL_REMAINING_HOURS_FIELD` (например `UF_CRM_…`)
 - Если остаток пуст, а оплачено задано — при поиске/refresh сделки остаток инициализируется из оплаченных
 - Постинг идёт от токена **агентского** портала (scope `crm`)

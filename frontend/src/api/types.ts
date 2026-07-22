@@ -27,6 +27,8 @@ export type Project = {
   name: string;
   description: string;
   is_active: boolean;
+  bitrix_task_id?: string;
+  bitrix_group_id?: string;
   tasks_count: number;
   done_count: number;
 };

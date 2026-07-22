@@ -50,7 +50,13 @@ def _resolve_responsible_id(client: BitrixClient, task) -> str:
     return str(local.bitrix_id) if local else ""
 
 
-def _task_fields(task, *, responsible_id: str | None = None) -> dict:
+def _task_fields(
+    task,
+    *,
+    responsible_id: str | None = None,
+    group_id: str | None = None,
+    parent_id: str | None = None,
+) -> dict:
     fields = {
         "TITLE": task.title,
         "DESCRIPTION": task.description or "",
@@ -62,6 +68,10 @@ def _task_fields(task, *, responsible_id: str | None = None) -> dict:
     if responsible_id:
         fields["RESPONSIBLE_ID"] = responsible_id
         fields["CREATED_BY"] = responsible_id
+    if group_id:
+        fields["GROUP_ID"] = group_id
+    if parent_id:
+        fields["PARENT_ID"] = parent_id
     return fields
 
 
@@ -132,7 +142,48 @@ def _agency_portal_for_client(client_portal):
     return link.agency_portal if link else None
 
 
-def _sync_one_portal(task, portal, *, existing_id: str, title_prefix: str = "") -> str:
+def _ensure_project_agency_parent(project) -> tuple[str, str]:
+    """
+    Ensure the app Project has an agency Bitrix parent task in the company GROUP.
+    Returns (bitrix_task_id, group_id).
+    """
+    from portals.deal_resolve import resolve_bitrix_group_id
+
+    agency = _agency_portal_for_client(project.portal)
+    if not agency:
+        raise BitrixAPIError("Клиент не привязан к агентству")
+
+    group_id = project.bitrix_group_id or ""
+    if not group_id:
+        group_id = resolve_bitrix_group_id(
+            agency_portal=agency, client_portal=project.portal
+        )
+
+    if project.bitrix_task_id and project.bitrix_group_id == group_id:
+        return project.bitrix_task_id, group_id
+
+    result = _do_sync_project_to_bitrix(project.id)
+    if not result.get("ok"):
+        raise BitrixAPIError(
+            result.get("error")
+            or result.get("reason")
+            or "Не удалось создать родительскую задачу проекта в Bitrix"
+        )
+    project.refresh_from_db()
+    if not project.bitrix_task_id:
+        raise BitrixAPIError("Не удалось создать родительскую задачу проекта в Bitrix")
+    return project.bitrix_task_id, project.bitrix_group_id or group_id
+
+
+def _sync_one_portal(
+    task,
+    portal,
+    *,
+    existing_id: str,
+    title_prefix: str = "",
+    group_id: str | None = None,
+    parent_id: str | None = None,
+) -> str:
     """Create/update Bitrix task on a portal; return bitrix task id."""
     if not portal.access_token:
         raise BitrixAPIError(f"Нет токена Bitrix у портала {portal.domain or portal.id}")
@@ -150,7 +201,7 @@ def _sync_one_portal(task, portal, *, existing_id: str, title_prefix: str = "") 
         title = f"{title_prefix}{task.title}"
 
     if existing_id:
-        fields = _task_fields(task)
+        fields = _task_fields(task, group_id=group_id, parent_id=parent_id)
         fields["TITLE"] = title
         client.update_task(existing_id, fields)
         try:
@@ -159,7 +210,12 @@ def _sync_one_portal(task, portal, *, existing_id: str, title_prefix: str = "") 
             raise BitrixAPIError(f"не удалось сменить статус в Bitrix: {exc}") from exc
         return existing_id
 
-    fields = _task_fields(task, responsible_id=responsible_id)
+    fields = _task_fields(
+        task,
+        responsible_id=responsible_id,
+        group_id=group_id,
+        parent_id=parent_id,
+    )
     fields["TITLE"] = title
     result = client.create_task(fields)
     bitrix_id = _extract_bitrix_id(result)
@@ -172,8 +228,85 @@ def _sync_one_portal(task, portal, *, existing_id: str, title_prefix: str = "") 
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
+def sync_project_to_bitrix(self, project_id: int):
+    """
+    App Project → agency Bitrix parent task inside company workgroup (GROUP_ID).
+    Not duplicated to the client Bitrix portal.
+    """
+    try:
+        return _do_sync_project_to_bitrix(project_id)
+    except BitrixAPIError as exc:
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": str(exc)}
+
+
+def _do_sync_project_to_bitrix(project_id: int) -> dict:
+    from board.models import Project
+    from portals.deal_resolve import resolve_bitrix_group_id
+
+    try:
+        project = Project.objects.select_related("portal").get(pk=project_id)
+    except Project.DoesNotExist:
+        return {"ok": False, "reason": "missing"}
+
+    client_portal = project.portal
+    agency = _agency_portal_for_client(client_portal)
+    if not agency:
+        return {"ok": False, "reason": "no_agency_link"}
+    if not agency.access_token:
+        return {"ok": False, "reason": "no_agency_token"}
+
+    group_id = resolve_bitrix_group_id(
+        agency_portal=agency, client_portal=client_portal
+    )
+
+    client = BitrixClient(agency)
+    responsible = _bitrix_user_id(client.get_current_user())
+    if not responsible:
+        local = agency.users.order_by("-is_admin", "id").first()
+        responsible = str(local.bitrix_id) if local else ""
+    if not responsible and not project.bitrix_task_id:
+        raise BitrixAPIError(
+            f"Не указан исполнитель на {agency.domain}: откройте приложение на портале агентства"
+        )
+
+    fields = {
+        "TITLE": project.name,
+        "DESCRIPTION": project.description or "",
+        "GROUP_ID": group_id,
+    }
+    if project.bitrix_task_id:
+        client.update_task(project.bitrix_task_id, fields)
+        bitrix_id = project.bitrix_task_id
+    else:
+        if responsible:
+            fields["RESPONSIBLE_ID"] = responsible
+            fields["CREATED_BY"] = responsible
+        result = client.create_task(fields)
+        bitrix_id = _extract_bitrix_id(result)
+        if not bitrix_id:
+            raise BitrixAPIError("Bitrix не вернул ID задачи проекта")
+
+    update_fields = ["updated_at"]
+    if bitrix_id != project.bitrix_task_id:
+        project.bitrix_task_id = bitrix_id
+        update_fields.append("bitrix_task_id")
+    if group_id != project.bitrix_group_id:
+        project.bitrix_group_id = group_id
+        update_fields.append("bitrix_group_id")
+    project.save(update_fields=update_fields)
+    return {"ok": True, "bitrix_task_id": bitrix_id, "group_id": group_id}
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def sync_task_to_bitrix(self, task_id: int):
-    """Sync task into client Bitrix Tasks and (if linked) agency Bitrix Tasks."""
+    """
+    Sync task:
+    - client Bitrix: flat task (no GROUP/PARENT)
+    - agency Bitrix: subtask under Project parent (PARENT_ID + GROUP_ID)
+    """
     from board.models import Task
 
     try:
@@ -187,7 +320,7 @@ def sync_task_to_bitrix(self, task_id: int):
     errors: list[str] = []
     update_fields = ["sync_status", "sync_error", "updated_at"]
 
-    # 1) Client portal (project owner)
+    # 1) Client portal — flat task
     try:
         client_id = _sync_one_portal(
             task, client_portal, existing_id=task.bitrix_task_id or ""
@@ -200,16 +333,19 @@ def sync_task_to_bitrix(self, task_id: int):
     except Exception as exc:
         errors.append(f"клиент: {exc}")
 
-    # 2) Agency portal copy (native Tasks on agency Bitrix)
+    # 2) Agency portal — subtask in company project
     agency = _agency_portal_for_client(client_portal)
     if agency and agency.id != client_portal.id:
         try:
+            parent_id, group_id = _ensure_project_agency_parent(task.project)
             prefix = f"[{client_portal.name or client_portal.domain}] "
             agency_id = _sync_one_portal(
                 task,
                 agency,
                 existing_id=task.agency_bitrix_task_id or "",
                 title_prefix=prefix,
+                group_id=group_id,
+                parent_id=parent_id,
             )
             if agency_id and agency_id != task.agency_bitrix_task_id:
                 task.agency_bitrix_task_id = agency_id

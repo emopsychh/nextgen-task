@@ -13,7 +13,13 @@ class PortalAdmin(admin.ModelAdmin):
 
 @admin.register(PortalLink)
 class PortalLinkAdmin(admin.ModelAdmin):
-    list_display = ("agency_portal", "client_portal", "created_at")
+    list_display = (
+        "agency_portal",
+        "client_portal",
+        "bitrix_company_id",
+        "bitrix_group_id",
+        "created_at",
+    )
     autocomplete_fields = ("agency_portal", "client_portal")
 
 

@@ -146,25 +146,29 @@ export function ClientProjects() {
             {isAgency ? " этого клиента" : ""}
           </p>
         </div>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => setShowCreate((v) => !v)}
-          data-tour="tour-new-project"
-        >
-          {showCreate ? "Закрыть" : "Новый проект"}
-        </button>
+        {isAgency ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setShowCreate((v) => !v)}
+            data-tour="tour-new-project"
+          >
+            {showCreate ? "Закрыть" : "Новый проект"}
+          </button>
+        ) : null}
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
-      {showCreate && (
+      {isAgency && showCreate && (
         <form className="connect-panel create-project-panel stack" onSubmit={createProject}>
           <div>
             <h2 className="section-title">Новый проект</h2>
-            <p className="muted">Модуль работ — внутри него будут задачи.</p>
+            <p className="muted">
+              В Bitrix это задача внутри проекта компании; внутри — подзадачи.
+            </p>
           </div>
           <div className="field">
             <label>Название</label>
@@ -198,7 +202,9 @@ export function ClientProjects() {
           {recentProjects.length === 0 ? (
             <div className="empty-linked">
               <p className="muted">
-                Создайте первый проект — модуль появится в панели слева.
+                {isAgency
+                  ? "Создайте первый проект — он появится в панели слева и как задача в Bitrix-проекте компании."
+                  : "Пока нет проектов. Их создаёт агентство — здесь появятся задачи."}
               </p>
             </div>
           ) : (

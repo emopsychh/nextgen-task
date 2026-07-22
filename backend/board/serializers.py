@@ -237,12 +237,20 @@ class ProjectSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "is_active",
+            "bitrix_task_id",
+            "bitrix_group_id",
             "tasks_count",
             "done_count",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "bitrix_task_id",
+            "bitrix_group_id",
+            "created_at",
+            "updated_at",
+        )
 
     def get_done_count(self, obj):
         return obj.tasks.filter(status=Task.Status.DONE).count()

@@ -39,8 +39,9 @@ class PortalLink(models.Model):
         related_name="agency_links",
         limit_choices_to={"role": Portal.Role.CLIENT},
     )
-    # Agency CRM company — used to auto-find the accompaniment deal
+    # Agency CRM company + Bitrix workgroup (from company UF «ID проекта»)
     bitrix_company_id = models.CharField(max_length=64, blank=True)
+    bitrix_group_id = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

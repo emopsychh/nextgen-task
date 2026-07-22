@@ -28,11 +28,15 @@ See root `README.md` for full install flow across agency + client portals.
 ```
 BITRIX_DEAL_PAID_HOURS_FIELD=UF_CRM_…
 BITRIX_DEAL_REMAINING_HOURS_FIELD=UF_CRM_…
+BITRIX_DEAL_PORTAL_LINK_FIELD=UF_CRM_1784732110930
+BITRIX_COMPANY_PROJECT_ID_FIELD=UF_CRM_1784732577491
 BITRIX_ACCOMPANIMENT_CATEGORY_ID=…
 ```
 
 `CATEGORY_ID` воронки смотрите в URL CRM или через `crm.category.list` / настройки воронки.
 
 При паузе/завершении задачи (закрытии сессии таймера) остаток уменьшается; оплаченные не трогаем.  
-Сделка находится автоматически по полю **«Ссылка на портал Битрикс24»** (`UF_CRM_1784732110930` / `BITRIX_DEAL_PORTAL_LINK_FIELD`): в сделке должна быть ссылка на портал клиента.  
+Сделка находится автоматически по полю **«Ссылка на портал Битрикс24»** (`BITRIX_DEAL_PORTAL_LINK_FIELD`).  
+`GROUP_ID` Bitrix-проекта компании — из поля **«ID проекта»** на компании (`BITRIX_COMPANY_PROJECT_ID_FIELD`); робот на стадии 2 создаёт проект и пишет ID.  
+В приложении «Проект» = родительская задача в этом GROUP; «Задача» = подзадача (на портале клиента — плоская задача).  
 Если остаток пустой — при поиске/обновлении копируется из оплаченных.
