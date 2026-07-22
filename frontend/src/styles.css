@@ -1478,6 +1478,35 @@ a {
   gap: 8px;
 }
 
+.deal-company-locked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.deal-company-locked-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.deal-company-id {
+  font-family: var(--display);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.deal-company-locked .btn {
+  padding: 0.45rem 0.85rem;
+  font-size: 0.82rem;
+}
+
 .deal-bind-label {
   font-size: 0.78rem;
   font-weight: 650;

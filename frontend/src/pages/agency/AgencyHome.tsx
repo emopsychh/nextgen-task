@@ -35,6 +35,7 @@ export function AgencyHome() {
   const [pendingUnlink, setPendingUnlink] = useState<PendingUnlink | null>(null);
   const [unlinking, setUnlinking] = useState(false);
   const [companyDrafts, setCompanyDrafts] = useState<Record<number, string>>({});
+  const [editingCompany, setEditingCompany] = useState<Record<number, boolean>>({});
   const [dealBusyId, setDealBusyId] = useState<number | null>(null);
 
   const available = useMemo(
@@ -140,6 +141,7 @@ export function AgencyHome() {
         token
       );
       toast.show("Открытая сделка найдена в воронке «Сопровождение»", "Сделка привязана");
+      setEditingCompany((prev) => ({ ...prev, [portalId]: false }));
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось найти сделку");
@@ -161,6 +163,7 @@ export function AgencyHome() {
         delete next[portalId];
         return next;
       });
+      setEditingCompany((prev) => ({ ...prev, [portalId]: true }));
       toast.show("Привязка снята");
       await load();
     } catch (err) {
@@ -291,6 +294,12 @@ export function AgencyHome() {
               const companyValue = companyValueFor(p.id, link, binding);
               const dealBusy = dealBusyId === p.id;
               const hasDeal = Boolean(binding);
+              const savedCompanyId = (
+                binding?.bitrix_company_id ||
+                link.bitrix_company_id ||
+                ""
+              ).trim();
+              const showCompanyForm = !savedCompanyId || editingCompany[p.id] === true;
               return (
                 <article
                   key={link.id}
@@ -350,35 +359,70 @@ export function AgencyHome() {
                           </div>
                         )}
                       </div>
-                    ) : (
-                      <p className="deal-bind-hint">ID компании из CRM агентства</p>
-                    )}
+                    ) : null}
 
                     <div className="deal-bind-form">
-                      <label className="deal-bind-label" htmlFor={`company-${p.id}`}>
-                        ID компании
-                      </label>
-                      <div className="deal-bind-row">
-                        <input
-                          id={`company-${p.id}`}
-                          className="deal-bind-input"
-                          inputMode="numeric"
-                          placeholder="Напр. 40"
-                          value={companyValue}
-                          onChange={(e) =>
-                            setCompanyDrafts((prev) => ({ ...prev, [p.id]: e.target.value }))
-                          }
-                          disabled={dealBusy}
-                        />
-                        <button
-                          type="button"
-                          className="btn btn-accent"
-                          disabled={dealBusy || !companyValue.trim()}
-                          onClick={() => void findDealByCompany(p.id, link)}
-                        >
-                          {dealBusy ? "…" : hasDeal ? "Обновить" : "Найти"}
-                        </button>
-                      </div>
+                      {showCompanyForm ? (
+                        <>
+                          <label className="deal-bind-label" htmlFor={`company-${p.id}`}>
+                            ID компании
+                          </label>
+                          <div className="deal-bind-row">
+                            <input
+                              id={`company-${p.id}`}
+                              className="deal-bind-input"
+                              inputMode="numeric"
+                              placeholder="Напр. 40"
+                              value={companyValue}
+                              onChange={(e) =>
+                                setCompanyDrafts((prev) => ({ ...prev, [p.id]: e.target.value }))
+                              }
+                              disabled={dealBusy}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-accent"
+                              disabled={dealBusy || !companyValue.trim()}
+                              onClick={() => void findDealByCompany(p.id, link)}
+                            >
+                              {dealBusy ? "…" : "Найти"}
+                            </button>
+                            {savedCompanyId ? (
+                              <button
+                                type="button"
+                                className="btn btn-ghost"
+                                disabled={dealBusy}
+                                onClick={() =>
+                                  setEditingCompany((prev) => ({ ...prev, [p.id]: false }))
+                                }
+                              >
+                                Отмена
+                              </button>
+                            ) : null}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="deal-company-locked">
+                          <div className="deal-company-locked-text">
+                            <span className="deal-bind-label">ID компании</span>
+                            <strong className="deal-company-id">{savedCompanyId}</strong>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            disabled={dealBusy}
+                            onClick={() => {
+                              setCompanyDrafts((prev) => ({
+                                ...prev,
+                                [p.id]: savedCompanyId,
+                              }));
+                              setEditingCompany((prev) => ({ ...prev, [p.id]: true }));
+                            }}
+                          >
+                            Изменить ID
+                          </button>
+                        </div>
+                      )}
                       {hasDeal ? (
                         <div className="deal-bind-actions">
                           <button
