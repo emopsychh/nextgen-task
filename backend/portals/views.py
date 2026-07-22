@@ -1,6 +1,6 @@
 from django.db.models import Q
 from django.conf import settings
-from django.http import HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from rest_framework import viewsets
@@ -24,9 +24,68 @@ from .serializers import (
 )
 
 
+def _bitrix_install_finish_html() -> HttpResponse:
+    """Bitrix keeps reopening install until BX24.installFinish() is called in the iframe."""
+    html = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Nextgen manager — установка</title>
+  <script src="//api.bitrix24.com/api/v1/"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 2rem; color: #1f2937; }
+  </style>
+</head>
+<body>
+  <p>Установка Nextgen manager…</p>
+  <script>
+    BX24.init(function () {
+      BX24.installFinish();
+    });
+  </script>
+</body>
+</html>"""
+    return HttpResponse(html, content_type="text/html; charset=utf-8")
+
+
+def _collect_bitrix_query(request) -> str:
+    """Forward Bitrix auth fields from GET/POST into a query string for the SPA."""
+    keys = (
+        "AUTH_ID",
+        "REFRESH_ID",
+        "AUTH_EXPIRES",
+        "DOMAIN",
+        "domain",
+        "member_id",
+        "MEMBER_ID",
+        "APP_SID",
+        "LANG",
+        "PROTOCOL",
+    )
+    params: list[str] = []
+    seen: set[str] = set()
+    sources = []
+    if hasattr(request, "data") and isinstance(request.data, dict):
+        sources.append(request.data)
+    sources.append(request.POST)
+    sources.append(request.GET)
+    for src in sources:
+        for key in keys:
+            if key in seen:
+                continue
+            val = src.get(key)
+            if val is None or val == "":
+                continue
+            from urllib.parse import quote
+
+            params.append(f"{key}={quote(str(val), safe='')}")
+            seen.add(key)
+    return "&".join(params)
+
+
 @method_decorator(csrf_exempt, name="dispatch")
 class BitrixInstallView(APIView):
-    """Handler for Bitrix local app install / reinstall."""
+    """Handler for Bitrix local app install / reinstall (installation wizard URL)."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -40,29 +99,42 @@ class BitrixInstallView(APIView):
         if "access_token" not in auth and "auth" in request.data:
             auth = request.data["auth"]
 
-        try:
-            portal = upsert_portal_from_auth(auth)
-        except Exception as exc:
-            return Response({"detail": str(exc)}, status=400)
-
-        event = request.data.get("event") or request.GET.get("event", "")
-        if event in ("ONAPPINSTALL", "ONAPPINSTALL", ""):
-            # First install — leave role unknown until set in admin/agency UI
-            pass
-
-        frontend = settings.FRONTEND_URL
-        return Response(
-            {
-                "ok": True,
-                "portal_id": portal.id,
-                "member_id": portal.member_id,
-                "frontend": frontend,
+        # Placement-style flat POST (AUTH_ID) — still finish install in browser
+        if not (isinstance(auth, dict) and (auth.get("access_token") or auth.get("AUTH_ID"))):
+            flat = {
+                "access_token": request.data.get("AUTH_ID") or request.POST.get("AUTH_ID"),
+                "refresh_token": request.data.get("REFRESH_ID") or request.POST.get("REFRESH_ID") or "",
+                "member_id": request.data.get("member_id")
+                or request.data.get("MEMBER_ID")
+                or request.POST.get("member_id")
+                or request.POST.get("MEMBER_ID"),
+                "domain": request.data.get("DOMAIN")
+                or request.data.get("domain")
+                or request.POST.get("DOMAIN"),
+                "expires_in": request.data.get("AUTH_EXPIRES") or request.POST.get("AUTH_EXPIRES") or 3600,
+                "application_token": request.data.get("APP_SID") or request.POST.get("APP_SID") or "",
             }
-        )
+            if flat["access_token"] and flat["member_id"]:
+                auth = flat
+
+        if isinstance(auth, dict) and (auth.get("access_token") or auth.get("AUTH_ID") or auth.get("member_id")):
+            try:
+                if auth.get("AUTH_ID") and not auth.get("access_token"):
+                    auth = {
+                        **auth,
+                        "access_token": auth.get("AUTH_ID"),
+                        "refresh_token": auth.get("REFRESH_ID", auth.get("refresh_token", "")),
+                        "expires_in": auth.get("AUTH_EXPIRES") or auth.get("expires_in") or 3600,
+                    }
+                upsert_portal_from_auth(auth)
+            except Exception:
+                # Still finish install UI so Bitrix does not loop forever
+                pass
+
+        return _bitrix_install_finish_html()
 
     def get(self, request):
-        # Some Bitrix setups hit GET on handler
-        return Response({"ok": True, "service": "nextgen-task"})
+        return _bitrix_install_finish_html()
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -431,12 +503,14 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         instance.delete()
 
 
-@api_view(["GET"])
+@csrf_exempt
+@api_view(["GET", "POST"])
 @permission_classes([AllowAny])
 def app_entry(request):
-    """Redirect Bitrix menu open into frontend with query params preserved."""
-    qs = request.META.get("QUERY_STRING", "")
-    target = settings.FRONTEND_URL
+    """Open SPA from Bitrix menu; forward placement auth as query params."""
+    qs = _collect_bitrix_query(request)
+    target = settings.FRONTEND_URL.rstrip("/") + "/"
     if qs:
-        target = f"{target}/?{qs}"
+        target = f"{target}?{qs}"
     return HttpResponseRedirect(target)
+

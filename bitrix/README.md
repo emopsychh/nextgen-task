@@ -2,11 +2,13 @@
 
 Create a **Local application** in Bitrix24 Cloud (Developer resources).
 
-| Field | Value |
-|-------|--------|
-| Handler | `{PUBLIC_APP_URL}/api/bitrix/install/` |
-| Application URL | `{PUBLIC_APP_URL}/api/bitrix/entry/` |
-| Scopes | `task`, `user`, **`crm`** (нужен агентству: сделки + timeline-комментарии) |
+| Field (RU) | Value |
+|------------|--------|
+| Путь вашего обработчика | `{PUBLIC_APP_URL}/api/bitrix/entry/` |
+| Путь для первоначальной установки | `{PUBLIC_APP_URL}/api/bitrix/install/` |
+| Scopes | `task`, `user`, **`crm`** (агентство) |
+
+Install wizard must call `BX24.installFinish()` (handled by `/api/bitrix/install/`). Without it Bitrix reopen install forever.
 
 Copy Client ID / Client Secret / Application token into `.env`.
 
