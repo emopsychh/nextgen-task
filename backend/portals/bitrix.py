@@ -76,7 +76,22 @@ class BitrixClient:
         return self.call("tasks.task.update", {"taskId": task_id, "fields": fields})
 
     def get_task(self, task_id: int | str) -> dict:
-        result = self.call("tasks.task.get", {"taskId": task_id})
+        result = self.call(
+            "tasks.task.get",
+            {
+                "taskId": task_id,
+                "select": [
+                    "ID",
+                    "TITLE",
+                    "DESCRIPTION",
+                    "STATUS",
+                    "REAL_STATUS",
+                    "DEADLINE",
+                    "GROUP_ID",
+                    "PARENT_ID",
+                ],
+            },
+        )
         if isinstance(result, dict) and "task" in result and isinstance(result["task"], dict):
             return result["task"]
         return result if isinstance(result, dict) else {}

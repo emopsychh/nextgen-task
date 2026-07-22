@@ -266,6 +266,24 @@ class TaskViewSet(viewsets.ModelViewSet):
             qs = qs.filter(project__portal_id=portal_id)
         return qs
 
+    def list(self, request, *args, **kwargs):
+        # Soft pull deadlines/status from agency Bitrix when opening a project board
+        if request.query_params.get("pull") in ("1", "true", "yes"):
+            project_id = request.query_params.get("project")
+            if project_id:
+                try:
+                    from board.status_sync import pull_task_status_from_bitrix
+
+                    qs = self.filter_queryset(self.get_queryset()).filter(project_id=project_id)[:80]
+                    for task in qs:
+                        try:
+                            pull_task_status_from_bitrix(task)
+                        except Exception:
+                            logger.exception("Bitrix pull failed for task %s", task.id)
+                except Exception:
+                    logger.exception("Bitrix task list pull failed for project %s", project_id)
+        return super().list(request, *args, **kwargs)
+
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
         # Optional Bitrix pull (open task). Live poll should omit ?pull=1.

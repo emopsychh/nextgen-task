@@ -58,7 +58,11 @@ export function ProjectTasks() {
     if (!token || !projectId) return;
     const [projectData, taskData] = await Promise.all([
       api<Project>(`/api/projects/${projectId}/`, {}, token),
-      api<Task[] | { results: Task[] }>(`/api/tasks/?project=${projectId}`, {}, token),
+      api<Task[] | { results: Task[] }>(
+        `/api/tasks/?project=${projectId}&pull=1`,
+        {},
+        token
+      ),
     ]);
     setProject(projectData);
     setTasks(unwrapList(taskData));

@@ -82,14 +82,29 @@ def _agency_portal_for_client(client_portal):
 
 
 def resolve_bitrix_task_source(task) -> tuple | tuple[None, None]:
-    """Prefer client Bitrix task; fall back to agency copy."""
+    """
+    Prefer agency Bitrix task (company workgroup / subtasks) — that is where
+    managers edit deadlines. Fall back to the client portal copy.
+    """
     client_portal = task.project.portal
-    if task.bitrix_task_id and client_portal.access_token:
-        return client_portal, str(task.bitrix_task_id)
     agency = _agency_portal_for_client(client_portal)
     if agency and task.agency_bitrix_task_id and agency.access_token:
         return agency, str(task.agency_bitrix_task_id)
+    if task.bitrix_task_id and client_portal.access_token:
+        return client_portal, str(task.bitrix_task_id)
     return None, None
+
+
+def resolve_all_bitrix_task_sources(task) -> list[tuple]:
+    """Agency first, then client — for pulls that should reconcile both copies."""
+    sources: list[tuple] = []
+    client_portal = task.project.portal
+    agency = _agency_portal_for_client(client_portal)
+    if agency and task.agency_bitrix_task_id and agency.access_token:
+        sources.append((agency, str(task.agency_bitrix_task_id)))
+    if task.bitrix_task_id and client_portal.access_token:
+        sources.append((client_portal, str(task.bitrix_task_id)))
+    return sources
 
 
 def find_local_task_for_bitrix(*, portal, bitrix_task_id: str):
@@ -167,9 +182,10 @@ def parse_bitrix_deadline(task_data: dict):
         task_data.get("deadline")
         or task_data.get("DEADLINE")
         or task_data.get("deadlineDate")
+        or task_data.get("DEADLINE_D")
         or ""
     )
-    if raw in (None, "", False):
+    if raw in (None, "", False, "false", "0"):
         return None
     if isinstance(raw, date) and not isinstance(raw, datetime):
         return raw
@@ -177,15 +193,24 @@ def parse_bitrix_deadline(task_data: dict):
         dt = raw if timezone.is_aware(raw) else timezone.make_aware(raw, timezone.utc)
         return timezone.localtime(dt).date()
     text = str(raw).strip()
-    if not text:
+    if not text or text.lower() in ("false", "none", "null"):
         return None
-    # Date-only
+    # Date-only "YYYY-MM-DD..."
     if len(text) >= 10 and text[4] == "-" and text[7] == "-":
         try:
             return date.fromisoformat(text[:10])
         except ValueError:
             pass
-    dt = parse_datetime(text.replace(" ", "T", 1) if " " in text and "T" not in text else text)
+    normalized = text.replace(" ", "T", 1) if " " in text and "T" not in text else text
+    dt = parse_datetime(normalized)
+    if dt is None:
+        # Bitrix sometimes returns "DD.MM.YYYY HH:MM:SS"
+        for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y"):
+            try:
+                dt = datetime.strptime(text[:19] if len(text) >= 19 else text, fmt)
+                break
+            except ValueError:
+                continue
     if dt is None:
         return None
     if timezone.is_naive(dt):
@@ -193,39 +218,54 @@ def parse_bitrix_deadline(task_data: dict):
     return timezone.localtime(dt).date()
 
 
-def apply_inbound_deadline(task, new_due, *, allow_while_pending: bool = False) -> bool:
+def apply_inbound_deadline(task, new_due, *, allow_while_pending: bool = True) -> bool:
     """Apply deadline from Bitrix. Returns True if changed."""
     from board.models import Task
 
+    # Deadline from Bitrix should win even if a local push is pending —
+    # otherwise agency edits never appear while sync_status stuck on pending.
     if task.sync_status == Task.SyncStatus.PENDING and not allow_while_pending:
         return False
     if task.due_date == new_due:
         return False
     task.due_date = new_due
-    task.sync_status = Task.SyncStatus.SYNCED
-    task.sync_error = ""
-    task.save(update_fields=["due_date", "sync_status", "sync_error", "updated_at"])
+    if task.sync_status != Task.SyncStatus.PENDING:
+        task.sync_status = Task.SyncStatus.SYNCED
+        task.sync_error = ""
+        task.save(update_fields=["due_date", "sync_status", "sync_error", "updated_at"])
+    else:
+        task.save(update_fields=["due_date", "updated_at"])
     return True
 
 
 def pull_task_status_from_bitrix(task) -> bool:
-    """Fetch Bitrix status + deadline and update local task if different."""
-    portal, bitrix_id = resolve_bitrix_task_source(task)
-    if not portal or not bitrix_id:
+    """
+    Fetch Bitrix status + deadline (agency copy preferred) and update local task.
+    """
+    sources = resolve_all_bitrix_task_sources(task)
+    if not sources:
         return False
-    try:
-        data = BitrixClient(portal).get_task(bitrix_id)
-    except BitrixAPIError as exc:
-        logger.info("pull status task=%s: %s", task.id, exc)
+
+    data = None
+    for portal, bitrix_id in sources:
+        try:
+            data = BitrixClient(portal).get_task(bitrix_id)
+        except BitrixAPIError as exc:
+            logger.info("pull status task=%s portal=%s: %s", task.id, portal.id, exc)
+            continue
+        if data:
+            break
+
+    if not data:
         return False
+
     changed = False
     local = local_status_from_bitrix_task(data)
     if local:
         changed = apply_inbound_status(task, local) or changed
     due = parse_bitrix_deadline(data)
-    # Always reconcile deadline (including clear when Bitrix has none)
     task.refresh_from_db()
-    changed = apply_inbound_deadline(task, due) or changed
+    changed = apply_inbound_deadline(task, due, allow_while_pending=True) or changed
     return changed
 
 
@@ -246,7 +286,14 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str) -> dict:
             status_changed = apply_inbound_status(task, local)
         due = parse_bitrix_deadline(data)
         task.refresh_from_db()
-        due_changed = apply_inbound_deadline(task, due)
+        due_changed = apply_inbound_deadline(task, due, allow_while_pending=True)
+        if due_changed:
+            try:
+                _mirror_deadline_to_other_portals(
+                    task, due, exclude_portal_id=portal.id
+                )
+            except Exception:
+                logger.exception("mirror deadline failed for task %s", task.id)
         return {
             "ok": True,
             "task_id": task.id,
@@ -259,7 +306,46 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str) -> dict:
     if portal.role == Portal.Role.AGENCY:
         from board.project_sync import ingest_agency_bitrix_task
 
-        return ingest_agency_bitrix_task(
+        result = ingest_agency_bitrix_task(
             agency_portal=portal, bitrix_task_id=str(bitrix_task_id)
         )
+        if result.get("ok") and result.get("kind") == "task" and result.get("task_id"):
+            from board.models import Task
+
+            task = Task.objects.filter(pk=result["task_id"]).first()
+            if task:
+                try:
+                    data = BitrixClient(portal).get_task(bitrix_task_id)
+                    due = parse_bitrix_deadline(data)
+                    apply_inbound_deadline(task, due, allow_while_pending=True)
+                    result["due_date"] = due.isoformat() if due else None
+                except BitrixAPIError:
+                    pass
+        return result
     return {"ok": False, "reason": "unknown_task"}
+
+
+def _mirror_deadline_to_other_portals(task, due, *, exclude_portal_id=None) -> None:
+    """Push due_date to the other Bitrix copy (not the event source)."""
+    from datetime import datetime, time
+
+    deadline = ""
+    if due:
+        deadline = datetime.combine(due, time(23, 59, 59)).strftime("%Y-%m-%dT23:59:59+00:00")
+    fields = {"DEADLINE": deadline}
+
+    client_portal = task.project.portal
+    agency = _agency_portal_for_client(client_portal)
+    targets: list[tuple] = []
+    if task.bitrix_task_id and client_portal.access_token:
+        if exclude_portal_id != client_portal.id:
+            targets.append((client_portal, task.bitrix_task_id))
+    if agency and task.agency_bitrix_task_id and agency.access_token:
+        if exclude_portal_id != agency.id:
+            targets.append((agency, task.agency_bitrix_task_id))
+
+    for p, bx_id in targets:
+        try:
+            BitrixClient(p).update_task(bx_id, fields)
+        except BitrixAPIError as exc:
+            logger.info("mirror deadline %s→%s: %s", task.id, p.domain, exc)
