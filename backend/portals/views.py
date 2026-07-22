@@ -615,7 +615,9 @@ class BitrixEventView(APIView):
             else:
                 result = {"ok": True, "ignored": "client_task_add"}
         else:
-            result = handle_bitrix_task_update(portal=portal, bitrix_task_id=str(bitrix_task_id))
+            result = handle_bitrix_task_update(
+                portal=portal, bitrix_task_id=str(bitrix_task_id), event_data=data
+            )
         return Response(result)
 
     def get(self, request):
@@ -699,16 +701,16 @@ def _bitrix_event_task_id(data: dict) -> str:
         return ""
     after = data.get("FIELDS_AFTER") or data.get("fields_after") or {}
     if isinstance(after, dict):
-        tid = after.get("ID") or after.get("id")
-        if tid:
+        tid = after.get("ID") or after.get("id") or after.get("TASK_ID") or after.get("taskId")
+        if tid not in (None, "", "0"):
             return str(tid)
-    before = data.get("FIELDS_BEFORE") or {}
+    before = data.get("FIELDS_BEFORE") or data.get("fields_before") or {}
     if isinstance(before, dict):
-        tid = before.get("ID") or before.get("id")
-        if tid:
+        tid = before.get("ID") or before.get("id") or before.get("TASK_ID")
+        if tid not in (None, "", "0"):
             return str(tid)
-    tid = data.get("ID") or data.get("id") or data.get("TASK_ID")
-    return str(tid) if tid else ""
+    tid = data.get("ID") or data.get("id") or data.get("TASK_ID") or data.get("taskId")
+    return str(tid) if tid not in (None, "", "0") else ""
 
 
 @csrf_exempt

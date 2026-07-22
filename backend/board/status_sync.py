@@ -125,13 +125,23 @@ def find_local_task_for_bitrix(*, portal, bitrix_task_id: str):
     # Agency copy: agency_bitrix_task_id on a client project linked to this agency
     from portals.models import PortalLink
 
-    client_ids = PortalLink.objects.filter(agency_portal=portal).values_list(
-        "client_portal_id", flat=True
+    client_ids = list(
+        PortalLink.objects.filter(agency_portal=portal).values_list(
+            "client_portal_id", flat=True
+        )
     )
-    return qs.filter(
+    agency_hit = qs.filter(
         agency_bitrix_task_id=bitrix_task_id,
         project__portal_id__in=client_ids,
     ).first()
+    if agency_hit:
+        return agency_hit
+
+    # Last resort: unique match by either id (covers mis-linked portals)
+    return (
+        qs.filter(agency_bitrix_task_id=bitrix_task_id).first()
+        or qs.filter(bitrix_task_id=bitrix_task_id).first()
+    )
 
 
 def apply_inbound_status(task, new_status: str, *, stop_timers: bool = True) -> bool:
@@ -269,22 +279,44 @@ def pull_task_status_from_bitrix(task) -> bool:
     return changed
 
 
-def handle_bitrix_task_update(*, portal, bitrix_task_id: str) -> dict:
+def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict | None = None) -> dict:
     """Process OnTaskUpdate: refresh local status/deadline, or ingest as project/subtask."""
     from portals.models import Portal
 
     task = find_local_task_for_bitrix(portal=portal, bitrix_task_id=str(bitrix_task_id))
     if task:
+        data: dict = {}
         try:
-            data = BitrixClient(portal).get_task(bitrix_task_id)
+            data = BitrixClient(portal).get_task(bitrix_task_id) or {}
         except BitrixAPIError as exc:
-            return {"ok": False, "reason": str(exc)}
+            logger.info("OnTaskUpdate get_task failed id=%s: %s", bitrix_task_id, exc)
+
+        # Event payload often has DEADLINE immediately — use as fallback/primary
+        after = {}
+        if isinstance(event_data, dict):
+            raw_after = event_data.get("FIELDS_AFTER") or event_data.get("fields_after") or {}
+            if isinstance(raw_after, dict):
+                after = raw_after
+
+        merged = {**after, **data} if data else after
+        if not merged:
+            return {"ok": False, "reason": "empty_task_payload"}
+
         status_changed = False
         due_changed = False
-        local = local_status_from_bitrix_task(data)
+        local = local_status_from_bitrix_task(merged)
         if local:
             status_changed = apply_inbound_status(task, local)
-        due = parse_bitrix_deadline(data)
+
+        # Prefer get_task deadline; fall back to FIELDS_AFTER
+        due = parse_bitrix_deadline(data) if data else None
+        if due is None:
+            due = parse_bitrix_deadline(after)
+        # If get_task returned empty deadline but event has one, event wins
+        event_due = parse_bitrix_deadline(after)
+        if data and parse_bitrix_deadline(data) is None and event_due is not None:
+            due = event_due
+
         task.refresh_from_db()
         due_changed = apply_inbound_deadline(task, due, allow_while_pending=True)
         if due_changed:
@@ -315,12 +347,24 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str) -> dict:
             task = Task.objects.filter(pk=result["task_id"]).first()
             if task:
                 try:
-                    data = BitrixClient(portal).get_task(bitrix_task_id)
-                    due = parse_bitrix_deadline(data)
+                    data = BitrixClient(portal).get_task(bitrix_task_id) or {}
+                    after = {}
+                    if isinstance(event_data, dict):
+                        raw_after = event_data.get("FIELDS_AFTER") or {}
+                        if isinstance(raw_after, dict):
+                            after = raw_after
+                    due = parse_bitrix_deadline(data) or parse_bitrix_deadline(after)
                     apply_inbound_deadline(task, due, allow_while_pending=True)
                     result["due_date"] = due.isoformat() if due else None
                 except BitrixAPIError:
                     pass
+        else:
+            logger.info(
+                "OnTaskUpdate unknown task id=%s portal=%s ingest=%s",
+                bitrix_task_id,
+                portal.id,
+                result,
+            )
         return result
     return {"ok": False, "reason": "unknown_task"}
 

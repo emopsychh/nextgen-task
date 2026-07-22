@@ -72,6 +72,42 @@ export function ProjectTasks() {
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, [token, projectId]);
 
+  // Soft realtime: while the project board is open, keep pulling Bitrix deadlines
+  useEffect(() => {
+    if (!token || !projectId) return;
+    let cancelled = false;
+    let inFlight = false;
+
+    async function tick() {
+      if (cancelled || inFlight) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      inFlight = true;
+      try {
+        const taskData = await api<Task[] | { results: Task[] }>(
+          `/api/tasks/?project=${projectId}&pull=1`,
+          {},
+          token!
+        );
+        if (!cancelled) setTasks(unwrapList(taskData));
+      } catch {
+        // next tick retries
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    const id = window.setInterval(() => void tick(), 3000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [token, projectId]);
+
   async function createTask(e: React.FormEvent) {
     e.preventDefault();
     if (!token) return;
