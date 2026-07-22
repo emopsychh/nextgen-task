@@ -6,6 +6,18 @@ from portals.permissions import can_access_client_portal
 from .models import Attachment, Comment, Project, Task, TimeEntry
 
 
+def _clean_task_title(instance: Task) -> str:
+    """Strip legacy [portal] prefixes from title; persist if dirty."""
+    from board.titles import strip_portal_title_prefix
+
+    client_portal = instance.project.portal if instance.project_id else None
+    cleaned = strip_portal_title_prefix(instance.title or "", client_portal)
+    if cleaned and cleaned != instance.title:
+        Task.objects.filter(pk=instance.pk).update(title=cleaned)
+        instance.title = cleaned
+    return instance.title or ""
+
+
 class AttachmentSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
 
@@ -191,6 +203,11 @@ class TaskSerializer(serializers.ModelSerializer):
             return None
         return float(binding.remaining_hours)
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["title"] = _clean_task_title(instance)
+        return data
+
 
 class TaskListSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(source="project.name", read_only=True)
@@ -221,6 +238,11 @@ class TaskListSerializer(serializers.ModelSerializer):
         from .timeutils import task_tracked_seconds
 
         return task_tracked_seconds(obj, include_running=False)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["title"] = _clean_task_title(instance)
+        return data
 
 
 class ProjectSerializer(serializers.ModelSerializer):

@@ -33,8 +33,11 @@ def _group_id(task_data: dict) -> str:
     return "" if text in ("", "0") else text
 
 
-def _task_title(task_data: dict) -> str:
-    return str(task_data.get("title") or task_data.get("TITLE") or "").strip() or "Без названия"
+def _task_title(task_data: dict, portal=None) -> str:
+    from board.titles import strip_portal_title_prefix
+
+    raw = str(task_data.get("title") or task_data.get("TITLE") or "").strip() or "Без названия"
+    return strip_portal_title_prefix(raw, portal)
 
 
 def _task_description(task_data: dict) -> str:
@@ -111,7 +114,8 @@ def upsert_project_from_bitrix(*, client_portal, task_data: dict, group_id: str 
         return None, False
 
     gid = group_id or _group_id(task_data)
-    title = _task_title(task_data)
+    # Projects keep their Bitrix title as-is (no client portal tag stripping needed for parents)
+    title = str(task_data.get("title") or task_data.get("TITLE") or "").strip() or "Без названия"
     description = _task_description(task_data)
 
     project = Project.objects.filter(
@@ -152,7 +156,7 @@ def upsert_task_from_bitrix_subtask(*, project, task_data: dict, agency: bool = 
     if not bitrix_id:
         return None, False
 
-    title = _task_title(task_data)
+    title = _task_title(task_data, project.portal)
     description = _task_description(task_data)
     status = local_status_from_bitrix_task(task_data) or Task.Status.TODO
     due = parse_bitrix_deadline(task_data)

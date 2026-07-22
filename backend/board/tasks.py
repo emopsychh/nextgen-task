@@ -11,6 +11,8 @@ from portals.bitrix import (
     bitrix_status_code,
 )
 
+from board.titles import strip_portal_title_prefix
+
 
 def _extract_bitrix_id(result) -> str:
     if not isinstance(result, dict):
@@ -192,7 +194,6 @@ def _sync_one_portal(
     portal,
     *,
     existing_id: str,
-    title_prefix: str = "",
     group_id: str | None = None,
     parent_id: str | None = None,
 ) -> str:
@@ -208,9 +209,12 @@ def _sync_one_portal(
             "и сохраните задачу снова"
         )
 
-    title = task.title
-    if title_prefix:
-        title = f"{title_prefix}{task.title}"
+    # Never prefix with client portal name — context is the project/workgroup.
+    client_portal = task.project.portal
+    title = strip_portal_title_prefix(task.title, client_portal)
+    if title != task.title:
+        task.title = title
+        task.save(update_fields=["title", "updated_at"])
 
     if existing_id:
         push_deadline = _deadline_needs_push(client, existing_id, task.due_date)
@@ -358,12 +362,10 @@ def sync_task_to_bitrix(self, task_id: int):
     if agency and agency.id != client_portal.id:
         try:
             parent_id, group_id = _ensure_project_agency_parent(task.project)
-            prefix = f"[{client_portal.name or client_portal.domain}] "
             agency_id = _sync_one_portal(
                 task,
                 agency,
                 existing_id=task.agency_bitrix_task_id or "",
-                title_prefix=prefix,
                 group_id=group_id,
                 parent_id=parent_id,
             )
@@ -634,12 +636,10 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str):
         if agency and agency.access_token:
             try:
                 parent_id, group_id = _ensure_project_agency_parent(task.project)
-                prefix = f"[{task.project.portal.name or task.project.portal.domain}] "
                 bx = _sync_one_portal(
                     task,
                     agency,
                     existing_id=task.agency_bitrix_task_id or "",
-                    title_prefix=prefix,
                     group_id=group_id,
                     parent_id=parent_id,
                 )
