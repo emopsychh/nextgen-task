@@ -93,6 +93,15 @@ class BitrixClient:
     def renew_task(self, task_id: int | str) -> dict:
         return self.call("tasks.task.renew", {"taskId": task_id})
 
+    def add_task_comment(self, task_id: int | str, message: str, author_id: str | None = None) -> dict:
+        fields: dict = {"POST_MESSAGE": message}
+        if author_id:
+            fields["AUTHOR_ID"] = author_id
+        return self.call(
+            "task.commentitem.add",
+            {"TASKID": task_id, "FIELDS": fields},
+        )
+
     def get_deal(self, deal_id: int | str) -> dict:
         result = self.call("crm.deal.get", {"id": deal_id})
         return result if isinstance(result, dict) else {}

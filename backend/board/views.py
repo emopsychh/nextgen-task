@@ -20,7 +20,7 @@ from .serializers import (
     TaskListSerializer,
     TaskSerializer,
 )
-from .tasks import post_task_complete_to_deal, sync_task_to_bitrix
+from .tasks import post_task_complete_to_deal, sync_comment_to_bitrix, sync_task_to_bitrix
 from .timeutils import stop_time_entry
 
 
@@ -36,6 +36,13 @@ def enqueue_deal_timeline(task_id: int) -> None:
         post_task_complete_to_deal(task_id)
     else:
         post_task_complete_to_deal.delay(task_id)
+
+
+def enqueue_comment_sync(comment_id: int) -> None:
+    if settings.CELERY_TASK_ALWAYS_EAGER:
+        sync_comment_to_bitrix(comment_id)
+    else:
+        sync_comment_to_bitrix.delay(comment_id)
 
 
 def accessible_portal_ids(user):
@@ -265,13 +272,15 @@ class TaskViewSet(viewsets.ModelViewSet):
             for running in task.time_entries.filter(ended_at__isnull=True):
                 stop_time_entry(running)
 
-        append_task_change_events(
+        created_events = append_task_change_events(
             task=task,
             author=self.request.user.bitrix_user,
             old_status=old_status,
             old_due=old_due,
         )
         enqueue_bitrix_sync(task.id)
+        for event in created_events:
+            enqueue_comment_sync(event.id)
         if task.status == Task.Status.DONE and old_status != Task.Status.DONE:
             enqueue_deal_timeline(task.id)
         task.refresh_from_db()
@@ -339,7 +348,10 @@ class CommentViewSet(viewsets.ModelViewSet):
         if not can_access_client_portal(self.request.user, task.project.portal):
             raise PermissionDenied("No access")
         author = self.request.user.bitrix_user
-        serializer.save(author=author, author_name=author.display_name, is_system=False)
+        comment = serializer.save(
+            author=author, author_name=author.display_name, is_system=False
+        )
+        enqueue_comment_sync(comment.id)
 
     def perform_destroy(self, instance):
         user = self.request.user

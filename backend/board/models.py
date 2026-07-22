@@ -36,6 +36,7 @@ class Task(models.Model):
     due_date = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.TODO)
     bitrix_task_id = models.CharField(max_length=64, blank=True)
+    agency_bitrix_task_id = models.CharField(max_length=64, blank=True)
     sync_status = models.CharField(
         max_length=16, choices=SyncStatus.choices, default=SyncStatus.PENDING
     )

@@ -113,6 +113,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "due_date",
             "status",
             "bitrix_task_id",
+            "agency_bitrix_task_id",
             "sync_status",
             "sync_error",
             "created_by",
@@ -127,6 +128,7 @@ class TaskSerializer(serializers.ModelSerializer):
         read_only_fields = (
             "id",
             "bitrix_task_id",
+            "agency_bitrix_task_id",
             "sync_status",
             "sync_error",
             "created_by",

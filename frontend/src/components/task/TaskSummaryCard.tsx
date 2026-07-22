@@ -209,7 +209,8 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
             <dt>Bitrix</dt>
             <dd>
               {SYNC_LABEL[task.sync_status] || task.sync_status}
-              {task.bitrix_task_id ? ` · #${task.bitrix_task_id}` : ""}
+              {task.bitrix_task_id ? ` · клиент #${task.bitrix_task_id}` : ""}
+              {task.agency_bitrix_task_id ? ` · агентство #${task.agency_bitrix_task_id}` : ""}
               {task.sync_error ? (
                 <div className="muted" style={{ marginTop: 4, color: "#b42318" }}>
                   {task.sync_error}

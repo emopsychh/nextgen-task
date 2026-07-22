@@ -113,8 +113,53 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
     client.complete_task(bitrix_task_id)
 
 
+def _agency_portal_for_client(client_portal):
+    from portals.models import PortalLink
+
+    link = (
+        PortalLink.objects.filter(client_portal=client_portal)
+        .select_related("agency_portal")
+        .first()
+    )
+    return link.agency_portal if link else None
+
+
+def _sync_one_portal(task, portal, *, existing_id: str, title_prefix: str = "") -> str:
+    """Create/update Bitrix task on a portal; return bitrix task id."""
+    if not portal.access_token:
+        raise BitrixAPIError(f"Нет токена Bitrix у портала {portal.domain or portal.id}")
+
+    client = BitrixClient(portal)
+    responsible_id = _resolve_responsible_id(client, task)
+    if not responsible_id and not existing_id:
+        raise BitrixAPIError(
+            f"Не указан исполнитель на {portal.domain}: откройте приложение на этом портале "
+            "и сохраните задачу снова"
+        )
+
+    title = task.title
+    if title_prefix:
+        title = f"{title_prefix}{task.title}"
+
+    if existing_id:
+        fields = _task_fields(task)
+        fields["TITLE"] = title
+        client.update_task(existing_id, fields)
+        apply_bitrix_status(client, existing_id, task.status)
+        return existing_id
+
+    fields = _task_fields(task, responsible_id=responsible_id)
+    fields["TITLE"] = title
+    result = client.create_task(fields)
+    bitrix_id = _extract_bitrix_id(result)
+    if bitrix_id and task.status != "todo":
+        apply_bitrix_status(client, bitrix_id, task.status)
+    return bitrix_id
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def sync_task_to_bitrix(self, task_id: int):
+    """Sync task into client Bitrix Tasks and (if linked) agency Bitrix Tasks."""
     from board.models import Task
 
     try:
@@ -124,53 +169,124 @@ def sync_task_to_bitrix(self, task_id: int):
     except Task.DoesNotExist:
         return {"ok": False, "reason": "missing"}
 
-    portal = task.project.portal
-    if not portal.access_token:
-        task.sync_status = Task.SyncStatus.SKIPPED
-        task.sync_error = "Portal has no Bitrix access token"
-        task.save(update_fields=["sync_status", "sync_error", "updated_at"])
-        return {"ok": False, "reason": "no_token"}
+    client_portal = task.project.portal
+    errors: list[str] = []
+    update_fields = ["sync_status", "sync_error", "updated_at"]
 
-    client = BitrixClient(portal)
+    # 1) Client portal (project owner)
     try:
-        responsible_id = _resolve_responsible_id(client, task)
-        if not responsible_id and not task.bitrix_task_id:
-            raise BitrixAPIError(
-                "Не указан исполнитель: откройте приложение на портале клиента, "
-                "чтобы обновить токен, и повторите сохранение задачи"
+        client_id = _sync_one_portal(
+            task, client_portal, existing_id=task.bitrix_task_id or ""
+        )
+        if client_id and client_id != task.bitrix_task_id:
+            task.bitrix_task_id = client_id
+            update_fields.append("bitrix_task_id")
+    except BitrixAPIError as exc:
+        errors.append(f"клиент: {exc}")
+    except Exception as exc:
+        errors.append(f"клиент: {exc}")
+
+    # 2) Agency portal copy (native Tasks on agency Bitrix)
+    agency = _agency_portal_for_client(client_portal)
+    if agency and agency.id != client_portal.id:
+        try:
+            prefix = f"[{client_portal.name or client_portal.domain}] "
+            agency_id = _sync_one_portal(
+                task,
+                agency,
+                existing_id=task.agency_bitrix_task_id or "",
+                title_prefix=prefix,
             )
+            if agency_id and agency_id != task.agency_bitrix_task_id:
+                task.agency_bitrix_task_id = agency_id
+                update_fields.append("agency_bitrix_task_id")
+        except BitrixAPIError as exc:
+            errors.append(f"агентство: {exc}")
+        except Exception as exc:
+            errors.append(f"агентство: {exc}")
 
-        if task.bitrix_task_id:
-            fields = _task_fields(task)
-            client.update_task(task.bitrix_task_id, fields)
-            apply_bitrix_status(client, task.bitrix_task_id, task.status)
-        else:
-            fields = _task_fields(task, responsible_id=responsible_id)
-            result = client.create_task(fields)
-            bitrix_id = _extract_bitrix_id(result)
-            task.bitrix_task_id = bitrix_id
-            if bitrix_id and task.status != Task.Status.TODO:
-                apply_bitrix_status(client, bitrix_id, task.status)
+    if errors and not task.bitrix_task_id and not task.agency_bitrix_task_id:
+        task.sync_status = Task.SyncStatus.ERROR
+        task.sync_error = "; ".join(errors)
+        task.save(update_fields=list(set(update_fields)))
+        try:
+            raise self.retry(exc=BitrixAPIError(task.sync_error))
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": task.sync_error}
 
+    if errors:
+        task.sync_status = Task.SyncStatus.ERROR
+        task.sync_error = "; ".join(errors)
+    else:
         task.sync_status = Task.SyncStatus.SYNCED
         task.sync_error = ""
-        task.save(
-            update_fields=["bitrix_task_id", "sync_status", "sync_error", "updated_at"]
+    task.save(update_fields=list(set(update_fields)))
+    return {
+        "ok": not errors,
+        "bitrix_task_id": task.bitrix_task_id,
+        "agency_bitrix_task_id": task.agency_bitrix_task_id,
+        "errors": errors,
+    }
+
+
+@shared_task(bind=True, max_retries=5, default_retry_delay=5)
+def sync_comment_to_bitrix(self, comment_id: int):
+    """Post a chat message into linked Bitrix task(s)."""
+    from board.models import Comment
+
+    try:
+        comment = Comment.objects.select_related(
+            "task",
+            "task__project",
+            "task__project__portal",
+            "author",
+        ).get(pk=comment_id)
+    except Comment.DoesNotExist:
+        return {"ok": False, "reason": "missing"}
+
+    if comment.is_system:
+        author_name = comment.author_name or (
+            comment.author.display_name if comment.author else "Система"
         )
-        return {"ok": True, "bitrix_task_id": task.bitrix_task_id}
-    except BitrixAPIError as exc:
-        task.sync_status = Task.SyncStatus.ERROR
-        task.sync_error = str(exc)
-        task.save(update_fields=["sync_status", "sync_error", "updated_at"])
+        message = f"{author_name} {comment.text}".strip()
+    else:
+        author_name = comment.author_name or (
+            comment.author.display_name if comment.author else "Участник"
+        )
+        message = f"{author_name}: {comment.text}".strip()
+    if not message:
+        return {"ok": False, "reason": "empty"}
+
+    task = comment.task
+    targets: list[tuple] = []
+    client_portal = task.project.portal
+    if task.bitrix_task_id and client_portal.access_token:
+        targets.append((client_portal, task.bitrix_task_id))
+
+    agency = _agency_portal_for_client(client_portal)
+    if agency and task.agency_bitrix_task_id and agency.access_token:
+        targets.append((agency, task.agency_bitrix_task_id))
+
+    if not targets:
+        # Task may still be syncing to Bitrix — retry shortly
         try:
-            raise self.retry(exc=exc)
+            raise self.retry(countdown=5)
         except self.MaxRetriesExceededError:
-            return {"ok": False, "error": str(exc)}
-    except Exception as exc:
-        task.sync_status = Task.SyncStatus.ERROR
-        task.sync_error = str(exc)
-        task.save(update_fields=["sync_status", "sync_error", "updated_at"])
-        raise
+            return {"ok": False, "reason": "no_bitrix_task"}
+
+    errors = []
+    for portal, bitrix_task_id in targets:
+        try:
+            BitrixClient(portal).add_task_comment(bitrix_task_id, message)
+        except BitrixAPIError as exc:
+            errors.append(f"{portal.domain}: {exc}")
+
+    if errors:
+        try:
+            raise self.retry(exc=BitrixAPIError("; ".join(errors)))
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "errors": errors}
+    return {"ok": True, "posted": len(targets)}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)

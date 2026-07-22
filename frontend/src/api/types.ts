@@ -84,6 +84,7 @@ export type Task = {
   due_date: string | null;
   status: TaskStatus;
   bitrix_task_id: string;
+  agency_bitrix_task_id?: string;
   sync_status: SyncStatus;
   sync_error?: string;
   created_by?: number | null;
