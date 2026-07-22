@@ -61,10 +61,13 @@ def _task_fields(
         "TITLE": task.title,
         "DESCRIPTION": task.description or "",
     }
+    # Always send DEADLINE so clearing the date in the app clears it in Bitrix
     if due := task.due_date:
         fields["DEADLINE"] = datetime.combine(due, time(23, 59, 59)).strftime(
             "%Y-%m-%dT23:59:59+00:00"
         )
+    else:
+        fields["DEADLINE"] = ""
     if responsible_id:
         fields["RESPONSIBLE_ID"] = responsible_id
         fields["CREATED_BY"] = responsible_id

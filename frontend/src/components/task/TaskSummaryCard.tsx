@@ -14,6 +14,7 @@ type Props = {
   due: { label: string; tone: DueTone; detail?: string };
   canManage: boolean;
   canChangeStatus: boolean;
+  canEditDueDate: boolean;
   saveBusy: boolean;
   draftTitle: string;
   draftDescription: string;
@@ -33,6 +34,7 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
     due,
     canManage,
     canChangeStatus,
+    canEditDueDate,
     saveBusy,
     draftTitle,
     draftDescription,
@@ -175,7 +177,7 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
         <div className="task-summary-row task-summary-row-due">
           <dt>Крайний срок</dt>
           <dd>
-            {canManage ? (
+            {canEditDueDate ? (
               <DueDatePicker
                 value={task.due_date || ""}
                 onChange={onSetDueDate}

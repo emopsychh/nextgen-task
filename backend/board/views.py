@@ -309,6 +309,18 @@ class TaskViewSet(viewsets.ModelViewSet):
             new_status = serializer.validated_data.get("status", old_status)
             if new_status != old_status:
                 raise PermissionDenied("Only agency can change task status")
+            if "due_date" in serializer.validated_data:
+                new_due = serializer.validated_data.get("due_date")
+                if new_due != old_due:
+                    me = self.request.user.bitrix_user
+                    if (
+                        not task.created_by_id
+                        or not me
+                        or task.created_by_id != me.id
+                    ):
+                        raise PermissionDenied(
+                            "Срок можно менять только у задач, которые вы создали"
+                        )
         task = serializer.save(sync_status=Task.SyncStatus.PENDING)
 
         if self.request.user.is_agency and old_status != task.status:

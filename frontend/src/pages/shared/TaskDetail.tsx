@@ -27,7 +27,7 @@ type TaskPatch = Partial<{
 
 export function TaskDetail() {
   const { taskId } = useParams();
-  const { token, portal } = useAuth();
+  const { token, portal, user } = useAuth();
   const canManage = Boolean(token);
   const canChangeStatus = portal?.role === "agency";
   const toast = useFlashToast(1800);
@@ -45,6 +45,14 @@ export function TaskDetail() {
   const [draftTitle, setDraftTitle] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
   const [compactTask, setCompactTask] = useState(false);
+
+  const canEditDueDate =
+    portal?.role === "agency" ||
+    (portal?.role === "client" &&
+      Boolean(user?.id) &&
+      task != null &&
+      task.created_by != null &&
+      task.created_by === user.id);
 
   async function load() {
     if (!token || !taskId) return;
@@ -178,7 +186,7 @@ export function TaskDetail() {
   }
 
   async function setDueDate(iso: string) {
-    if (!task) return;
+    if (!task || !canEditDueDate) return;
     const next = iso || null;
     if (next === task.due_date) return;
     await patchTask({ due_date: next });
@@ -329,6 +337,7 @@ export function TaskDetail() {
             due={due}
             canManage={canManage}
             canChangeStatus={canChangeStatus}
+            canEditDueDate={canEditDueDate}
             saveBusy={saveBusy}
             draftTitle={draftTitle}
             draftDescription={draftDescription}

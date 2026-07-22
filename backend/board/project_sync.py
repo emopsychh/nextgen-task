@@ -146,7 +146,7 @@ def upsert_project_from_bitrix(*, client_portal, task_data: dict, group_id: str 
 def upsert_task_from_bitrix_subtask(*, project, task_data: dict, agency: bool = True):
     """Create/update app Task from a Bitrix subtask under a Project parent."""
     from board.models import Task
-    from board.status_sync import local_status_from_bitrix_task
+    from board.status_sync import local_status_from_bitrix_task, parse_bitrix_deadline
 
     bitrix_id = _bitrix_id(task_data)
     if not bitrix_id:
@@ -155,6 +155,7 @@ def upsert_task_from_bitrix_subtask(*, project, task_data: dict, agency: bool = 
     title = _task_title(task_data)
     description = _task_description(task_data)
     status = local_status_from_bitrix_task(task_data) or Task.Status.TODO
+    due = parse_bitrix_deadline(task_data)
 
     qs = Task.objects.filter(project=project)
     if agency:
@@ -173,6 +174,9 @@ def upsert_task_from_bitrix_subtask(*, project, task_data: dict, agency: bool = 
         if task.status != status:
             task.status = status
             changed = True
+        if task.due_date != due:
+            task.due_date = due
+            changed = True
         if agency and task.agency_bitrix_task_id != bitrix_id:
             task.agency_bitrix_task_id = bitrix_id
             changed = True
@@ -187,6 +191,7 @@ def upsert_task_from_bitrix_subtask(*, project, task_data: dict, agency: bool = 
         "title": title,
         "description": description,
         "status": status,
+        "due_date": due,
         "sync_status": Task.SyncStatus.SYNCED,
     }
     if agency:

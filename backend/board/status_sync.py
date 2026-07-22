@@ -156,8 +156,60 @@ def apply_inbound_status(task, new_status: str, *, stop_timers: bool = True) -> 
     return True
 
 
+def parse_bitrix_deadline(task_data: dict):
+    """Extract local date from Bitrix DEADLINE / deadline field."""
+    from datetime import date, datetime
+
+    from django.utils import timezone
+    from django.utils.dateparse import parse_datetime
+
+    raw = (
+        task_data.get("deadline")
+        or task_data.get("DEADLINE")
+        or task_data.get("deadlineDate")
+        or ""
+    )
+    if raw in (None, "", False):
+        return None
+    if isinstance(raw, date) and not isinstance(raw, datetime):
+        return raw
+    if isinstance(raw, datetime):
+        dt = raw if timezone.is_aware(raw) else timezone.make_aware(raw, timezone.utc)
+        return timezone.localtime(dt).date()
+    text = str(raw).strip()
+    if not text:
+        return None
+    # Date-only
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            pass
+    dt = parse_datetime(text.replace(" ", "T", 1) if " " in text and "T" not in text else text)
+    if dt is None:
+        return None
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt, timezone.utc)
+    return timezone.localtime(dt).date()
+
+
+def apply_inbound_deadline(task, new_due, *, allow_while_pending: bool = False) -> bool:
+    """Apply deadline from Bitrix. Returns True if changed."""
+    from board.models import Task
+
+    if task.sync_status == Task.SyncStatus.PENDING and not allow_while_pending:
+        return False
+    if task.due_date == new_due:
+        return False
+    task.due_date = new_due
+    task.sync_status = Task.SyncStatus.SYNCED
+    task.sync_error = ""
+    task.save(update_fields=["due_date", "sync_status", "sync_error", "updated_at"])
+    return True
+
+
 def pull_task_status_from_bitrix(task) -> bool:
-    """Fetch Bitrix status and update local task if different."""
+    """Fetch Bitrix status + deadline and update local task if different."""
     portal, bitrix_id = resolve_bitrix_task_source(task)
     if not portal or not bitrix_id:
         return False
@@ -166,14 +218,19 @@ def pull_task_status_from_bitrix(task) -> bool:
     except BitrixAPIError as exc:
         logger.info("pull status task=%s: %s", task.id, exc)
         return False
+    changed = False
     local = local_status_from_bitrix_task(data)
-    if not local:
-        return False
-    return apply_inbound_status(task, local)
+    if local:
+        changed = apply_inbound_status(task, local) or changed
+    due = parse_bitrix_deadline(data)
+    # Always reconcile deadline (including clear when Bitrix has none)
+    task.refresh_from_db()
+    changed = apply_inbound_deadline(task, due) or changed
+    return changed
 
 
 def handle_bitrix_task_update(*, portal, bitrix_task_id: str) -> dict:
-    """Process OnTaskUpdate: refresh local status, or ingest as project/subtask."""
+    """Process OnTaskUpdate: refresh local status/deadline, or ingest as project/subtask."""
     from portals.models import Portal
 
     task = find_local_task_for_bitrix(portal=portal, bitrix_task_id=str(bitrix_task_id))
@@ -182,11 +239,21 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str) -> dict:
             data = BitrixClient(portal).get_task(bitrix_task_id)
         except BitrixAPIError as exc:
             return {"ok": False, "reason": str(exc)}
+        status_changed = False
+        due_changed = False
         local = local_status_from_bitrix_task(data)
-        if not local:
-            return {"ok": False, "reason": "bad_status"}
-        changed = apply_inbound_status(task, local)
-        return {"ok": True, "task_id": task.id, "status": local, "changed": changed}
+        if local:
+            status_changed = apply_inbound_status(task, local)
+        due = parse_bitrix_deadline(data)
+        task.refresh_from_db()
+        due_changed = apply_inbound_deadline(task, due)
+        return {
+            "ok": True,
+            "task_id": task.id,
+            "status": local,
+            "due_date": due.isoformat() if due else None,
+            "changed": status_changed or due_changed,
+        }
 
     # Unknown task id — may be a new parent task (app Project) or subtask on agency
     if portal.role == Portal.Role.AGENCY:
