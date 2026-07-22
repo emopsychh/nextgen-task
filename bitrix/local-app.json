@@ -1,0 +1,7 @@
+{
+  "name": "NextGen Task Manager",
+  "code": "nextgen_task",
+  "handler": "/api/bitrix/install/",
+  "app_url": "/api/bitrix/entry/",
+  "scopes": ["task", "user"]
+}

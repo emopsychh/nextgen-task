@@ -1,0 +1,135 @@
+/* —— Onboarding spotlight tour —— */
+.onboard-root.spotlight {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.onboard-root.spotlight.is-ready {
+  opacity: 1;
+}
+
+.onboard-root.spotlight.is-leaving {
+  opacity: 0;
+}
+
+.onboard-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 16, 14, 0.52);
+  pointer-events: auto;
+}
+
+.onboard-hole {
+  position: fixed;
+  z-index: 1401;
+  border-radius: 16px;
+  box-shadow: 0 0 0 9999px rgba(10, 16, 14, 0.52);
+  outline: 2px solid rgba(31, 158, 138, 0.95);
+  outline-offset: 2px;
+  pointer-events: none;
+  transition: top 0.22s ease, left 0.22s ease, width 0.22s ease, height 0.22s ease;
+  animation: onboard-pulse 1.8s ease-in-out infinite;
+}
+
+.onboard-tip {
+  position: fixed;
+  z-index: 1402;
+  width: min(360px, calc(100vw - 24px));
+  padding: 16px 16px 14px;
+  border-radius: 18px;
+  background: #fff;
+  border: 1.5px solid #cfe3dd;
+  box-shadow: 0 18px 48px rgba(12, 18, 16, 0.2);
+  pointer-events: auto;
+  transition: top 0.22s ease, left 0.22s ease;
+}
+
+.onboard-tip-progress {
+  margin: 0 0 6px;
+  font-size: 0.74rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #0f6d5d;
+}
+
+.onboard-tip-title {
+  margin: 0 0 8px;
+  font-family: var(--display);
+  font-size: 1.12rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+.onboard-tip-body {
+  margin: 0 0 14px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #44514c;
+}
+
+.onboard-tip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.onboard-skip {
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.onboard-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.onboard-next {
+  min-width: 118px;
+}
+
+@keyframes onboard-pulse {
+  0%,
+  100% {
+    outline-color: rgba(31, 158, 138, 0.95);
+  }
+  50% {
+    outline-color: rgba(31, 158, 138, 0.45);
+  }
+}
+
+@media (max-width: 560px) {
+  .onboard-tip {
+    left: 12px !important;
+    right: 12px;
+    width: auto;
+    bottom: 16px;
+    top: auto !important;
+  }
+
+  .onboard-tip-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .onboard-nav {
+    margin-left: 0;
+  }
+
+  .onboard-nav .btn,
+  .onboard-skip {
+    width: 100%;
+  }
+}
+
