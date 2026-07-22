@@ -13,6 +13,7 @@ import { TaskComposer } from "../../components/task/TaskComposer";
 import { TaskSummaryCard } from "../../components/task/TaskSummaryCard";
 import { TaskThread, type ThreadItem, type ThreadRow } from "../../components/task/TaskThread";
 import { useFlashToast } from "../../hooks/useFlashToast";
+import { useTaskLiveSync } from "../../hooks/useTaskLiveSync";
 import { dueMeta } from "../../lib/dates";
 import { formatDayLabel, formatDueFull } from "../../lib/format";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
@@ -56,6 +57,19 @@ export function TaskDetail() {
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, [token, taskId]);
+
+  useTaskLiveSync({
+    token,
+    taskId,
+    task,
+    draftTitle,
+    draftDescription,
+    onUpdate: (data, drafts) => {
+      setTask(data);
+      if (drafts.title !== undefined) setDraftTitle(drafts.title);
+      if (drafts.description !== undefined) setDraftDescription(drafts.description);
+    },
+  });
 
   const thread = useMemo(() => {
     if (!task) return [] as ThreadItem[];
