@@ -26,7 +26,7 @@ def ensure_task_event_bindings(portal) -> bool:
         return False
     handler = event_handler_url()
     client = BitrixClient(portal)
-    wanted = {"ONTASKUPDATE", "ONTASKCOMMENTADD"}
+    wanted = {"ONTASKUPDATE", "ONTASKCOMMENTADD", "ONTASKADD"}
     try:
         existing = client.call("event.get") or []
         if isinstance(existing, dict):
@@ -45,6 +45,7 @@ def ensure_task_event_bindings(portal) -> bool:
         for event_name, key in (
             ("OnTaskUpdate", "ONTASKUPDATE"),
             ("OnTaskCommentAdd", "ONTASKCOMMENTADD"),
+            ("OnTaskAdd", "ONTASKADD"),
         ):
             if key in bound:
                 continue
@@ -172,16 +173,26 @@ def pull_task_status_from_bitrix(task) -> bool:
 
 
 def handle_bitrix_task_update(*, portal, bitrix_task_id: str) -> dict:
-    """Process OnTaskUpdate: refresh local status from Bitrix."""
+    """Process OnTaskUpdate: refresh local status, or ingest as project/subtask."""
+    from portals.models import Portal
+
     task = find_local_task_for_bitrix(portal=portal, bitrix_task_id=str(bitrix_task_id))
-    if not task:
-        return {"ok": False, "reason": "unknown_task"}
-    try:
-        data = BitrixClient(portal).get_task(bitrix_task_id)
-    except BitrixAPIError as exc:
-        return {"ok": False, "reason": str(exc)}
-    local = local_status_from_bitrix_task(data)
-    if not local:
-        return {"ok": False, "reason": "bad_status"}
-    changed = apply_inbound_status(task, local)
-    return {"ok": True, "task_id": task.id, "status": local, "changed": changed}
+    if task:
+        try:
+            data = BitrixClient(portal).get_task(bitrix_task_id)
+        except BitrixAPIError as exc:
+            return {"ok": False, "reason": str(exc)}
+        local = local_status_from_bitrix_task(data)
+        if not local:
+            return {"ok": False, "reason": "bad_status"}
+        changed = apply_inbound_status(task, local)
+        return {"ok": True, "task_id": task.id, "status": local, "changed": changed}
+
+    # Unknown task id — may be a new parent task (app Project) or subtask on agency
+    if portal.role == Portal.Role.AGENCY:
+        from board.project_sync import ingest_agency_bitrix_task
+
+        return ingest_agency_bitrix_task(
+            agency_portal=portal, bitrix_task_id=str(bitrix_task_id)
+        )
+    return {"ok": False, "reason": "unknown_task"}

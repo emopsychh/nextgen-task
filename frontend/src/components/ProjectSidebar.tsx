@@ -64,7 +64,7 @@ export function ProjectSidebarNav() {
     async function load() {
       try {
         const data = await api<Project[] | { results: Project[] }>(
-          `/api/projects/?portal=${contextPortalId}`,
+          `/api/projects/?portal=${contextPortalId}&pull=1`,
           {},
           token!
         );

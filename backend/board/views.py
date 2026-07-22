@@ -193,6 +193,21 @@ class ProjectViewSet(viewsets.ModelViewSet):
         ids = accessible_portal_ids(self.request.user)
         return Project.objects.filter(portal_id__in=ids).select_related("portal")
 
+    def list(self, request, *args, **kwargs):
+        # Soft realtime / first open: pull parent tasks from Bitrix company project
+        if request.query_params.get("pull") in ("1", "true", "yes"):
+            portal_id = request.query_params.get("portal")
+            if portal_id:
+                try:
+                    from board.project_sync import pull_projects_from_bitrix
+
+                    portal = Portal.objects.filter(pk=portal_id).first()
+                    if portal and can_access_client_portal(request.user, portal):
+                        pull_projects_from_bitrix(portal)
+                except Exception:
+                    logger.exception("Bitrix project pull failed for portal %s", portal_id)
+        return super().list(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         if not self.request.user.is_agency:
             raise PermissionDenied("Создавать проекты может только агентство")

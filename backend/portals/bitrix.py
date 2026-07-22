@@ -123,6 +123,54 @@ class BitrixClient:
                     return [r for r in val if isinstance(r, dict)]
         return []
 
+    def list_tasks(
+        self,
+        *,
+        group_id: int | str | None = None,
+        parent_id: int | str | None = None,
+        start: int = 0,
+    ) -> list[dict]:
+        """List Bitrix tasks (optional GROUP_ID / PARENT_ID filter)."""
+        filt: dict = {}
+        if group_id is not None and str(group_id).strip() not in ("", "0"):
+            filt["GROUP_ID"] = group_id
+        if parent_id is not None:
+            # 0 = top-level tasks only
+            filt["PARENT_ID"] = parent_id
+        params: dict = {
+            "order": {"ID": "ASC"},
+            "select": [
+                "ID",
+                "TITLE",
+                "DESCRIPTION",
+                "STATUS",
+                "REAL_STATUS",
+                "GROUP_ID",
+                "PARENT_ID",
+                "DEADLINE",
+            ],
+            "start": start,
+        }
+        if filt:
+            params["filter"] = filt
+        result = self.call("tasks.task.list", params)
+        rows: list = []
+        if isinstance(result, list):
+            rows = result
+        elif isinstance(result, dict):
+            rows = result.get("tasks") or result.get("items") or result.get("result") or []
+            if isinstance(rows, dict):
+                rows = list(rows.values())
+        out: list[dict] = []
+        for row in rows:
+            if isinstance(row, dict):
+                # tasks.task.list sometimes nests under "task"
+                if "task" in row and isinstance(row["task"], dict):
+                    out.append(row["task"])
+                else:
+                    out.append(row)
+        return out
+
     def get_company(self, company_id: int | str) -> dict:
         result = self.call("crm.company.get", {"id": company_id})
         return result if isinstance(result, dict) else {}

@@ -530,7 +530,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class BitrixEventView(APIView):
-    """Incoming Bitrix app events (OnTaskUpdate / OnTaskCommentAdd → local sync)."""
+    """Incoming Bitrix app events (OnTaskAdd / OnTaskUpdate / OnTaskCommentAdd)."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -538,7 +538,7 @@ class BitrixEventView(APIView):
     def post(self, request):
         event, data, auth = _parse_bitrix_event(request)
         event_u = str(event or "").upper().replace("_", "")
-        if event_u not in ("ONTASKUPDATE", "ONTASKCOMMENTADD"):
+        if event_u not in ("ONTASKUPDATE", "ONTASKCOMMENTADD", "ONTASKADD"):
             return Response({"ok": True, "ignored": event or "empty"})
 
         bitrix_task_id = _bitrix_event_task_id(data)
@@ -599,12 +599,21 @@ class BitrixEventView(APIView):
             portal.save(update_fields=["access_token", "refresh_token", "updated_at"])
 
         from board.comment_sync import ingest_bitrix_comment_event
+        from board.project_sync import ingest_agency_bitrix_task
         from board.status_sync import handle_bitrix_task_update
+        from portals.models import Portal as PortalModel
 
         if event_u == "ONTASKCOMMENTADD":
             result = ingest_bitrix_comment_event(
                 portal=portal, bitrix_task_id=str(bitrix_task_id), data=data
             )
+        elif event_u == "ONTASKADD":
+            if portal.role == PortalModel.Role.AGENCY:
+                result = ingest_agency_bitrix_task(
+                    agency_portal=portal, bitrix_task_id=str(bitrix_task_id)
+                )
+            else:
+                result = {"ok": True, "ignored": "client_task_add"}
         else:
             result = handle_bitrix_task_update(portal=portal, bitrix_task_id=str(bitrix_task_id))
         return Response(result)

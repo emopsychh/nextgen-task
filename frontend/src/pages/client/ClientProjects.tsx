@@ -77,7 +77,11 @@ export function ClientProjects() {
   async function load() {
     if (!token || !portalId) return;
     const [projectData, activityData, portalsData] = await Promise.all([
-      api<Project[] | { results: Project[] }>(`/api/projects/?portal=${portalId}`, {}, token),
+      api<Project[] | { results: Project[] }>(
+        `/api/projects/?portal=${portalId}&pull=1`,
+        {},
+        token
+      ),
       api<ActivityEvent[]>(`/api/activity/?portal=${portalId}`, {}, token),
       isAgency
         ? api<Portal[] | { results: Portal[] }>("/api/portals/", {}, token)
