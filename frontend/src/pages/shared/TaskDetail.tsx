@@ -48,7 +48,7 @@ export function TaskDetail() {
 
   async function load() {
     if (!token || !taskId) return;
-    const data = await api<Task>(`/api/tasks/${taskId}/`, {}, token);
+    const data = await api<Task>(`/api/tasks/${taskId}/?pull=1`, {}, token);
     setTask(data);
     setDraftTitle(data.title);
     setDraftDescription(data.description || "");

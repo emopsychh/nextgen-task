@@ -236,6 +236,20 @@ class TaskViewSet(viewsets.ModelViewSet):
             qs = qs.filter(project__portal_id=portal_id)
         return qs
 
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        # Optional Bitrix pull (open task). Live poll should omit ?pull=1.
+        if request.query_params.get("pull") in ("1", "true", "yes"):
+            try:
+                from board.status_sync import pull_task_status_from_bitrix
+
+                if pull_task_status_from_bitrix(instance):
+                    instance.refresh_from_db()
+            except Exception:
+                pass
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
     def perform_create(self, serializer):
         project = serializer.validated_data["project"]
         if not can_access_client_portal(self.request.user, project.portal):

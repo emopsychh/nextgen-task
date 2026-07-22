@@ -152,3 +152,15 @@ def parse_bitrix_status(raw) -> int | None:
     except (TypeError, ValueError):
         return None
 
+
+def bitrix_status_code(task_data: dict) -> int | None:
+    """Prefer realStatus (canonical) over display status."""
+    if not isinstance(task_data, dict):
+        return None
+    for key in ("realStatus", "REAL_STATUS", "status", "STATUS"):
+        if key in task_data and task_data[key] not in (None, ""):
+            code = parse_bitrix_status(task_data[key])
+            if code is not None:
+                return code
+    return None
+

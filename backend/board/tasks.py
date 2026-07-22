@@ -10,7 +10,7 @@ from portals.bitrix import (
     BITRIX_STATUS_SUPPOSEDLY_COMPLETED,
     BitrixAPIError,
     BitrixClient,
-    parse_bitrix_status,
+    bitrix_status_code,
 )
 
 
@@ -73,7 +73,7 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
     """Bring Bitrix task to the local status using official action methods."""
     target = _normalize_local(target_local)
     task_data = client.get_task(bitrix_task_id)
-    current = parse_bitrix_status(task_data.get("status") or task_data.get("STATUS"))
+    current = bitrix_status_code(task_data)
     if current is None:
         current = BITRIX_STATUS_PENDING
 
@@ -93,7 +93,8 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         BITRIX_STATUS_SUPPOSEDLY_COMPLETED,
     ) and target != "done":
         client.renew_task(bitrix_task_id)
-        current = BITRIX_STATUS_PENDING
+        refreshed = bitrix_status_code(client.get_task(bitrix_task_id))
+        current = refreshed if refreshed is not None else BITRIX_STATUS_PENDING
 
     if target == "todo":
         if current == BITRIX_STATUS_IN_PROGRESS:
@@ -101,7 +102,14 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         return
 
     if target == "in_progress":
-        client.start_task(bitrix_task_id)
+        if current in (BITRIX_STATUS_PENDING, BITRIX_STATUS_DEFERRED):
+            client.start_task(bitrix_task_id)
+        elif current != BITRIX_STATUS_IN_PROGRESS:
+            # e.g. after renew already pending — start; otherwise no-op
+            try:
+                client.start_task(bitrix_task_id)
+            except BitrixAPIError:
+                pass
         return
 
     # target == done
@@ -145,7 +153,10 @@ def _sync_one_portal(task, portal, *, existing_id: str, title_prefix: str = "") 
         fields = _task_fields(task)
         fields["TITLE"] = title
         client.update_task(existing_id, fields)
-        apply_bitrix_status(client, existing_id, task.status)
+        try:
+            apply_bitrix_status(client, existing_id, task.status)
+        except BitrixAPIError as exc:
+            raise BitrixAPIError(f"не удалось сменить статус в Bitrix: {exc}") from exc
         return existing_id
 
     fields = _task_fields(task, responsible_id=responsible_id)
@@ -153,7 +164,10 @@ def _sync_one_portal(task, portal, *, existing_id: str, title_prefix: str = "") 
     result = client.create_task(fields)
     bitrix_id = _extract_bitrix_id(result)
     if bitrix_id and task.status != "todo":
-        apply_bitrix_status(client, bitrix_id, task.status)
+        try:
+            apply_bitrix_status(client, bitrix_id, task.status)
+        except BitrixAPIError as exc:
+            raise BitrixAPIError(f"задача создана, но статус не применён: {exc}") from exc
     return bitrix_id
 
 

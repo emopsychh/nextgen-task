@@ -127,6 +127,17 @@ class BitrixInstallView(APIView):
                         "expires_in": auth.get("AUTH_EXPIRES") or auth.get("expires_in") or 3600,
                     }
                 upsert_portal_from_auth(auth)
+                try:
+                    from board.status_sync import ensure_task_event_bindings
+                    from portals.models import Portal as PortalModel
+
+                    mid = auth.get("member_id") or auth.get("MEMBER_ID")
+                    if mid:
+                        p = PortalModel.objects.filter(member_id=mid).first()
+                        if p:
+                            ensure_task_event_bindings(p)
+                except Exception:
+                    pass
             except Exception:
                 # Still finish install UI so Bitrix does not loop forever
                 pass
@@ -168,6 +179,12 @@ class BitrixAuthView(APIView):
             client = BitrixClient(portal)
             user_data = client.get_current_user()
             bitrix_user = upsert_bitrix_user(portal, user_data)
+            try:
+                from board.status_sync import ensure_task_event_bindings
+
+                ensure_task_event_bindings(portal)
+            except Exception:
+                pass
         except (BitrixAPIError, Exception) as exc:
             return Response({"detail": str(exc)}, status=400)
 
@@ -503,6 +520,151 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         instance.delete()
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class BitrixEventView(APIView):
+    """Incoming Bitrix app events (OnTaskUpdate → local status sync)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        event, data, auth = _parse_bitrix_event(request)
+        event_u = str(event or "").upper().replace("_", "")
+        if event_u not in ("ONTASKUPDATE",):
+            return Response({"ok": True, "ignored": event or "empty"})
+
+        bitrix_task_id = _bitrix_event_task_id(data)
+        if not bitrix_task_id:
+            return Response({"ok": False, "reason": "no_task_id"}, status=200)
+
+        member_id = str(
+            (auth or {}).get("member_id")
+            or (auth or {}).get("MEMBER_ID")
+            or request.data.get("member_id")
+            or request.POST.get("member_id")
+            or ""
+        )
+        domain = (
+            (auth or {}).get("domain")
+            or (auth or {}).get("DOMAIN")
+            or request.data.get("DOMAIN")
+            or ""
+        )
+        portal = None
+        if member_id:
+            portal = Portal.objects.filter(member_id=member_id).first()
+        if portal is None and domain:
+            portal = Portal.objects.filter(domain__icontains=str(domain).replace("https://", "")).first()
+        if portal is None:
+            return Response({"ok": False, "reason": "unknown_portal"}, status=200)
+
+        # Refresh tokens from event auth when provided
+        access = (auth or {}).get("access_token") or (auth or {}).get("AUTH_ID")
+        if access:
+            portal.access_token = access
+            refresh = (auth or {}).get("refresh_token") or (auth or {}).get("REFRESH_ID")
+            if refresh:
+                portal.refresh_token = refresh
+            portal.save(update_fields=["access_token", "refresh_token", "updated_at"])
+
+        from board.status_sync import handle_bitrix_task_update
+
+        result = handle_bitrix_task_update(portal=portal, bitrix_task_id=str(bitrix_task_id))
+        return Response(result)
+
+    def get(self, request):
+        return Response({"ok": True, "service": "bitrix-events"})
+
+
+def _parse_bitrix_event(request) -> tuple[str, dict, dict]:
+    """Normalize Bitrix event POST (nested JSON or flat form fields)."""
+    src = request.data if hasattr(request, "data") else {}
+    post = request.POST
+
+    event = src.get("event") or src.get("EVENT") or post.get("event") or post.get("EVENT") or ""
+
+    data = src.get("data") if isinstance(src.get("data"), dict) else None
+    auth = src.get("auth") if isinstance(src.get("auth"), dict) else None
+
+    if data is None or auth is None:
+        flat: dict = {}
+        try:
+            flat.update({k: post.get(k) for k in post.keys()})
+        except Exception:
+            pass
+        if hasattr(src, "items"):
+            try:
+                for k, v in src.items():
+                    if k not in flat:
+                        flat[k] = v
+            except Exception:
+                pass
+        nested = _unflatten_bitrix(flat)
+        if data is None:
+            data = nested.get("data") if isinstance(nested.get("data"), dict) else {}
+        if auth is None:
+            auth = nested.get("auth") if isinstance(nested.get("auth"), dict) else {}
+
+    return str(event), data or {}, auth or {}
+
+
+def _unflatten_bitrix(flat: dict) -> dict:
+    """Turn data[FIELDS_AFTER][ID]=1 into nested dicts."""
+    root: dict = {}
+    for raw_key, value in flat.items():
+        key = str(raw_key)
+        if "[" not in key:
+            root[key] = value
+            continue
+        parts: list[str] = []
+        buf = ""
+        i = 0
+        while i < len(key):
+            ch = key[i]
+            if ch == "[":
+                if buf:
+                    parts.append(buf)
+                    buf = ""
+                j = key.find("]", i)
+                if j < 0:
+                    buf += ch
+                    i += 1
+                    continue
+                parts.append(key[i + 1 : j])
+                i = j + 1
+            else:
+                buf += ch
+                i += 1
+        if buf:
+            parts.append(buf)
+        cursor = root
+        for part in parts[:-1]:
+            cursor = cursor.setdefault(part, {})
+            if not isinstance(cursor, dict):
+                break
+        else:
+            if isinstance(cursor, dict):
+                cursor[parts[-1]] = value
+    return root
+
+
+def _bitrix_event_task_id(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    after = data.get("FIELDS_AFTER") or data.get("fields_after") or {}
+    if isinstance(after, dict):
+        tid = after.get("ID") or after.get("id")
+        if tid:
+            return str(tid)
+    before = data.get("FIELDS_BEFORE") or {}
+    if isinstance(before, dict):
+        tid = before.get("ID") or before.get("id")
+        if tid:
+            return str(tid)
+    tid = data.get("ID") or data.get("id") or data.get("TASK_ID")
+    return str(tid) if tid else ""
 
 
 @csrf_exempt
