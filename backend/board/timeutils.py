@@ -42,7 +42,7 @@ def enqueue_timer_bitrix_sync(entry_id: int, action: str) -> None:
         sync_timer_to_bitrix.delay(entry_id, action)
 
 
-def stop_time_entry(entry, ended_at=None, *, bill: bool = True) -> int:
+def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: bool = True) -> int:
     """Close a running entry, optionally bill its duration to the CRM deal."""
     if entry.ended_at is not None:
         return entry.duration_seconds
@@ -51,7 +51,8 @@ def stop_time_entry(entry, ended_at=None, *, bill: bool = True) -> int:
     entry.ended_at = end
     entry.duration_seconds = duration
     entry.save(update_fields=["ended_at", "duration_seconds", "updated_at"])
-    enqueue_timer_bitrix_sync(entry.id, "stop")
+    if sync_bitrix:
+        enqueue_timer_bitrix_sync(entry.id, "stop")
     if bill and duration > 0 and getattr(entry, "billed_to_deal_at", None) is None:
         enqueue_time_entry_billing(entry.id)
     return duration

@@ -381,15 +381,13 @@ class TaskViewSet(viewsets.ModelViewSet):
                     if entry:
                         enqueue_timer_bitrix_sync(entry.id, "start")
 
-        created_events = append_task_change_events(
+        append_task_change_events(
             task=task,
             author=self.request.user.bitrix_user,
             old_status=old_status,
             old_due=old_due,
         )
         enqueue_bitrix_sync(task.id)
-        for event in created_events:
-            enqueue_comment_sync(event.id)
         task.refresh_from_db()
         serializer.instance = task
 

@@ -1,5 +1,3 @@
-from datetime import datetime, time
-
 from celery import shared_task
 
 from portals.bitrix import (
@@ -56,18 +54,16 @@ def _task_fields(
     responsible_id: str | None = None,
     group_id: str | None = None,
     parent_id: str | None = None,
+    include_deadline: bool = True,
 ) -> dict:
+    from board.status_sync import format_bitrix_deadline
+
     fields = {
         "TITLE": task.title,
         "DESCRIPTION": task.description or "",
     }
-    # Always send DEADLINE so clearing the date in the app clears it in Bitrix
-    if due := task.due_date:
-        fields["DEADLINE"] = datetime.combine(due, time(23, 59, 59)).strftime(
-            "%Y-%m-%dT23:59:59+00:00"
-        )
-    else:
-        fields["DEADLINE"] = ""
+    if include_deadline:
+        fields["DEADLINE"] = format_bitrix_deadline(task.due_date)
     if responsible_id:
         fields["RESPONSIBLE_ID"] = responsible_id
         fields["CREATED_BY"] = responsible_id
@@ -78,6 +74,17 @@ def _task_fields(
     # Enable Bitrix «Учёт времени» so startTimer/pauseTimer work in the UI
     fields["ALLOW_TIME_TRACKING"] = "Y"
     return fields
+
+
+def _deadline_needs_push(client: BitrixClient, bitrix_task_id: str, due) -> bool:
+    """Skip DEADLINE in updates when Bitrix already has the same calendar date."""
+    from board.status_sync import parse_bitrix_deadline
+
+    try:
+        current = parse_bitrix_deadline(client.get_task(bitrix_task_id) or {})
+    except BitrixAPIError:
+        return True
+    return current != due
 
 
 def _normalize_local(status: str) -> str:
@@ -206,7 +213,13 @@ def _sync_one_portal(
         title = f"{title_prefix}{task.title}"
 
     if existing_id:
-        fields = _task_fields(task, group_id=group_id, parent_id=parent_id)
+        push_deadline = _deadline_needs_push(client, existing_id, task.due_date)
+        fields = _task_fields(
+            task,
+            group_id=group_id,
+            parent_id=parent_id,
+            include_deadline=push_deadline,
+        )
         fields["TITLE"] = title
         client.update_task(existing_id, fields)
         try:
@@ -220,6 +233,7 @@ def _sync_one_portal(
         responsible_id=responsible_id,
         group_id=group_id,
         parent_id=parent_id,
+        include_deadline=True,
     )
     fields["TITLE"] = title
     result = client.create_task(fields)
@@ -399,16 +413,15 @@ def sync_comment_to_bitrix(self, comment_id: int):
     except Comment.DoesNotExist:
         return {"ok": False, "reason": "missing"}
 
+    # System lines are app-local only — posting them to Bitrix creates
+    # duplicate activity and can feed comment/deadline loops.
     if comment.is_system:
-        author_name = comment.author_name or (
-            comment.author.display_name if comment.author else "Система"
-        )
-        message = f"{author_name} {comment.text}".strip()
-    else:
-        author_name = comment.author_name or (
-            comment.author.display_name if comment.author else "Участник"
-        )
-        message = f"{author_name}: {comment.text}".strip()
+        return {"ok": True, "skipped": "system"}
+
+    author_name = comment.author_name or (
+        comment.author.display_name if comment.author else "Участник"
+    )
+    message = f"{author_name}: {comment.text}".strip()
     if not message:
         return {"ok": False, "reason": "empty"}
 
@@ -651,11 +664,7 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str):
             pass
 
         if action == "start":
-            # Status in progress helps Bitrix timer UI
-            try:
-                client.start_task(bitrix_id)
-            except BitrixAPIError:
-                pass
+            # Status is applied by sync_task_to_bitrix — only drive Учёт времени here.
             client.start_task_timer(bitrix_id)
             return {"ok": True, "action": "start", "bitrix_task_id": bitrix_id}
 
@@ -703,11 +712,7 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str):
                 if eid:
                     entry.bitrix_elapsed_id = eid
                     entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
-            if task.status == "todo":
-                try:
-                    client.pause_task(bitrix_id)
-                except BitrixAPIError:
-                    pass
+            # Do not pause_task here — status sync owns start/pause/complete.
             return {
                 "ok": True,
                 "action": "stop",

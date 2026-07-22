@@ -17,6 +17,33 @@ logger = logging.getLogger(__name__)
 
 _PREFIX_RE = re.compile(r"^[^:\n]{1,80}:\s+")
 
+# Bitrix auto activity lines (status / deadline / timer) — do not import into app chat.
+_BITRIX_SYSTEM_LOG_RE = re.compile(
+    r"(?i)("
+    r"изменил(?:а)?\s+крайний\s+срок|"
+    r"установил(?:а)?\s+крайний\s+срок|"
+    r"снял(?:а)?\s+крайний\s+срок|"
+    r"остановил(?:а)?\s+работу|"
+    r"приостановил(?:а)?\s+работу|"
+    r"начал(?:а)?\s+работу|"
+    r"возобновил(?:а)?\s+работу|"
+    r"завершил(?:а)?\s+(?:работу|задач)|"
+    r"время\s+выполнения|"
+    r"changed\s+the\s+deadline|"
+    r"paused\s+the\s+task|"
+    r"started\s+work|"
+    r"completed\s+the\s+task|"
+    r"time\s+spent"
+    r")"
+)
+
+
+def is_bitrix_system_log_comment(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return False
+    return bool(_BITRIX_SYSTEM_LOG_RE.search(cleaned))
+
 
 def _extract_comment_id(result) -> str:
     if result is None:
@@ -98,6 +125,10 @@ def upsert_comment_from_bitrix_payload(
     raw_text = str(payload.get("POST_MESSAGE") or payload.get("MESSAGE") or payload.get("text") or "")
     text = _normalize_message(author_name, raw_text)
     if not text:
+        return False
+
+    # Skip Bitrix built-in status/deadline/timer log lines — they loop in chat.
+    if is_bitrix_system_log_comment(text):
         return False
 
     # Echo guard: we just posted this outbound (same text, very recent, still without id)
