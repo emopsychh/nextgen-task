@@ -49,7 +49,7 @@ export function TaskDetail() {
   const canEditDueDate =
     portal?.role === "agency" ||
     (portal?.role === "client" &&
-      Boolean(user?.id) &&
+      user != null &&
       task != null &&
       task.created_by != null &&
       task.created_by === user.id);
