@@ -29,7 +29,6 @@ export function TaskDetail() {
   const { token, portal } = useAuth();
   const canManage = Boolean(token);
   const canChangeStatus = portal?.role === "agency";
-  const canTrackTime = portal?.role === "agency";
   const toast = useFlashToast(1800);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -42,7 +41,6 @@ export function TaskDetail() {
   const [error, setError] = useState<string | null>(null);
   const [sendBusy, setSendBusy] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
-  const [timerBusy, setTimerBusy] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
   const [compactTask, setCompactTask] = useState(false);
@@ -172,35 +170,6 @@ export function TaskDetail() {
     await patchTask({ due_date: next });
   }
 
-  async function timerStart() {
-    if (!token || !task || !canTrackTime) return;
-    setTimerBusy(true);
-    setError(null);
-    try {
-      const updated = await api<Task>(`/api/tasks/${task.id}/timer/start/`, { method: "POST" }, token);
-      setTask(updated);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось запустить таймер");
-    } finally {
-      setTimerBusy(false);
-    }
-  }
-
-  async function timerStop() {
-    if (!token || !task || !canTrackTime) return;
-    setTimerBusy(true);
-    setError(null);
-    try {
-      const updated = await api<Task>(`/api/tasks/${task.id}/timer/stop/`, { method: "POST" }, token);
-      setTask(updated);
-      toast.show("Время сохранено");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось остановить таймер");
-    } finally {
-      setTimerBusy(false);
-    }
-  }
-
   function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const list = e.target.files;
     if (!list?.length) return;
@@ -304,7 +273,6 @@ export function TaskDetail() {
       </div>
 
       {error && <div className="error-banner">{error}</div>}
-      {task.sync_error && <div className="error-banner">{task.sync_error}</div>}
 
       <FlashToast message={toast.message} leaving={toast.leaving} />
 
@@ -347,9 +315,7 @@ export function TaskDetail() {
             due={due}
             canManage={canManage}
             canChangeStatus={canChangeStatus}
-            canTrackTime={canTrackTime}
             saveBusy={saveBusy}
-            timerBusy={timerBusy}
             draftTitle={draftTitle}
             draftDescription={draftDescription}
             onDraftTitle={setDraftTitle}
@@ -358,8 +324,6 @@ export function TaskDetail() {
             onCommitDescription={() => void commitDescription()}
             onSetStatus={(s) => void setStatus(s)}
             onSetDueDate={(iso) => void setDueDate(iso)}
-            onTimerStart={() => void timerStart()}
-            onTimerStop={() => void timerStop()}
           />
 
           <TaskThread ref={threadEndRef} rows={threadWithDays} />

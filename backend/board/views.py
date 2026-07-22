@@ -264,13 +264,25 @@ class TaskViewSet(viewsets.ModelViewSet):
                 raise PermissionDenied("Only agency can change task status")
         task = serializer.save(sync_status=Task.SyncStatus.PENDING)
 
-        if (
-            task.status == Task.Status.DONE
-            and old_status != Task.Status.DONE
-            and self.request.user.is_agency
-        ):
-            for running in task.time_entries.filter(ended_at__isnull=True):
-                stop_time_entry(running)
+        if self.request.user.is_agency and old_status != task.status:
+            author = self.request.user.bitrix_user
+            # Pause / complete → stop timer
+            if old_status == Task.Status.IN_PROGRESS and task.status in (
+                Task.Status.TODO,
+                Task.Status.DONE,
+            ):
+                for running in task.time_entries.filter(ended_at__isnull=True):
+                    stop_time_entry(running)
+            # Start / resume → start timer
+            if task.status == Task.Status.IN_PROGRESS:
+                for running in TimeEntry.objects.filter(author=author, ended_at__isnull=True):
+                    stop_time_entry(running)
+                if not task.time_entries.filter(ended_at__isnull=True).exists():
+                    TimeEntry.objects.create(
+                        task=task,
+                        author=author,
+                        started_at=timezone.now(),
+                    )
 
         created_events = append_task_change_events(
             task=task,

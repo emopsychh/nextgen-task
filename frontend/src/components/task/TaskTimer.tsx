@@ -5,20 +5,11 @@ type Props = {
   /** Sum of finished time entries (seconds), without the active run. */
   closedSeconds: number;
   activeStartedAt: string | null;
-  canTrack: boolean;
-  busy: boolean;
-  onStart: () => void;
-  onStop: () => void;
+  /** Task is in progress — shows live “recording” state. */
+  isWorking: boolean;
 };
 
-export function TaskTimer({
-  closedSeconds,
-  activeStartedAt,
-  canTrack,
-  busy,
-  onStart,
-  onStop,
-}: Props) {
+export function TaskTimer({ closedSeconds, activeStartedAt, isWorking }: Props) {
   const [now, setNow] = useState(() => Date.now());
   const isRunning = Boolean(activeStartedAt);
 
@@ -33,29 +24,19 @@ export function TaskTimer({
     : 0;
   const display = closedSeconds + live;
 
+  let label = "ещё не учитывалось";
+  if (isRunning) label = "сейчас идёт учёт";
+  else if (display > 0) label = "всего затрачено";
+
   return (
-    <div className="task-timer">
+    <div className={`task-timer${isRunning ? " is-running" : ""}`} data-working={isWorking || undefined}>
+      <span className="task-timer-dot" aria-hidden />
       <div className="task-timer-readout">
-        <span className={`task-timer-clock${isRunning ? " is-running" : ""}`}>
+        <span className="task-timer-clock">
           {isRunning ? formatTimerClock(display) : formatDuration(display)}
         </span>
-        <span className="muted task-timer-label">
-          {isRunning ? "идёт учёт" : display > 0 ? "учтено" : "время не учтено"}
-        </span>
+        <span className="task-timer-label">{label}</span>
       </div>
-      {canTrack && (
-        <div className="task-timer-actions">
-          {isRunning ? (
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={onStop}>
-              Стоп
-            </button>
-          ) : (
-            <button type="button" className="btn btn-accent" disabled={busy} onClick={onStart}>
-              Старт
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import type { Task, TaskStatus } from "../../api/types";
 import { DueDatePicker } from "../DueDatePicker";
 import { TaskGlyph } from "../icons";
 import { formatClock, formatDateTime, formatDueFull } from "../../lib/format";
-import { STATUS_LABEL, STATUS_TONE, SYNC_LABEL } from "../../lib/status";
+import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import type { DueTone } from "../../lib/dates";
 import { TaskTimer } from "./TaskTimer";
 
@@ -14,9 +14,7 @@ type Props = {
   due: { label: string; tone: DueTone; detail?: string };
   canManage: boolean;
   canChangeStatus: boolean;
-  canTrackTime: boolean;
   saveBusy: boolean;
-  timerBusy: boolean;
   draftTitle: string;
   draftDescription: string;
   onDraftTitle: (value: string) => void;
@@ -25,8 +23,6 @@ type Props = {
   onCommitDescription: () => void;
   onSetStatus: (status: TaskStatus) => void;
   onSetDueDate: (iso: string) => void;
-  onTimerStart: () => void;
-  onTimerStop: () => void;
 };
 
 export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSummaryCard(
@@ -37,9 +33,7 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
     due,
     canManage,
     canChangeStatus,
-    canTrackTime,
     saveBusy,
-    timerBusy,
     draftTitle,
     draftDescription,
     onDraftTitle,
@@ -48,8 +42,6 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
     onCommitDescription,
     onSetStatus,
     onSetDueDate,
-    onTimerStart,
-    onTimerStop,
   },
   ref
 ) {
@@ -159,16 +151,13 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
             )}
           </dd>
         </div>
-        <div className="task-summary-row">
+        <div className="task-summary-row task-summary-row-timer">
           <dt>Время</dt>
           <dd>
             <TaskTimer
               closedSeconds={task.total_tracked_seconds || 0}
               activeStartedAt={task.active_timer?.started_at || null}
-              canTrack={canTrackTime}
-              busy={timerBusy || saveBusy}
-              onStart={onTimerStart}
-              onStop={onTimerStop}
+              isWorking={task.status === "in_progress"}
             />
           </dd>
         </div>
@@ -204,21 +193,6 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
           <dt>Поставлена</dt>
           <dd>{formatDateTime(task.created_at)}</dd>
         </div>
-        {canManage && (
-          <div className="task-summary-row">
-            <dt>Bitrix</dt>
-            <dd>
-              {SYNC_LABEL[task.sync_status] || task.sync_status}
-              {task.bitrix_task_id ? ` · клиент #${task.bitrix_task_id}` : ""}
-              {task.agency_bitrix_task_id ? ` · агентство #${task.agency_bitrix_task_id}` : ""}
-              {task.sync_error ? (
-                <div className="muted" style={{ marginTop: 4, color: "#b42318" }}>
-                  {task.sync_error}
-                </div>
-              ) : null}
-            </dd>
-          </div>
-        )}
       </dl>
 
       <time className="task-summary-time">{formatClock(task.created_at)}</time>
