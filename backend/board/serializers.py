@@ -127,7 +127,16 @@ class TaskSerializer(serializers.ModelSerializer):
     due_date = serializers.DateTimeField(
         required=False,
         allow_null=True,
-        input_formats=["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d"],
+        format="%Y-%m-%dT%H:%M:%S",
+        input_formats=[
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+            "%Y-%m-%d",
+        ],
     )
 
     class Meta:
@@ -229,6 +238,20 @@ class TaskListSerializer(serializers.ModelSerializer):
     portal_id = serializers.IntegerField(source="project.portal_id", read_only=True)
     comments_count = serializers.IntegerField(source="comments.count", read_only=True)
     total_tracked_seconds = serializers.SerializerMethodField()
+    due_date = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+        format="%Y-%m-%dT%H:%M:%S",
+        input_formats=[
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+            "%Y-%m-%d",
+        ],
+    )
 
     class Meta:
         model = Task

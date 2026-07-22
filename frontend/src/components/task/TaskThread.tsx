@@ -1,6 +1,7 @@
 import { forwardRef } from "react";
 import type { Attachment, Comment } from "../../api/types";
 import { FileGlyph } from "../icons";
+import { isImageName } from "../../lib/files";
 import { formatClock } from "../../lib/format";
 import { initialsFromLabel } from "../../lib/portalUi";
 
@@ -15,6 +16,53 @@ export type ThreadRow =
 type Props = {
   rows: ThreadRow[];
 };
+
+function AttachmentView({
+  attachment,
+  compact = false,
+  time,
+}: {
+  attachment: Attachment;
+  compact?: boolean;
+  time?: string;
+}) {
+  const url = attachment.url || "#";
+  const name = attachment.original_name || "Файл";
+  const image = isImageName(name) || isImageName(url);
+
+  if (image && attachment.url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className={`msg-image${compact ? " compact" : ""}`}
+        title={name}
+      >
+        <img src={url} alt={name} loading="lazy" />
+        {time ? <span className="msg-image-time muted">{time}</span> : null}
+      </a>
+    );
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      download={name}
+      className={`msg-file${compact ? " compact" : ""}`}
+    >
+      <span className="msg-file-icon">
+        <FileGlyph />
+      </span>
+      <span className="msg-file-meta">
+        <strong>{name}</strong>
+        {time ? <span className="muted">{time}</span> : null}
+      </span>
+    </a>
+  );
+}
 
 export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
   { rows },
@@ -35,20 +83,10 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
         if (item.kind === "file") {
           return (
             <div key={`file-${item.file.id}`} className="msg-file-alone">
-              <a
-                href={item.file.url || "#"}
-                target="_blank"
-                rel="noreferrer"
-                className="msg-file"
-              >
-                <span className="msg-file-icon">
-                  <FileGlyph />
-                </span>
-                <span className="msg-file-meta">
-                  <strong>{item.file.original_name || "Файл"}</strong>
-                  <span className="muted">{formatClock(item.file.created_at)}</span>
-                </span>
-              </a>
+              <AttachmentView
+                attachment={item.file}
+                time={formatClock(item.file.created_at)}
+              />
             </div>
           );
         }
@@ -78,20 +116,7 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
               {(c.attachments || []).length > 0 && (
                 <div className="msg-files">
                   {(c.attachments || []).map((a) => (
-                    <a
-                      key={a.id}
-                      href={a.url || "#"}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="msg-file compact"
-                    >
-                      <span className="msg-file-icon">
-                        <FileGlyph />
-                      </span>
-                      <span className="msg-file-meta">
-                        <strong>{a.original_name || "Файл"}</strong>
-                      </span>
-                    </a>
+                    <AttachmentView key={a.id} attachment={a} compact />
                   ))}
                 </div>
               )}

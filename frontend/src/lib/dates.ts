@@ -28,46 +28,77 @@ export function addDays(d: Date, n: number): Date {
   return next;
 }
 
-/** Parse due value as local Date (date-only or datetime, with/without Z). */
-export function parseDue(iso: string): Date {
-  const text = (iso || "").trim();
-  if (!text) return new Date(NaN);
+export function isValidDate(d: Date): boolean {
+  return d instanceof Date && !Number.isNaN(d.getTime());
+}
+
+/**
+ * Parse due value as local Date.
+ * Handles DRF output like 2026-08-07T23:59:59.123456Z and naive wall-clock strings.
+ */
+export function parseDue(iso: string | null | undefined): Date {
+  if (iso == null) return new Date(NaN);
+  const text = String(iso).trim();
+  if (!text || text === "null" || text === "None" || text === "undefined") {
+    return new Date(NaN);
+  }
+
   // Date-only YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
     const [y, m, d] = text.split("-").map(Number);
     return new Date(y, m - 1, d);
   }
-  // Naive datetime → treat as local wall clock
-  const naive = text.match(
-    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/
+
+  // Extract Y-M-D H:M:S from any ISO-ish string (ignore ms / timezone for wall clock)
+  const parts = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/
   );
-  if (naive && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) {
-    return new Date(
-      Number(naive[1]),
-      Number(naive[2]) - 1,
-      Number(naive[3]),
-      Number(naive[4]),
-      Number(naive[5]),
-      Number(naive[6] || 0)
-    );
+  if (parts) {
+    const y = Number(parts[1]);
+    const mo = Number(parts[2]);
+    const d = Number(parts[3]);
+    const h = Number(parts[4] ?? 0);
+    const mi = Number(parts[5] ?? 0);
+    const s = Number(parts[6] ?? 0);
+    // If string has explicit Z / offset, prefer absolute instant via Date.parse
+    if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(text) || /[+-]\d{2}:\d{2}/.test(text)) {
+      // Normalize "+0000" → "+00:00"; drop excessive fractional digits for Safari
+      const normalized = text
+        .replace(/(\.\d{3})\d+/, "$1")
+        .replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+      const abs = new Date(normalized);
+      if (isValidDate(abs)) return abs;
+    }
+    const local = new Date(y, mo - 1, d, h, mi, s);
+    if (isValidDate(local)) return local;
   }
-  return new Date(text);
+
+  const fallback = new Date(text);
+  return fallback;
 }
 
 /** @deprecated use parseDue — kept for calendar date grids */
 export function parseISODate(iso: string): Date {
-  return parseDue(iso.length >= 10 ? iso.slice(0, 10) : iso);
+  const text = (iso || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
+    return parseDue(text.slice(0, 10));
+  }
+  return parseDue(text);
 }
 
 export function formatRuDate(iso: string): string {
-  return parseDue(iso).toLocaleDateString("ru-RU", {
+  const d = parseDue(iso);
+  if (!isValidDate(d)) return "";
+  return d.toLocaleDateString("ru-RU", {
     day: "numeric",
     month: "short",
   });
 }
 
 export function formatRuDateLong(iso: string): string {
-  return parseDue(iso).toLocaleDateString("ru-RU", {
+  const d = parseDue(iso);
+  if (!isValidDate(d)) return "";
+  return d.toLocaleDateString("ru-RU", {
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -83,36 +114,46 @@ export type DueTone =
   | "due-done";
 
 export function dueMeta(
-  due: string | null,
+  due: string | null | undefined,
   status: "todo" | "in_progress" | "done" = "todo"
 ): { label: string; tone: DueTone; detail?: string } {
   if (status === "done") {
+    const detail = due ? formatRuDate(due) : undefined;
     return {
       label: "Завершена",
       tone: "due-done",
-      detail: due ? formatRuDate(due) : undefined,
+      detail: detail || undefined,
     };
   }
   if (!due) return { label: "Без срока", tone: "due-none" };
 
-  const now = new Date();
   const target = parseDue(due);
+  if (!isValidDate(target)) {
+    return { label: "Без срока", tone: "due-none" };
+  }
+
+  const now = new Date();
   const today = startOfDay(now);
   const targetDay = startOfDay(target);
   const days = Math.round((targetDay.getTime() - today.getTime()) / 86400000);
+  if (!Number.isFinite(days)) {
+    return { label: "Без срока", tone: "due-none" };
+  }
+
+  const detail = formatRuDate(due) || undefined;
 
   if (target.getTime() < now.getTime()) {
-    const n = Math.abs(days) || 1;
+    const n = Math.max(1, Math.abs(days));
     return {
       label: n === 1 ? "Просрочено на 1 день" : `Просрочено на ${n} дн.`,
       tone: "due-overdue",
-      detail: formatRuDate(due),
+      detail,
     };
   }
-  if (days === 0) return { label: "Срок сегодня", tone: "due-today", detail: formatRuDate(due) };
-  if (days === 1) return { label: "Завтра", tone: "due-soon", detail: formatRuDate(due) };
-  if (days <= 7) return { label: `${days} дн. осталось`, tone: "due-soon", detail: formatRuDate(due) };
-  return { label: `${days} дн. осталось`, tone: "due-ok", detail: formatRuDate(due) };
+  if (days === 0) return { label: "Срок сегодня", tone: "due-today", detail };
+  if (days === 1) return { label: "Завтра", tone: "due-soon", detail };
+  if (days <= 7) return { label: `${days} дн. осталось`, tone: "due-soon", detail };
+  return { label: `${days} дн. осталось`, tone: "due-ok", detail };
 }
 
 export function daysInMonth(year: number, month: number): number {

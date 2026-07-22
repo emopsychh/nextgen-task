@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 from django.core.files.base import ContentFile
 
@@ -20,7 +21,18 @@ def _extract_file_id(result) -> str:
     if isinstance(result, str) and result.isdigit():
         return result
     if isinstance(result, dict):
-        for key in ("ID", "id", "FILE_ID", "fileId", "OBJECT_ID", "objectId"):
+        # Prefer nested FILE / file / ID
+        for key in (
+            "ID",
+            "id",
+            "FILE_ID",
+            "fileId",
+            "OBJECT_ID",
+            "objectId",
+            "FILE",
+            "file",
+            "result",
+        ):
             val = result.get(key)
             if isinstance(val, (int, float)):
                 return str(int(val))
@@ -33,28 +45,117 @@ def _extract_file_id(result) -> str:
     return ""
 
 
-def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) -> str:
-    """Upload local file to Bitrix Disk and attach to task. Returns file id."""
-    storage = client.get_app_storage()
-    folder_id = (
-        storage.get("ROOT_OBJECT_ID")
-        or storage.get("rootObjectId")
-        or storage.get("ID")
-        or storage.get("id")
-        or ""
-    )
-    if not folder_id:
-        raise BitrixAPIError("disk.storage.getforapp: no folder id")
+def _resolve_upload_folder(client: BitrixClient) -> str:
+    """Find a Disk folder we can upload into (app storage or first available)."""
+    try:
+        storage = client.get_app_storage()
+        folder_id = (
+            storage.get("ROOT_OBJECT_ID")
+            or storage.get("rootObjectId")
+            or storage.get("ID")
+            or storage.get("id")
+            or ""
+        )
+        if folder_id:
+            return str(folder_id)
+    except BitrixAPIError as exc:
+        logger.info("disk.storage.getforapp: %s", exc)
 
+    try:
+        rows = client.call("disk.storage.getlist") or []
+        if isinstance(rows, dict):
+            rows = rows.get("result") or rows.get("storages") or []
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                folder_id = (
+                    row.get("ROOT_OBJECT_ID")
+                    or row.get("rootObjectId")
+                    or row.get("ID")
+                    or row.get("id")
+                    or ""
+                )
+                if folder_id:
+                    return str(folder_id)
+    except BitrixAPIError as exc:
+        logger.info("disk.storage.getlist: %s", exc)
+    return ""
+
+
+def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) -> str:
+    """
+    Upload local file to Bitrix and attach to the task (Files tab).
+    Tries several REST methods used across Bitrix Cloud builds.
+    Returns Bitrix file id when known.
+    """
     name = attachment.original_name or attachment.file.name.split("/")[-1] or "file"
     with attachment.file.open("rb") as fh:
         content = fh.read()
-    uploaded = client.upload_file_to_folder(folder_id, name, content)
-    file_id = _extract_file_id(uploaded)
-    if not file_id:
-        raise BitrixAPIError(f"upload returned no file id: {uploaded}")
-    client.attach_file_to_task(bitrix_task_id, file_id)
-    return file_id
+    if not content:
+        raise BitrixAPIError("empty file")
+
+    b64 = base64.b64encode(content).decode("ascii")
+    errors: list[str] = []
+
+    # 1) Disk upload → tasks.task.files.attach (preferred)
+    folder_id = _resolve_upload_folder(client)
+    if folder_id:
+        try:
+            uploaded = client.upload_file_to_folder(folder_id, name, content)
+            file_id = _extract_file_id(uploaded)
+            if file_id:
+                try:
+                    client.attach_file_to_task(bitrix_task_id, file_id)
+                except BitrixAPIError as exc:
+                    errors.append(f"attach: {exc}")
+                    # Still return file id — file exists on Disk
+                return file_id
+            errors.append(f"upload no id: {uploaded}")
+        except BitrixAPIError as exc:
+            errors.append(f"disk upload: {exc}")
+
+    # 2) Legacy task.item.addfile with base64 payload
+    for params in (
+        {"TASK_ID": bitrix_task_id, "FILE": {"name": name, "content": b64}},
+        {"TASKID": bitrix_task_id, "FILE": {"name": name, "content": b64}},
+        {"TASK_ID": bitrix_task_id, "NAME": name, "CONTENT": b64},
+    ):
+        try:
+            result = client.call("task.item.addfile", params)
+            fid = _extract_file_id(result) or "ok"
+            return fid
+        except BitrixAPIError as exc:
+            errors.append(f"task.item.addfile: {exc}")
+
+    # 3) Comment with attached Disk file (shows in Bitrix task chat)
+    if folder_id:
+        try:
+            uploaded = client.upload_file_to_folder(folder_id, name, content)
+            file_id = _extract_file_id(uploaded)
+            if file_id:
+                try:
+                    client.call(
+                        "task.commentitem.add",
+                        {
+                            "TASKID": bitrix_task_id,
+                            "FIELDS": {
+                                "POST_MESSAGE": f"[Файл из Nextgen] {name}",
+                                "UF_FORUM_MESSAGE_DOC": [file_id],
+                            },
+                        },
+                    )
+                except BitrixAPIError:
+                    # Comment without UF — file still on disk; try attach again
+                    try:
+                        client.attach_file_to_task(bitrix_task_id, file_id)
+                    except BitrixAPIError as exc:
+                        errors.append(f"comment/attach: {exc}")
+                return file_id
+        except BitrixAPIError as exc:
+            errors.append(f"comment upload: {exc}")
+
+    raise BitrixAPIError("; ".join(errors) or "attach failed")
 
 
 def pull_attachments_from_bitrix(task) -> int:
@@ -80,21 +181,30 @@ def pull_attachments_from_bitrix(task) -> int:
                 or row.get("id")
                 or row.get("FILE_ID")
                 or row.get("fileId")
+                or row.get("ATTACHMENT_ID")
                 or ""
             )
             if not fid or fid == "0":
                 continue
-            exists = Attachment.objects.filter(task=task).filter(
-                **(
-                    {"bitrix_file_id": fid}
-                    if is_client
-                    else {"agency_bitrix_file_id": fid}
+            exists = (
+                Attachment.objects.filter(task=task)
+                .filter(
+                    **(
+                        {"bitrix_file_id": fid}
+                        if is_client
+                        else {"agency_bitrix_file_id": fid}
+                    )
                 )
-            ).exists()
+                .exists()
+            )
             if exists:
                 continue
             name = str(
-                row.get("NAME") or row.get("name") or row.get("ORIGINAL_NAME") or f"file-{fid}"
+                row.get("NAME")
+                or row.get("name")
+                or row.get("ORIGINAL_NAME")
+                or row.get("FILE_NAME")
+                or f"file-{fid}"
             )
             try:
                 content = client.download_disk_file(fid)

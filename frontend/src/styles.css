@@ -2595,7 +2595,7 @@ a {
 .msg-files {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin-top: 10px;
 }
 
@@ -2603,6 +2603,42 @@ a {
   display: flex;
   justify-content: flex-start;
   padding-left: 50px;
+}
+
+.msg-image {
+  display: block;
+  position: relative;
+  max-width: min(100%, 360px);
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1.5px solid #d7e5e1;
+  background: #eef3f1;
+  line-height: 0;
+}
+
+.msg-image.compact {
+  max-width: min(100%, 280px);
+}
+
+.msg-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 420px;
+  object-fit: contain;
+  background: #0f172a08;
+}
+
+.msg-image-time {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  font-size: 0.72rem;
+  line-height: 1.4;
 }
 
 .msg-file {
@@ -2616,6 +2652,7 @@ a {
   border: 1.5px solid #d7e5e1;
   color: var(--ink);
   transition: 0.12s ease;
+  text-decoration: none;
 }
 
 .msg-file:hover {
@@ -2651,6 +2688,19 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.msg-pending-chip.is-image {
+  padding: 4px 8px 4px 4px;
+  border-radius: 14px;
+}
+
+.msg-pending-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .msg-composer {

@@ -262,16 +262,19 @@ class BitrixClient:
         return result if isinstance(result, dict) else {"ID": result}
 
     def attach_file_to_task(self, task_id: int | str, file_id: int | str) -> dict:
-        try:
-            return self.call(
-                "tasks.task.files.attach",
-                {"taskId": task_id, "fileId": file_id},
-            )
-        except BitrixAPIError:
-            return self.call(
-                "task.item.addfile",
-                {"TASKID": task_id, "FILE_ID": file_id},
-            )
+        last_exc: BitrixAPIError | None = None
+        for method, params in (
+            ("tasks.task.files.attach", {"taskId": task_id, "fileId": file_id}),
+            ("tasks.task.files.attach", {"TASK_ID": task_id, "FILE_ID": file_id}),
+            ("task.files.attach", {"TASK_ID": task_id, "FILE_ID": file_id}),
+            ("task.item.addfile", {"TASKID": task_id, "FILE_ID": file_id}),
+        ):
+            try:
+                return self.call(method, params)
+            except BitrixAPIError as exc:
+                last_exc = exc
+                continue
+        raise last_exc or BitrixAPIError("attach failed")
 
     def list_task_files(self, task_id: int | str) -> list[dict]:
         try:

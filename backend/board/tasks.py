@@ -554,7 +554,7 @@ def _notify_comment_participants(comment, agency, task) -> None:
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=15)
 def sync_attachment_to_bitrix(self, attachment_id: int):
-    """Upload a local attachment to Bitrix Disk and attach to linked task(s)."""
+    """Upload a local attachment to Bitrix and attach to linked task(s). Prefer agency subtask."""
     from board.file_sync import upload_and_attach
     from board.models import Attachment
     from board.realtime import publish_task_event
@@ -580,18 +580,24 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
     errors = []
     update_fields = []
 
-    if task.bitrix_task_id and client_portal.access_token and not attachment.bitrix_file_id:
+    # Ensure agency subtask exists — that's where managers look for files
+    if agency and agency.access_token and not task.agency_bitrix_task_id:
         try:
-            fid = upload_and_attach(
-                client=BitrixClient(client_portal),
-                bitrix_task_id=task.bitrix_task_id,
-                attachment=attachment,
+            parent_id, group_id = _ensure_project_agency_parent(task.project)
+            bx = _sync_one_portal(
+                task,
+                agency,
+                existing_id="",
+                group_id=group_id,
+                parent_id=parent_id,
             )
-            attachment.bitrix_file_id = fid
-            update_fields.append("bitrix_file_id")
-        except BitrixAPIError as exc:
-            errors.append(f"client: {exc}")
+            if bx:
+                task.agency_bitrix_task_id = bx
+                task.save(update_fields=["agency_bitrix_task_id", "updated_at"])
+        except Exception as exc:
+            errors.append(f"ensure agency task: {exc}")
 
+    # Agency first (Проекты → задача → подзадача)
     if (
         agency
         and task.agency_bitrix_task_id
@@ -609,11 +615,23 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
         except BitrixAPIError as exc:
             errors.append(f"agency: {exc}")
 
+    if task.bitrix_task_id and client_portal.access_token and not attachment.bitrix_file_id:
+        try:
+            fid = upload_and_attach(
+                client=BitrixClient(client_portal),
+                bitrix_task_id=task.bitrix_task_id,
+                attachment=attachment,
+            )
+            attachment.bitrix_file_id = fid
+            update_fields.append("bitrix_file_id")
+        except BitrixAPIError as exc:
+            errors.append(f"client: {exc}")
+
     if update_fields:
         attachment.save(update_fields=update_fields)
         publish_task_event(task, kind="attachment_synced")
 
-    if errors:
+    if errors and not update_fields:
         try:
             raise self.retry(exc=BitrixAPIError("; ".join(errors)))
         except self.MaxRetriesExceededError:
@@ -622,6 +640,7 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
         "ok": True,
         "bitrix_file_id": attachment.bitrix_file_id,
         "agency_bitrix_file_id": attachment.agency_bitrix_file_id,
+        "errors": errors,
     }
 
 
