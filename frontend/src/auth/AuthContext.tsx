@@ -18,7 +18,6 @@ type AuthState = {
   loginDev: (role: "agency" | "client") => Promise<void>;
   loginBitrix: (payload: Record<string, unknown>) => Promise<void>;
   logout: () => void;
-  setPortalRole: (role: "agency" | "client") => Promise<void>;
 };
 
 const STORAGE_KEY = "nextgen_auth";
@@ -90,24 +89,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => persist(null), [persist]);
 
-  const setPortalRole = useCallback(
-    async (role: "agency" | "client") => {
-      if (!token || !portal) return;
-      const updated = await api<Portal>(
-        `/api/portals/${portal.id}/`,
-        { method: "PATCH", body: JSON.stringify({ role }) },
-        token
-      );
-      const raw = loadStored();
-      if (raw) {
-        persist({ ...raw, portal: updated });
-      } else {
-        setPortal(updated);
-      }
-    },
-    [token, portal, persist]
-  );
-
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const authId = params.get("AUTH_ID") || params.get("auth_id");
@@ -150,9 +131,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginDev,
       loginBitrix,
       logout,
-      setPortalRole,
     }),
-    [token, portal, user, loading, error, loginDev, loginBitrix, logout, setPortalRole]
+    [token, portal, user, loading, error, loginDev, loginBitrix, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

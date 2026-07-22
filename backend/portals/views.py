@@ -295,19 +295,16 @@ class PortalViewSet(viewsets.ModelViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         portal = self.get_object()
-        # Only allow setting role/name on own portal for agency bootstrap
+        # Only own portal name; role is assigned from AGENCY_* env, not UI
         if portal.id != request.user.portal.id and not request.user.is_agency:
             return Response({"detail": "Forbidden"}, status=403)
         allowed = {}
         if "name" in request.data:
             allowed["name"] = request.data["name"]
-        if "role" in request.data and portal.id == request.user.portal.id:
-            role = request.data["role"]
-            if role in (Portal.Role.AGENCY, Portal.Role.CLIENT):
-                allowed["role"] = role
         for k, v in allowed.items():
             setattr(portal, k, v)
-        portal.save()
+        if allowed:
+            portal.save()
         return Response(PortalSerializer(portal).data)
 
 

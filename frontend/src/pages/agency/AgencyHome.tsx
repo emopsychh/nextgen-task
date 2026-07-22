@@ -201,8 +201,8 @@ export function AgencyHome() {
         <div className="how-step">
           <span className="how-num">2</span>
           <div>
-            <strong>Роль «Клиент»</strong>
-            <p>Отметьте при первом входе в приложение</p>
+            <strong>Клиент ставит приложение</strong>
+            <p>Локальное приложение на своём портале Bitrix</p>
           </div>
         </div>
         <div className="how-step">

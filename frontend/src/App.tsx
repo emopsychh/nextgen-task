@@ -58,27 +58,6 @@ function AppLayout() {
   );
 }
 
-function RoleBootstrap() {
-  const { setPortalRole } = useAuth();
-  return (
-    <div className="card" style={{ maxWidth: 480 }}>
-      <h3>Настройте роль портала</h3>
-      <p className="muted">
-        Укажите, это портал агентства или клиента. Обычно делается один раз после установки
-        приложения.
-      </p>
-      <div className="row" style={{ marginTop: 16 }}>
-        <button className="btn btn-primary" onClick={() => void setPortalRole("agency")}>
-          Это агентство
-        </button>
-        <button className="btn btn-ghost" onClick={() => void setPortalRole("client")}>
-          Это клиент
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const { token, portal, loading, error } = useAuth();
 
@@ -92,20 +71,6 @@ export default function App() {
 
   if (!token || !portal) {
     return <LoginPage bootError={error} />;
-  }
-
-  if (portal.role === "unknown") {
-    return (
-      <div className="app-shell with-logout-rail">
-        <LogoutRail />
-        <aside className="sidebar">
-          <Brand />
-        </aside>
-        <main className="main">
-          <RoleBootstrap />
-        </main>
-      </div>
-    );
   }
 
   const isAgency = portal.role === "agency";

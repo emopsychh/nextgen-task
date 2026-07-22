@@ -157,3 +157,8 @@ BITRIX_DEAL_REMAINING_HOURS_FIELD = os.getenv("BITRIX_DEAL_REMAINING_HOURS_FIELD
 PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "http://localhost:8000").rstrip("/")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 DEV_AUTH_BYPASS = os.getenv("DEV_AUTH_BYPASS", "0") == "1"
+# Comma-separated Bitrix member_id and/or portal domains treated as agency.
+# Everyone else defaults to client (no UI role picker).
+AGENCY_MEMBER_IDS = os.getenv("AGENCY_MEMBER_IDS", "")
+AGENCY_DOMAINS = os.getenv("AGENCY_DOMAINS", "")
+

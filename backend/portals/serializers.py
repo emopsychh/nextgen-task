@@ -112,6 +112,34 @@ def issue_tokens(portal: Portal, bitrix_user: BitrixUser) -> dict:
     }
 
 
+def resolve_portal_role(member_id: str, domain: str = "") -> str:
+    """Agency if member_id/domain listed in env; otherwise client."""
+    from portals.models import Portal
+
+    agency_members = {
+        m.strip() for m in (settings.AGENCY_MEMBER_IDS or "").split(",") if m.strip()
+    }
+    agency_domains = {
+        d.strip().lower().replace("https://", "").replace("http://", "").rstrip("/")
+        for d in (settings.AGENCY_DOMAINS or "").split(",")
+        if d.strip()
+    }
+    domain_norm = (
+        str(domain or "")
+        .lower()
+        .replace("https://", "")
+        .replace("http://", "")
+        .rstrip("/")
+        .replace("/rest/", "")
+        .replace("/rest", "")
+    )
+    if member_id and member_id in agency_members:
+        return Portal.Role.AGENCY
+    if domain_norm and domain_norm in agency_domains:
+        return Portal.Role.AGENCY
+    return Portal.Role.CLIENT
+
+
 def upsert_portal_from_auth(auth: dict, domain: str | None = None) -> Portal:
     member_id = str(auth.get("member_id") or "")
     if not member_id:
@@ -122,10 +150,13 @@ def upsert_portal_from_auth(auth: dict, domain: str | None = None) -> Portal:
         portal_domain = portal_domain.split("://", 1)[1]
     portal_domain = str(portal_domain).rstrip("/").replace("/rest/", "").replace("/rest", "")
 
+    role = resolve_portal_role(member_id, portal_domain)
+
     portal, _ = Portal.objects.update_or_create(
         member_id=member_id,
         defaults={
             "domain": portal_domain or "unknown",
+            "role": role,
             "access_token": auth.get("access_token", ""),
             "refresh_token": auth.get("refresh_token", ""),
             "application_token": auth.get("application_token", "")
