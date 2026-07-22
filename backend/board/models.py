@@ -74,6 +74,9 @@ class Comment(models.Model):
     author_name = models.CharField(max_length=255, blank=True)
     text = models.TextField()
     is_system = models.BooleanField(default=False)
+    # Bitrix comment ids (client / agency task copies) — prevent echo duplicates
+    bitrix_comment_id = models.CharField(max_length=64, blank=True, db_index=True)
+    agency_bitrix_comment_id = models.CharField(max_length=64, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

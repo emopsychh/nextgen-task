@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { api, type Task } from "../api/types";
 
-const POLL_MS = 3500;
+const POLL_MS = 2500;
 
 function fingerprint(task: Task): string {
   const comments = task.comments || [];
@@ -80,13 +80,18 @@ export function useTaskLiveSync({
 
     let cancelled = false;
     let inFlight = false;
+    let tickCount = 0;
 
     async function tick() {
       if (cancelled || inFlight) return;
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       inFlight = true;
+      tickCount += 1;
       try {
-        const data = await api<Task>(`/api/tasks/${taskId}/`, {}, token);
+        // Every ~5th poll (~12s) also pull Bitrix comments/status so chat stays in sync
+        // even if webhooks are slow; other ticks only read local DB.
+        const pull = tickCount === 1 || tickCount % 5 === 0 ? "?pull=1" : "";
+        const data = await api<Task>(`/api/tasks/${taskId}/${pull}`, {}, token);
         if (cancelled) return;
         const fp = fingerprint(data);
         if (fp === fpRef.current) return;

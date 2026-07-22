@@ -551,7 +551,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class BitrixEventView(APIView):
-    """Incoming Bitrix app events (OnTaskUpdate → local status sync)."""
+    """Incoming Bitrix app events (OnTaskUpdate / OnTaskCommentAdd → local sync)."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -559,10 +559,18 @@ class BitrixEventView(APIView):
     def post(self, request):
         event, data, auth = _parse_bitrix_event(request)
         event_u = str(event or "").upper().replace("_", "")
-        if event_u not in ("ONTASKUPDATE",):
+        if event_u not in ("ONTASKUPDATE", "ONTASKCOMMENTADD"):
             return Response({"ok": True, "ignored": event or "empty"})
 
         bitrix_task_id = _bitrix_event_task_id(data)
+        if event_u == "ONTASKCOMMENTADD":
+            after = data.get("FIELDS_AFTER") if isinstance(data.get("FIELDS_AFTER"), dict) else {}
+            bitrix_task_id = str(
+                (after or {}).get("TASK_ID")
+                or (after or {}).get("TASKID")
+                or bitrix_task_id
+                or ""
+            )
         if not bitrix_task_id:
             return Response({"ok": False, "reason": "no_task_id"}, status=200)
 
@@ -611,9 +619,15 @@ class BitrixEventView(APIView):
                 portal.refresh_token = refresh
             portal.save(update_fields=["access_token", "refresh_token", "updated_at"])
 
+        from board.comment_sync import ingest_bitrix_comment_event
         from board.status_sync import handle_bitrix_task_update
 
-        result = handle_bitrix_task_update(portal=portal, bitrix_task_id=str(bitrix_task_id))
+        if event_u == "ONTASKCOMMENTADD":
+            result = ingest_bitrix_comment_event(
+                portal=portal, bitrix_task_id=str(bitrix_task_id), data=data
+            )
+        else:
+            result = handle_bitrix_task_update(portal=portal, bitrix_task_id=str(bitrix_task_id))
         return Response(result)
 
     def get(self, request):

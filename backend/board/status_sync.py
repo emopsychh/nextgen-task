@@ -21,29 +21,41 @@ def event_handler_url() -> str:
 
 
 def ensure_task_event_bindings(portal) -> bool:
-    """Subscribe portal app to OnTaskUpdate (idempotent best-effort)."""
+    """Subscribe portal app to task status + comment events (idempotent best-effort)."""
     if not portal or not portal.access_token:
         return False
     handler = event_handler_url()
     client = BitrixClient(portal)
+    wanted = {"ONTASKUPDATE", "ONTASKCOMMENTADD"}
     try:
         existing = client.call("event.get") or []
         if isinstance(existing, dict):
             existing = existing.get("result") or existing.get("events") or []
         if not isinstance(existing, list):
             existing = []
+        bound: set[str] = set()
         for row in existing:
             if not isinstance(row, dict):
                 continue
-            ev = str(row.get("event") or row.get("EVENT") or "").upper()
+            ev = str(row.get("event") or row.get("EVENT") or "").upper().replace("_", "")
             h = str(row.get("handler") or row.get("HANDLER") or "")
-            if ev in ("ONTASKUPDATE", "ON_TASK_UPDATE") and h.rstrip("/") == handler.rstrip("/"):
-                return True
-        client.call("event.bind", {"event": "OnTaskUpdate", "handler": handler})
-        return True
+            if h.rstrip("/") == handler.rstrip("/") and ev in wanted:
+                bound.add(ev)
+        ok = True
+        for event_name, key in (
+            ("OnTaskUpdate", "ONTASKUPDATE"),
+            ("OnTaskCommentAdd", "ONTASKCOMMENTADD"),
+        ):
+            if key in bound:
+                continue
+            try:
+                client.call("event.bind", {"event": event_name, "handler": handler})
+            except BitrixAPIError as exc:
+                logger.info("event.bind %s for %s: %s", event_name, portal.domain, exc)
+                ok = False
+        return ok or bool(bound)
     except BitrixAPIError as exc:
-        # Already bound / no rights — not fatal
-        logger.info("event.bind OnTaskUpdate for %s: %s", portal.domain, exc)
+        logger.info("event.bind for %s: %s", portal.domain, exc)
         return False
     except Exception as exc:
         logger.warning("event.bind failed for %s: %s", portal.domain, exc)

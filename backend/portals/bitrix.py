@@ -93,7 +93,7 @@ class BitrixClient:
     def renew_task(self, task_id: int | str) -> dict:
         return self.call("tasks.task.renew", {"taskId": task_id})
 
-    def add_task_comment(self, task_id: int | str, message: str, author_id: str | None = None) -> dict:
+    def add_task_comment(self, task_id: int | str, message: str, author_id: str | None = None) -> dict | str | int:
         fields: dict = {"POST_MESSAGE": message}
         if author_id:
             fields["AUTHOR_ID"] = author_id
@@ -101,6 +101,27 @@ class BitrixClient:
             "task.commentitem.add",
             {"TASKID": task_id, "FIELDS": fields},
         )
+
+    def get_task_comment(self, task_id: int | str, comment_id: int | str) -> dict:
+        result = self.call(
+            "task.commentitem.get",
+            {"TASKID": task_id, "ITEMID": comment_id},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def list_task_comments(self, task_id: int | str) -> list[dict]:
+        result = self.call(
+            "task.commentitem.getlist",
+            {"TASKID": task_id, "ORDER": {"ID": "ASC"}},
+        )
+        if isinstance(result, list):
+            return [r for r in result if isinstance(r, dict)]
+        if isinstance(result, dict):
+            for key in ("comments", "items", "result"):
+                val = result.get(key)
+                if isinstance(val, list):
+                    return [r for r in val if isinstance(r, dict)]
+        return []
 
     def get_deal(self, deal_id: int | str) -> dict:
         result = self.call("crm.deal.get", {"id": deal_id})

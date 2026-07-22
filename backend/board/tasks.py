@@ -288,18 +288,50 @@ def sync_comment_to_bitrix(self, comment_id: int):
             return {"ok": False, "reason": "no_bitrix_task"}
 
     errors = []
+    saved_ids: dict[str, str] = {}
     for portal, bitrix_task_id in targets:
         try:
-            BitrixClient(portal).add_task_comment(bitrix_task_id, message)
+            result = BitrixClient(portal).add_task_comment(bitrix_task_id, message)
+            cid = ""
+            if isinstance(result, (int, float)):
+                cid = str(int(result))
+            elif isinstance(result, str) and result.isdigit():
+                cid = result
+            elif isinstance(result, dict):
+                for key in ("id", "ID", "result"):
+                    val = result.get(key)
+                    if isinstance(val, (int, float)):
+                        cid = str(int(val))
+                        break
+                    if isinstance(val, str) and val.isdigit():
+                        cid = val
+                        break
+            if cid:
+                if portal.id == client_portal.id:
+                    saved_ids["bitrix_comment_id"] = cid
+                else:
+                    saved_ids["agency_bitrix_comment_id"] = cid
         except BitrixAPIError as exc:
             errors.append(f"{portal.domain}: {exc}")
+
+    if saved_ids:
+        update_fields = []
+        if "bitrix_comment_id" in saved_ids and not comment.bitrix_comment_id:
+            comment.bitrix_comment_id = saved_ids["bitrix_comment_id"]
+            update_fields.append("bitrix_comment_id")
+        if "agency_bitrix_comment_id" in saved_ids and not comment.agency_bitrix_comment_id:
+            comment.agency_bitrix_comment_id = saved_ids["agency_bitrix_comment_id"]
+            update_fields.append("agency_bitrix_comment_id")
+        if update_fields:
+            update_fields.append("updated_at")
+            comment.save(update_fields=update_fields)
 
     if errors:
         try:
             raise self.retry(exc=BitrixAPIError("; ".join(errors)))
         except self.MaxRetriesExceededError:
             return {"ok": False, "errors": errors}
-    return {"ok": True, "posted": len(targets)}
+    return {"ok": True, "posted": len(targets) - len(errors), "ids": saved_ids}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)

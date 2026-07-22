@@ -237,9 +237,12 @@ class TaskViewSet(viewsets.ModelViewSet):
         # Optional Bitrix pull (open task). Live poll should omit ?pull=1.
         if request.query_params.get("pull") in ("1", "true", "yes"):
             try:
+                from board.comment_sync import pull_comments_from_bitrix
                 from board.status_sync import pull_task_status_from_bitrix
 
-                if pull_task_status_from_bitrix(instance):
+                changed = pull_task_status_from_bitrix(instance)
+                pulled = pull_comments_from_bitrix(instance)
+                if changed or pulled:
                     instance.refresh_from_db()
             except Exception:
                 logger.exception("Bitrix status pull failed for task %s", instance.id)
