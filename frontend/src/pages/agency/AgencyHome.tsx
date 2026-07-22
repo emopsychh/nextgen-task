@@ -280,9 +280,8 @@ export function AgencyHome() {
       <section className="linked-section">
         <div className="linked-head">
           <h2 className="section-title">Ваши клиенты</h2>
-          <p className="muted">
-            Укажите ID компании в Bitrix — найдём открытую сделку в воронке «Сопровождение». Учтённое
-            время задач спишется с остатка часов.
+          <p className="muted linked-head-sub">
+            Привяжите компанию из CRM — сделку и часы подтянем сами.
           </p>
         </div>
 
@@ -298,101 +297,120 @@ export function AgencyHome() {
               const binding = bindingByPortal.get(p.id);
               const companyValue = companyValueFor(p.id, link, binding);
               const dealBusy = dealBusyId === p.id;
+              const hasDeal = Boolean(binding);
               return (
-                <div
+                <article
                   key={link.id}
-                  className={`linked-card${enteringPortalId === p.id ? " is-entering" : ""}`}
+                  className={`linked-card${enteringPortalId === p.id ? " is-entering" : ""}${hasDeal ? " has-deal" : ""}`}
                 >
-                  <Link to={`/portals/${p.id}/projects`} className="linked-card-main">
-                    <span
-                      className="linked-avatar"
-                      style={{ background: hueFromId(p.id) }}
+                  <header className="linked-card-top">
+                    <Link to={`/portals/${p.id}/projects`} className="linked-card-main">
+                      <span
+                        className="linked-avatar"
+                        style={{ background: hueFromId(p.id) }}
+                      >
+                        {initials(p)}
+                      </span>
+                      <div className="linked-meta">
+                        <strong>{title}</strong>
+                        <span className="muted">{p.domain}</span>
+                      </div>
+                    </Link>
+                    <button
+                      type="button"
+                      className="linked-unlink"
+                      title="Отключить клиента"
+                      onClick={() => setPendingUnlink({ linkId: link.id, name: title })}
                     >
-                      {initials(p)}
-                    </span>
-                    <div className="linked-meta">
-                      <strong>{title}</strong>
-                      <span className="muted">{p.domain}</span>
-                    </div>
-                  </Link>
+                      Отключить
+                    </button>
+                  </header>
 
                   <div className="deal-bind">
-                    <label className="deal-bind-label" htmlFor={`company-${p.id}`}>
-                      Компания CRM
-                    </label>
-                    {binding?.deal_title ? (
-                      <span className="deal-bind-title muted">
-                        Сделка: {binding.deal_title}
-                        {binding.deal_id ? ` (#${binding.deal_id})` : ""}
-                      </span>
-                    ) : null}
-                    {binding &&
-                    (binding.paid_hours != null || binding.remaining_hours != null) ? (
-                      <span className="deal-bind-hours">
-                        {binding.paid_hours != null ? (
-                          <span>Оплачено: {binding.paid_hours} ч</span>
-                        ) : null}
-                        {binding.paid_hours != null && binding.remaining_hours != null
-                          ? " · "
-                          : null}
-                        {binding.remaining_hours != null ? (
-                          <span>Остаток: {binding.remaining_hours} ч</span>
-                        ) : null}
-                      </span>
-                    ) : null}
-                    <div className="deal-bind-row">
-                      <input
-                        id={`company-${p.id}`}
-                        className="deal-bind-input"
-                        inputMode="numeric"
-                        placeholder="ID компании, напр. 42"
-                        value={companyValue}
-                        onChange={(e) =>
-                          setCompanyDrafts((prev) => ({ ...prev, [p.id]: e.target.value }))
-                        }
-                        disabled={dealBusy}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        disabled={dealBusy || !companyValue.trim()}
-                        onClick={() => void findDealByCompany(p.id, link)}
-                      >
-                        {dealBusy ? "…" : "Найти сделку"}
-                      </button>
-                      {binding ? (
+                    {hasDeal ? (
+                      <div className="deal-bind-status">
+                        <div className="deal-bind-status-text">
+                          <span className="deal-bind-kicker">Сделка сопровождения</span>
+                          <strong className="deal-bind-deal-name">
+                            {binding?.deal_title || `Сделка #${binding?.deal_id}`}
+                          </strong>
+                          {binding?.deal_id ? (
+                            <span className="deal-bind-deal-id">#{binding.deal_id}</span>
+                          ) : null}
+                        </div>
+                        {(binding?.paid_hours != null || binding?.remaining_hours != null) && (
+                          <div className="deal-hours" aria-label="Часы по сделке">
+                            {binding.paid_hours != null ? (
+                              <div className="deal-hours-cell">
+                                <span className="deal-hours-label">Оплачено</span>
+                                <span className="deal-hours-value">{binding.paid_hours}</span>
+                                <span className="deal-hours-unit">ч</span>
+                              </div>
+                            ) : null}
+                            {binding.remaining_hours != null ? (
+                              <div className="deal-hours-cell is-remaining">
+                                <span className="deal-hours-label">Остаток</span>
+                                <span className="deal-hours-value">{binding.remaining_hours}</span>
+                                <span className="deal-hours-unit">ч</span>
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="deal-bind-hint">
+                        Укажите ID компании из CRM агентства — найдём открытую сделку.
+                      </p>
+                    )}
+
+                    <div className="deal-bind-form">
+                      <label className="deal-bind-label" htmlFor={`company-${p.id}`}>
+                        ID компании
+                      </label>
+                      <div className="deal-bind-row">
+                        <input
+                          id={`company-${p.id}`}
+                          className="deal-bind-input"
+                          inputMode="numeric"
+                          placeholder="Напр. 40"
+                          value={companyValue}
+                          onChange={(e) =>
+                            setCompanyDrafts((prev) => ({ ...prev, [p.id]: e.target.value }))
+                          }
+                          disabled={dealBusy}
+                        />
                         <button
                           type="button"
-                          className="btn btn-ghost"
-                          disabled={dealBusy}
-                          onClick={() => void refreshDealHours(p.id)}
-                          title="Обновить часы из Bitrix"
+                          className="btn btn-accent"
+                          disabled={dealBusy || !companyValue.trim()}
+                          onClick={() => void findDealByCompany(p.id, link)}
                         >
-                          Часы
+                          {dealBusy ? "…" : hasDeal ? "Обновить" : "Найти"}
                         </button>
-                      ) : null}
-                      {binding ? (
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          disabled={dealBusy}
-                          onClick={() => void clearDealBinding(p.id)}
-                        >
-                          Снять
-                        </button>
+                      </div>
+                      {hasDeal ? (
+                        <div className="deal-bind-actions">
+                          <button
+                            type="button"
+                            className="deal-bind-linkbtn"
+                            disabled={dealBusy}
+                            onClick={() => void refreshDealHours(p.id)}
+                          >
+                            Обновить часы
+                          </button>
+                          <button
+                            type="button"
+                            className="deal-bind-linkbtn is-danger"
+                            disabled={dealBusy}
+                            onClick={() => void clearDealBinding(p.id)}
+                          >
+                            Снять привязку
+                          </button>
+                        </div>
                       ) : null}
                     </div>
                   </div>
-
-                  <button
-                    type="button"
-                    className="linked-unlink"
-                    title="Отключить клиента"
-                    onClick={() => setPendingUnlink({ linkId: link.id, name: title })}
-                  >
-                    Отключить
-                  </button>
-                </div>
+                </article>
               );
             })}
           </div>
