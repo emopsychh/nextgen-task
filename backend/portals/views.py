@@ -287,9 +287,14 @@ class PortalViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.is_agency:
-            # Own portal + all client portals (needed to create PortalLink)
+            # Own portal + real client portals (skip broken installs without domain)
             return Portal.objects.filter(
-                Q(id=user.portal.id) | Q(role=Portal.Role.CLIENT)
+                Q(id=user.portal.id)
+                | (
+                    Q(role=Portal.Role.CLIENT)
+                    & ~Q(domain="")
+                    & ~Q(domain__iexact="unknown")
+                )
             )
         return Portal.objects.filter(id=user.portal.id)
 

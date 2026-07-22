@@ -22,15 +22,46 @@ def _extract_bitrix_id(result) -> str:
     return str(result.get("id") or result.get("taskId") or "")
 
 
-def _task_fields(task) -> dict:
+def _bitrix_user_id(user_data: dict) -> str:
+    return str(user_data.get("ID") or user_data.get("id") or "")
+
+
+def _resolve_responsible_id(client: BitrixClient, task) -> str:
+    """
+    Bitrix requires RESPONSIBLE_ID on the same portal as the task.
+    Agency users creating work on a client portal must not use their agency user id.
+    """
+    portal = task.project.portal
+    if (
+        task.created_by_id
+        and task.created_by
+        and task.created_by.portal_id == portal.id
+        and task.created_by.bitrix_id
+    ):
+        return str(task.created_by.bitrix_id)
+    current = client.get_current_user()
+    uid = _bitrix_user_id(current)
+    if uid:
+        return uid
+    # Fallback: any user stored for this portal
+    from portals.models import BitrixUser
+
+    local = portal.users.order_by("-is_admin", "id").first()
+    return str(local.bitrix_id) if local else ""
+
+
+def _task_fields(task, *, responsible_id: str | None = None) -> dict:
     fields = {
         "TITLE": task.title,
         "DESCRIPTION": task.description or "",
     }
-    if task.due_date:
-        fields["DEADLINE"] = datetime.combine(task.due_date, time(23, 59, 59)).strftime(
+    if due := task.due_date:
+        fields["DEADLINE"] = datetime.combine(due, time(23, 59, 59)).strftime(
             "%Y-%m-%dT23:59:59+00:00"
         )
+    if responsible_id:
+        fields["RESPONSIBLE_ID"] = responsible_id
+        fields["CREATED_BY"] = responsible_id
     return fields
 
 
@@ -87,7 +118,9 @@ def sync_task_to_bitrix(self, task_id: int):
     from board.models import Task
 
     try:
-        task = Task.objects.select_related("project", "project__portal").get(pk=task_id)
+        task = Task.objects.select_related(
+            "project", "project__portal", "created_by"
+        ).get(pk=task_id)
     except Task.DoesNotExist:
         return {"ok": False, "reason": "missing"}
 
@@ -98,14 +131,21 @@ def sync_task_to_bitrix(self, task_id: int):
         task.save(update_fields=["sync_status", "sync_error", "updated_at"])
         return {"ok": False, "reason": "no_token"}
 
-    fields = _task_fields(task)
     client = BitrixClient(portal)
     try:
+        responsible_id = _resolve_responsible_id(client, task)
+        if not responsible_id and not task.bitrix_task_id:
+            raise BitrixAPIError(
+                "Не указан исполнитель: откройте приложение на портале клиента, "
+                "чтобы обновить токен, и повторите сохранение задачи"
+            )
+
         if task.bitrix_task_id:
+            fields = _task_fields(task)
             client.update_task(task.bitrix_task_id, fields)
             apply_bitrix_status(client, task.bitrix_task_id, task.status)
         else:
-            # New tasks start as "waiting for execution" in Bitrix; no STATUS field.
+            fields = _task_fields(task, responsible_id=responsible_id)
             result = client.create_task(fields)
             bitrix_id = _extract_bitrix_id(result)
             task.bitrix_task_id = bitrix_id

@@ -149,13 +149,15 @@ def upsert_portal_from_auth(auth: dict, domain: str | None = None) -> Portal:
     if "://" in str(portal_domain):
         portal_domain = portal_domain.split("://", 1)[1]
     portal_domain = str(portal_domain).rstrip("/").replace("/rest/", "").replace("/rest", "")
+    if not portal_domain or portal_domain.lower() == "unknown":
+        raise serializers.ValidationError("domain required")
 
     role = resolve_portal_role(member_id, portal_domain)
 
     portal, _ = Portal.objects.update_or_create(
         member_id=member_id,
         defaults={
-            "domain": portal_domain or "unknown",
+            "domain": portal_domain,
             "role": role,
             "access_token": auth.get("access_token", ""),
             "refresh_token": auth.get("refresh_token", ""),
@@ -166,6 +168,10 @@ def upsert_portal_from_auth(auth: dict, domain: str | None = None) -> Portal:
             "is_active": True,
         },
     )
+    # Prefer Bitrix domain as display name when empty
+    if not portal.name:
+        portal.name = portal_domain.split(".")[0]
+        portal.save(update_fields=["name", "updated_at"])
     return portal
 
 
