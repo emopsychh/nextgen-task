@@ -36,7 +36,7 @@ class Task(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="tasks")
     title = models.CharField(max_length=500)
     description = models.TextField(blank=True)
-    due_date = models.DateField(null=True, blank=True)
+    due_date = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.TODO)
     bitrix_task_id = models.CharField(max_length=64, blank=True)
     agency_bitrix_task_id = models.CharField(max_length=64, blank=True)
@@ -106,6 +106,9 @@ class Attachment(models.Model):
         blank=True,
         related_name="attachments",
     )
+    # Bitrix Disk / task file ids (client / agency copies)
+    bitrix_file_id = models.CharField(max_length=64, blank=True, db_index=True)
+    agency_bitrix_file_id = models.CharField(max_length=64, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

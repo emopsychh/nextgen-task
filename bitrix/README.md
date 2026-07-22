@@ -6,13 +6,13 @@ Create a **Local application** in Bitrix24 Cloud (Developer resources).
 |------------|--------|
 | Путь вашего обработчика | `{PUBLIC_APP_URL}/api/bitrix/entry/` |
 | Путь для первоначальной установки | `{PUBLIC_APP_URL}/api/bitrix/install/` |
-| Scopes | `task`, `user`, **`crm`** (агентство) |
+| Scopes | `task`, `user`, **`crm`**, **`disk`**, **`im`** |
 
 Install wizard must call `BX24.installFinish()` (handled by `/api/bitrix/install/`). Without it Bitrix reopen install forever.
 
 Copy Client ID / Client Secret / Application token into `.env`.
 
-**Агентство:** после добавления scope `crm` переустановите/обновите права локального приложения, иначе пост в сделку вернёт ошибку доступа.
+**Агентство:** после добавления scope `crm` / `disk` / `im` переустановите/обновите права локального приложения (файлы в задачи + уведомления о комментариях + сделки).
 
 See root `README.md` for full install flow across agency + client portals.
 

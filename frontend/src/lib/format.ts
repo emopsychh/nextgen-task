@@ -1,4 +1,4 @@
-import { parseISODate } from "./dates";
+import { parseDue } from "./dates";
 
 export function formatClock(iso: string): string {
   return new Date(iso).toLocaleTimeString("ru-RU", {
@@ -20,11 +20,16 @@ export function formatDayLabel(iso: string): string {
 
 export function formatDueFull(iso: string | null): string {
   if (!iso) return "Не задан";
-  return parseISODate(iso).toLocaleDateString("ru-RU", {
+  const d = parseDue(iso);
+  const date = d.toLocaleDateString("ru-RU", {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   });
+  const hasTime = iso.includes("T") || iso.includes(" ");
+  if (!hasTime) return date;
+  const time = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  return `${date}, ${time}`;
 }
 
 export function formatDateTime(iso: string): string {

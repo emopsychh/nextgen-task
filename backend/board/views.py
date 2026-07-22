@@ -23,6 +23,7 @@ from .serializers import (
 )
 from .tasks import sync_comment_to_bitrix, sync_project_to_bitrix, sync_task_to_bitrix
 from .timeutils import enqueue_timer_bitrix_sync, stop_time_entry
+from .realtime import publish_portal_event, publish_task_event
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("No access to this portal")
         project = serializer.save()
         enqueue_project_sync(project.id)
+        publish_portal_event(project.portal_id, {"kind": "project_create", "project_id": project.id})
         project.refresh_from_db()
         serializer.instance = project
 
@@ -307,11 +309,18 @@ class TaskViewSet(viewsets.ModelViewSet):
         if request.query_params.get("pull") in ("1", "true", "yes"):
             try:
                 from board.comment_sync import pull_comments_from_bitrix
+                from board.file_sync import pull_attachments_from_bitrix
                 from board.status_sync import pull_task_status_from_bitrix
+                from portals.deal_resolve import refresh_deal_hours_for_portal
 
                 changed = pull_task_status_from_bitrix(instance)
                 pulled = pull_comments_from_bitrix(instance)
-                if changed or pulled:
+                files = pull_attachments_from_bitrix(instance)
+                try:
+                    refresh_deal_hours_for_portal(instance.project.portal)
+                except Exception:
+                    pass
+                if changed or pulled or files:
                     instance.refresh_from_db()
             except Exception:
                 logger.exception("Bitrix status pull failed for task %s", instance.id)
@@ -331,6 +340,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             extras["status"] = Task.Status.TODO
         task = serializer.save(**extras)
         enqueue_bitrix_sync(task.id)
+        publish_task_event(task, kind="task_create")
         task.refresh_from_db()
         serializer.instance = task
 
@@ -388,6 +398,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             old_due=old_due,
         )
         enqueue_bitrix_sync(task.id)
+        publish_task_event(task, kind="task_update")
         task.refresh_from_db()
         serializer.instance = task
 
@@ -460,6 +471,7 @@ class CommentViewSet(viewsets.ModelViewSet):
             author=author, author_name=author.display_name, is_system=False
         )
         enqueue_comment_sync(comment.id)
+        publish_task_event(task, kind="comment")
 
     def perform_destroy(self, instance):
         user = self.request.user
@@ -501,3 +513,11 @@ class AttachmentViewSet(viewsets.ModelViewSet):
             uploaded_by=self.request.user.bitrix_user,
             original_name=name,
         )
+        attachment = serializer.instance
+        publish_task_event(task, kind="attachment")
+        from board.tasks import sync_attachment_to_bitrix
+
+        if settings.CELERY_TASK_ALWAYS_EAGER:
+            sync_attachment_to_bitrix(attachment.id)
+        else:
+            sync_attachment_to_bitrix.delay(attachment.id)

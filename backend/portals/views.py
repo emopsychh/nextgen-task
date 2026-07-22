@@ -618,6 +618,24 @@ class BitrixEventView(APIView):
             result = handle_bitrix_task_update(
                 portal=portal, bitrix_task_id=str(bitrix_task_id), event_data=data
             )
+        try:
+            from board.realtime import publish_portal_event, publish_task_event
+            from board.models import Task
+
+            task_id = (result or {}).get("task_id")
+            if task_id:
+                t = Task.objects.select_related("project").filter(pk=task_id).first()
+                if t:
+                    publish_task_event(t, kind=event_u.lower())
+            else:
+                # Agency ingest may create project under a client portal
+                client_id = (result or {}).get("client_portal_id")
+                if client_id:
+                    publish_portal_event(client_id, {"kind": event_u.lower()})
+                elif portal.role == PortalModel.Role.CLIENT:
+                    publish_portal_event(portal.id, {"kind": event_u.lower()})
+        except Exception:
+            pass
         return Response(result)
 
     def get(self, request):

@@ -3,5 +3,5 @@
   "code": "nextgen_task",
   "handler": "/api/bitrix/install/",
   "app_url": "/api/bitrix/entry/",
-  "scopes": ["task", "user"]
+  "scopes": ["task", "user", "disk", "im", "crm"]
 }

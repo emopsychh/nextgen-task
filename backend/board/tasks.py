@@ -79,14 +79,14 @@ def _task_fields(
 
 
 def _deadline_needs_push(client: BitrixClient, bitrix_task_id: str, due) -> bool:
-    """Skip DEADLINE in updates when Bitrix already has the same calendar date."""
-    from board.status_sync import parse_bitrix_deadline
+    """Skip DEADLINE in updates when Bitrix already has the same due (minute precision)."""
+    from board.status_sync import deadlines_equal, parse_bitrix_deadline
 
     try:
         current = parse_bitrix_deadline(client.get_task(bitrix_task_id) or {})
     except BitrixAPIError:
         return True
-    return current != due
+    return not deadlines_equal(current, due)
 
 
 def _normalize_local(status: str) -> str:
@@ -392,6 +392,12 @@ def sync_task_to_bitrix(self, task_id: int):
     task.sync_status = Task.SyncStatus.SYNCED
     task.sync_error = ""
     task.save(update_fields=list(set(update_fields)))
+    try:
+        from board.realtime import publish_task_event
+
+        publish_task_event(task, kind="task_synced")
+    except Exception:
+        pass
     return {
         "ok": True,
         "bitrix_task_id": task.bitrix_task_id,
@@ -488,7 +494,135 @@ def sync_comment_to_bitrix(self, comment_id: int):
             raise self.retry(exc=BitrixAPIError("; ".join(errors)))
         except self.MaxRetriesExceededError:
             return {"ok": False, "errors": errors}
+
+    # Notify Bitrix users on the agency task (best-effort)
+    try:
+        _notify_comment_participants(comment, agency, task)
+    except Exception:
+        pass
+
+    from board.realtime import publish_task_event
+
+    publish_task_event(task, kind="comment_synced")
     return {"ok": True, "posted": len(targets) - len(errors), "ids": saved_ids}
+
+
+def _notify_comment_participants(comment, agency, task) -> None:
+    """Send im.notify to responsible / creator / accomplices on agency Bitrix task."""
+    if not agency or not agency.access_token or not task.agency_bitrix_task_id:
+        return
+    client = BitrixClient(agency)
+    data = client.get_task(task.agency_bitrix_task_id) or {}
+    user_ids: set[str] = set()
+    for key in (
+        "responsibleId",
+        "RESPONSIBLE_ID",
+        "createdBy",
+        "CREATED_BY",
+    ):
+        val = data.get(key)
+        if val not in (None, "", "0", 0):
+            user_ids.add(str(val))
+    for key in ("accomplices", "ACCOMPLICES", "auditors", "AUDITORS"):
+        val = data.get(key)
+        if isinstance(val, list):
+            for item in val:
+                if item not in (None, "", "0", 0):
+                    user_ids.add(str(item))
+        elif isinstance(val, dict):
+            for item in val.values():
+                if item not in (None, "", "0", 0):
+                    user_ids.add(str(item))
+    author_bx = ""
+    if comment.author and comment.author.portal_id == agency.id:
+        author_bx = str(comment.author.bitrix_id or "")
+    preview = (comment.text or "").strip().replace("\n", " ")
+    if len(preview) > 120:
+        preview = preview[:117] + "…"
+    author_name = comment.author_name or (
+        comment.author.display_name if comment.author else "Участник"
+    )
+    message = f"[Nextgen] {author_name} в задаче «{task.title}»: {preview}"
+    for uid in user_ids:
+        if author_bx and uid == author_bx:
+            continue
+        try:
+            client.notify_user(uid, message)
+        except BitrixAPIError:
+            pass
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=15)
+def sync_attachment_to_bitrix(self, attachment_id: int):
+    """Upload a local attachment to Bitrix Disk and attach to linked task(s)."""
+    from board.file_sync import upload_and_attach
+    from board.models import Attachment
+    from board.realtime import publish_task_event
+
+    try:
+        attachment = Attachment.objects.select_related(
+            "task", "task__project", "task__project__portal", "comment", "comment__task"
+        ).get(pk=attachment_id)
+    except Attachment.DoesNotExist:
+        return {"ok": False, "reason": "missing"}
+
+    task = attachment.task
+    if not task and attachment.comment_id:
+        task = attachment.comment.task
+        if not attachment.task_id:
+            attachment.task = task
+            attachment.save(update_fields=["task"])
+    if not task:
+        return {"ok": False, "reason": "no_task"}
+
+    client_portal = task.project.portal
+    agency = _agency_portal_for_client(client_portal)
+    errors = []
+    update_fields = []
+
+    if task.bitrix_task_id and client_portal.access_token and not attachment.bitrix_file_id:
+        try:
+            fid = upload_and_attach(
+                client=BitrixClient(client_portal),
+                bitrix_task_id=task.bitrix_task_id,
+                attachment=attachment,
+            )
+            attachment.bitrix_file_id = fid
+            update_fields.append("bitrix_file_id")
+        except BitrixAPIError as exc:
+            errors.append(f"client: {exc}")
+
+    if (
+        agency
+        and task.agency_bitrix_task_id
+        and agency.access_token
+        and not attachment.agency_bitrix_file_id
+    ):
+        try:
+            fid = upload_and_attach(
+                client=BitrixClient(agency),
+                bitrix_task_id=task.agency_bitrix_task_id,
+                attachment=attachment,
+            )
+            attachment.agency_bitrix_file_id = fid
+            update_fields.append("agency_bitrix_file_id")
+        except BitrixAPIError as exc:
+            errors.append(f"agency: {exc}")
+
+    if update_fields:
+        attachment.save(update_fields=update_fields)
+        publish_task_event(task, kind="attachment_synced")
+
+    if errors:
+        try:
+            raise self.retry(exc=BitrixAPIError("; ".join(errors)))
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "errors": errors}
+    return {
+        "ok": True,
+        "bitrix_file_id": attachment.bitrix_file_id,
+        "agency_bitrix_file_id": attachment.agency_bitrix_file_id,
+    }
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)

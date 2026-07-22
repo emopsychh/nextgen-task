@@ -5,8 +5,10 @@ import {
   daysInMonth,
   dueMeta,
   mondayIndex,
+  parseDue,
   parseISODate,
   toISODate,
+  toISODateTime,
 } from "../lib/dates";
 
 type Props = {
@@ -40,7 +42,7 @@ function formatShortDate(d: Date): string {
 }
 
 function formatDotDate(iso: string): string {
-  const d = parseISODate(iso);
+  const d = parseDue(iso);
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   return `${dd}.${mm}.${d.getFullYear()}`;
@@ -73,15 +75,23 @@ export function DueDatePicker({
   variant = "button",
 }: Props) {
   const todayIso = toISODate(new Date());
-  const selected = value ? parseISODate(value) : null;
-  const initial = selected || new Date();
+  const selected = value ? parseDue(value) : null;
+  const initial = selected && !Number.isNaN(selected.getTime()) ? selected : new Date();
 
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>("date");
   const [viewYear, setViewYear] = useState(initial.getFullYear());
   const [viewMonth, setViewMonth] = useState(initial.getMonth());
-  const [hour, setHour] = useState("09");
-  const [minute, setMinute] = useState("00");
+  const [hour, setHour] = useState(() =>
+    selected && !Number.isNaN(selected.getTime())
+      ? String(selected.getHours()).padStart(2, "0")
+      : "18"
+  );
+  const [minute, setMinute] = useState(() =>
+    selected && !Number.isNaN(selected.getTime())
+      ? String(Math.floor(selected.getMinutes() / 5) * 5).padStart(2, "0")
+      : "00"
+  );
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -107,9 +117,12 @@ export function DueDatePicker({
 
   useEffect(() => {
     if (!value) return;
-    const d = parseISODate(value);
+    const d = parseDue(value);
+    if (Number.isNaN(d.getTime())) return;
     setViewYear(d.getFullYear());
     setViewMonth(d.getMonth());
+    setHour(String(d.getHours()).padStart(2, "0"));
+    setMinute(String(Math.floor(d.getMinutes() / 5) * 5).padStart(2, "0"));
   }, [value]);
 
   useEffect(() => {
@@ -218,15 +231,34 @@ export function DueDatePicker({
     setViewMonth(d.getMonth());
   }
 
+  function withTime(dateIso: string, h = hour, m = minute): string {
+    const d = parseISODate(dateIso.slice(0, 10));
+    d.setHours(Number(h), Number(m), 0, 0);
+    return toISODateTime(d);
+  }
+
   function pickDate(iso: string) {
-    onChange(iso);
+    onChange(withTime(iso));
   }
 
   function pickPreset(iso: string) {
-    onChange(iso);
-    const d = parseISODate(iso);
+    const next = withTime(iso);
+    onChange(next);
+    const d = parseDue(next);
     setViewYear(d.getFullYear());
     setViewMonth(d.getMonth());
+  }
+
+  function pickHour(h: string) {
+    setHour(h);
+    const base = value ? value.slice(0, 10) : todayIso;
+    onChange(withTime(base, h, minute));
+  }
+
+  function pickMinute(m: string) {
+    setMinute(m);
+    const base = value ? value.slice(0, 10) : todayIso;
+    onChange(withTime(base, hour, m));
   }
 
   const timeLabel = `${hour}:${minute}`;
@@ -234,8 +266,10 @@ export function DueDatePicker({
     ? `${formatDotDate(value)} ${timeLabel}`
     : "Выбрать срок";
   const inlineLabel = value
-    ? `${formatDotDate(value)}${meta.label ? ` · ${meta.label}` : ""}`
+    ? `${formatDotDate(value)} ${timeLabel}${meta.label ? ` · ${meta.label}` : ""}`
     : "Указать срок";
+
+  const valueDate = value ? value.slice(0, 10) : "";
 
   return (
     <div className={`due-picker${variant === "inline" ? " due-picker-inline" : ""}`} ref={rootRef}>
@@ -389,7 +423,7 @@ export function DueDatePicker({
                   type="button"
                   className="bx-due-time-btn"
                   onClick={() => {
-                    if (!value) onChange(todayIso);
+                    if (!value) onChange(withTime(todayIso));
                     setView("time");
                   }}
                 >
@@ -419,7 +453,7 @@ export function DueDatePicker({
                           key={h}
                           type="button"
                           className={`bx-due-slot${hour === h ? " selected" : ""}`}
-                          onClick={() => setHour(h)}
+                          onClick={() => pickHour(h)}
                         >
                           {h}
                         </button>
@@ -435,7 +469,7 @@ export function DueDatePicker({
                           key={m}
                           type="button"
                           className={`bx-due-slot${minute === m ? " selected" : ""}`}
-                          onClick={() => setMinute(m)}
+                          onClick={() => pickMinute(m)}
                         >
                           {m}
                         </button>
@@ -451,7 +485,7 @@ export function DueDatePicker({
                 <button
                   key={p.id}
                   type="button"
-                  className={`bx-due-preset${value === p.iso ? " active" : ""}`}
+                  className={`bx-due-preset${valueDate === p.iso ? " active" : ""}`}
                   onClick={() => pickPreset(p.iso)}
                 >
                   <strong>{p.label}</strong>

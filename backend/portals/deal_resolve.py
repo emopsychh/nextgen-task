@@ -169,6 +169,44 @@ def sync_deal_hours_meta(client: BitrixClient, deal_id: str, deal: dict | None =
     return meta
 
 
+def refresh_deal_hours_for_portal(client_portal) -> bool:
+    """Refresh cached deal hours for a client portal (best-effort, agency CRM)."""
+    from portals.models import PortalDealBinding, PortalLink
+
+    link = (
+        PortalLink.objects.filter(client_portal=client_portal)
+        .select_related("agency_portal")
+        .first()
+    )
+    if not link or not link.agency_portal or not link.agency_portal.access_token:
+        return False
+    binding = (
+        PortalDealBinding.objects.filter(
+            client_portal=client_portal,
+            agency_portal=link.agency_portal,
+            is_active=True,
+        )
+        .order_by("-updated_at")
+        .first()
+    )
+    if not binding or not binding.deal_id:
+        return False
+    client = BitrixClient(link.agency_portal)
+    meta = sync_deal_hours_meta(client, binding.deal_id)
+    update_fields = ["updated_at"]
+    if meta.get("deal_title"):
+        binding.deal_title = meta["deal_title"]
+        update_fields.append("deal_title")
+    if meta.get("paid_hours") is not None:
+        binding.paid_hours = meta["paid_hours"]
+        update_fields.append("paid_hours")
+    if meta.get("remaining_hours") is not None:
+        binding.remaining_hours = meta["remaining_hours"]
+        update_fields.append("remaining_hours")
+    binding.save(update_fields=list(set(update_fields)))
+    return True
+
+
 def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str | None = None):
     """
     Ensure an active PortalDealBinding exists for the client.

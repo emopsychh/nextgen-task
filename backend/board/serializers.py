@@ -7,7 +7,10 @@ from .models import Attachment, Comment, Project, Task, TimeEntry
 
 
 def _clean_task_title(instance: Task) -> str:
-    """Strip legacy [portal] prefixes from title; persist if dirty."""
+    """Strip legacy [portal] prefixes from title; persist if dirty and push to Bitrix."""
+    from django.conf import settings
+
+    from board.tasks import sync_task_to_bitrix
     from board.titles import strip_portal_title_prefix
 
     client_portal = instance.project.portal if instance.project_id else None
@@ -15,6 +18,13 @@ def _clean_task_title(instance: Task) -> str:
     if cleaned and cleaned != instance.title:
         Task.objects.filter(pk=instance.pk).update(title=cleaned)
         instance.title = cleaned
+        try:
+            if settings.CELERY_TASK_ALWAYS_EAGER:
+                sync_task_to_bitrix(instance.id)
+            else:
+                sync_task_to_bitrix.delay(instance.id)
+        except Exception:
+            pass
     return instance.title or ""
 
 
@@ -114,6 +124,11 @@ class TaskSerializer(serializers.ModelSerializer):
     active_timer = serializers.SerializerMethodField()
     deal_paid_hours = serializers.SerializerMethodField()
     deal_remaining_hours = serializers.SerializerMethodField()
+    due_date = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+        input_formats=["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d"],
+    )
 
     class Meta:
         model = Task

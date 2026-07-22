@@ -1,8 +1,21 @@
+/** Due date / datetime helpers. Values are ISO strings (date or datetime). */
+
 export function toISODate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/** Local wall-clock datetime without timezone suffix (matches Bitrix writes). */
+export function toISODateTime(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${y}-${m}-${day}T${h}:${min}:${s}`;
 }
 
 export function startOfDay(d: Date): Date {
@@ -15,27 +28,59 @@ export function addDays(d: Date, n: number): Date {
   return next;
 }
 
+/** Parse due value as local Date (date-only or datetime, with/without Z). */
+export function parseDue(iso: string): Date {
+  const text = (iso || "").trim();
+  if (!text) return new Date(NaN);
+  // Date-only YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const [y, m, d] = text.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  // Naive datetime → treat as local wall clock
+  const naive = text.match(
+    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/
+  );
+  if (naive && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) {
+    return new Date(
+      Number(naive[1]),
+      Number(naive[2]) - 1,
+      Number(naive[3]),
+      Number(naive[4]),
+      Number(naive[5]),
+      Number(naive[6] || 0)
+    );
+  }
+  return new Date(text);
+}
+
+/** @deprecated use parseDue — kept for calendar date grids */
 export function parseISODate(iso: string): Date {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, m - 1, d);
+  return parseDue(iso.length >= 10 ? iso.slice(0, 10) : iso);
 }
 
 export function formatRuDate(iso: string): string {
-  return parseISODate(iso).toLocaleDateString("ru-RU", {
+  return parseDue(iso).toLocaleDateString("ru-RU", {
     day: "numeric",
     month: "short",
   });
 }
 
 export function formatRuDateLong(iso: string): string {
-  return parseISODate(iso).toLocaleDateString("ru-RU", {
+  return parseDue(iso).toLocaleDateString("ru-RU", {
     weekday: "long",
     day: "numeric",
     month: "long",
   });
 }
 
-export type DueTone = "due-none" | "due-ok" | "due-soon" | "due-today" | "due-overdue" | "due-done";
+export type DueTone =
+  | "due-none"
+  | "due-ok"
+  | "due-soon"
+  | "due-today"
+  | "due-overdue"
+  | "due-done";
 
 export function dueMeta(
   due: string | null,
@@ -50,12 +95,14 @@ export function dueMeta(
   }
   if (!due) return { label: "Без срока", tone: "due-none" };
 
-  const today = startOfDay(new Date());
-  const target = startOfDay(parseISODate(due));
-  const days = Math.round((target.getTime() - today.getTime()) / 86400000);
+  const now = new Date();
+  const target = parseDue(due);
+  const today = startOfDay(now);
+  const targetDay = startOfDay(target);
+  const days = Math.round((targetDay.getTime() - today.getTime()) / 86400000);
 
-  if (days < 0) {
-    const n = Math.abs(days);
+  if (target.getTime() < now.getTime()) {
+    const n = Math.abs(days) || 1;
     return {
       label: n === 1 ? "Просрочено на 1 день" : `Просрочено на ${n} дн.`,
       tone: "due-overdue",

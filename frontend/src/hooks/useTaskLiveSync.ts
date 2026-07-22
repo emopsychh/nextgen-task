@@ -1,8 +1,9 @@
 import { useEffect, useRef } from "react";
 import { api, type Task } from "../api/types";
+import { usePortalLiveSync } from "./usePortalLiveSync";
 
-const POLL_MS = 2500;
-const PULL_EVERY = 4; // Bitrix pull ~ every 10s; other ticks read local DB only
+const POLL_MS = 2000;
+const PULL_EVERY = 6; // Bitrix pull ~ every 12s
 
 function fingerprint(task: Task): string {
   const comments = task.comments || [];
@@ -34,21 +35,21 @@ type Options = {
   token: string | null;
   taskId: string | undefined;
   task: Task | null;
+  portalId?: number | null;
   enabled?: boolean;
-  /** Current drafts — used so we don't overwrite in-progress edits. */
   draftTitle: string;
   draftDescription: string;
   onUpdate: (task: Task, drafts: { title?: string; description?: string }) => void;
 };
 
 /**
- * Soft realtime: poll the task while the tab is visible.
- * Enough for chat + status without WebSockets on the current stack.
+ * Soft realtime: SSE for instant refresh + local poll; Bitrix pull sparingly.
  */
 export function useTaskLiveSync({
   token,
   taskId,
   task,
+  portalId,
   enabled = true,
   draftTitle,
   draftDescription,
@@ -58,6 +59,7 @@ export function useTaskLiveSync({
   const draftRef = useRef({ title: draftTitle, description: draftDescription });
   const serverRef = useRef<{ title: string; description: string } | null>(null);
   const fpRef = useRef<string>("");
+  const pullNowRef = useRef(false);
 
   onUpdateRef.current = onUpdate;
   draftRef.current = { title: draftTitle, description: draftDescription };
@@ -76,6 +78,15 @@ export function useTaskLiveSync({
     serverRef.current = null;
   }, [taskId]);
 
+  usePortalLiveSync({
+    token,
+    portalId: portalId ?? task?.portal_id ?? null,
+    enabled: enabled && !!taskId,
+    onEvent: () => {
+      pullNowRef.current = true;
+    },
+  });
+
   useEffect(() => {
     if (!token || !taskId || !enabled) return;
 
@@ -83,15 +94,19 @@ export function useTaskLiveSync({
     let inFlight = false;
     let tickCount = 0;
 
-    async function tick() {
+    async function tick(forcePull = false) {
       if (cancelled || inFlight) return;
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       inFlight = true;
       tickCount += 1;
       try {
-        // Local poll is cheap; Bitrix pull is expensive — use it sparingly.
-        // Webhooks update DB; pull catches missed deadline/status changes.
-        const pull = tickCount === 1 || tickCount % PULL_EVERY === 0 ? "?pull=1" : "";
+        const wantPull =
+          forcePull ||
+          pullNowRef.current ||
+          tickCount === 1 ||
+          tickCount % PULL_EVERY === 0;
+        pullNowRef.current = false;
+        const pull = wantPull ? "?pull=1" : "";
         const data = await api<Task>(`/api/tasks/${taskId}/${pull}`, {}, token);
         if (cancelled) return;
         const fp = fingerprint(data);
@@ -115,14 +130,16 @@ export function useTaskLiveSync({
     }
 
     const onVisible = () => {
-      if (document.visibilityState === "visible") void tick();
+      if (document.visibilityState === "visible") void tick(true);
     };
     document.addEventListener("visibilitychange", onVisible);
-    const id = window.setInterval(() => void tick(), POLL_MS);
+    void tick(true);
+    const id = window.setInterval(() => void tick(false), POLL_MS);
+
     return () => {
       cancelled = true;
-      window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(id);
     };
   }, [token, taskId, enabled]);
 }

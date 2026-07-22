@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, unwrapList, type Project, type Task, type TaskStatus } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { DueDatePicker } from "../../components/DueDatePicker";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
+import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { dueMeta } from "../../lib/dates";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 
@@ -72,7 +73,17 @@ export function ProjectTasks() {
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, [token, projectId]);
 
-  // Soft realtime: cheap local poll; Bitrix pull only every ~15s
+  const pullNowRef = useRef(false);
+  usePortalLiveSync({
+    token,
+    portalId: project?.portal ?? null,
+    enabled: !!projectId,
+    onEvent: () => {
+      pullNowRef.current = true;
+    },
+  });
+
+  // Soft realtime: cheap local poll; Bitrix pull only every ~15s (or on SSE)
   useEffect(() => {
     if (!token || !projectId) return;
     let cancelled = false;
@@ -85,7 +96,9 @@ export function ProjectTasks() {
       inFlight = true;
       tickCount += 1;
       try {
-        const pull = tickCount % 5 === 0 ? "&pull=1" : "";
+        const wantPull = pullNowRef.current || tickCount % 5 === 0;
+        pullNowRef.current = false;
+        const pull = wantPull ? "&pull=1" : "";
         const taskData = await api<Task[] | { results: Task[] }>(
           `/api/tasks/?project=${projectId}${pull}`,
           {},
@@ -99,7 +112,7 @@ export function ProjectTasks() {
       }
     }
 
-    const id = window.setInterval(() => void tick(), 3000);
+    const id = window.setInterval(() => void tick(), 2500);
     const onVisible = () => {
       if (document.visibilityState === "visible") void tick();
     };

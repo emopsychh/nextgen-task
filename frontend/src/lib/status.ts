@@ -1,5 +1,5 @@
 import type { TaskStatus } from "../api/types";
-import { parseISODate, startOfDay } from "./dates";
+import { parseDue } from "./dates";
 
 /** Bitrix-aligned labels for local statuses */
 export const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -16,7 +16,5 @@ export const STATUS_TONE: Record<TaskStatus, string> = {
 
 export function isTaskOverdue(dueDate: string | null | undefined, status: TaskStatus): boolean {
   if (!dueDate || status === "done") return false;
-  const today = startOfDay(new Date());
-  const due = startOfDay(parseISODate(dueDate));
-  return due.getTime() < today.getTime();
+  return parseDue(dueDate).getTime() < Date.now();
 }

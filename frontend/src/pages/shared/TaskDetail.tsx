@@ -70,6 +70,7 @@ export function TaskDetail() {
     token,
     taskId,
     task,
+    portalId: task?.portal_id ?? portal?.id ?? null,
     draftTitle,
     draftDescription,
     onUpdate: (data, drafts) => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
@@ -11,6 +11,7 @@ import {
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
+import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 
 const TYPE_META: Record<
   ActivityType,
@@ -101,6 +102,61 @@ export function ClientProjects() {
 
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
+  }, [token, portalId]);
+
+  const reloadRef = useRef<() => void>(() => undefined);
+  reloadRef.current = () => {
+    void load().catch(() => undefined);
+  };
+
+  usePortalLiveSync({
+    token,
+    portalId,
+    onEvent: () => reloadRef.current(),
+  });
+
+  // Soft realtime for projects + activity (safety net)
+  useEffect(() => {
+    if (!token || !portalId) return;
+    let cancelled = false;
+    let tickCount = 0;
+    let inFlight = false;
+
+    async function tick(forcePull = false) {
+      if (cancelled || inFlight) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      inFlight = true;
+      tickCount += 1;
+      try {
+        const wantPull = forcePull || tickCount % 4 === 0;
+        const qs = wantPull
+          ? `/api/projects/?portal=${portalId}&pull=1`
+          : `/api/projects/?portal=${portalId}`;
+        const [projectData, activityData] = await Promise.all([
+          api<Project[] | { results: Project[] }>(qs, {}, token!),
+          api<ActivityEvent[]>(`/api/activity/?portal=${portalId}`, {}, token!),
+        ]);
+        if (!cancelled) {
+          setProjects(unwrapList(projectData));
+          setActivity(Array.isArray(activityData) ? activityData : []);
+        }
+      } catch {
+        // next tick
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    const id = window.setInterval(() => void tick(false), 5000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void tick(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [token, portalId]);
 
   async function createProject(e: React.FormEvent) {

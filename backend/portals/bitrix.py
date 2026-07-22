@@ -229,6 +229,85 @@ class BitrixClient:
             },
         )
 
+    def notify_user(self, user_id: int | str, message: str) -> dict:
+        """Best-effort Bitrix IM notification (requires `im` scope)."""
+        try:
+            return self.call(
+                "im.notify.system.add",
+                {"USER_ID": user_id, "MESSAGE": message},
+            )
+        except BitrixAPIError:
+            return self.call(
+                "im.notify",
+                {"to": user_id, "message": message, "type": "SYSTEM"},
+            )
+
+    def get_app_storage(self) -> dict:
+        result = self.call("disk.storage.getforapp")
+        return result if isinstance(result, dict) else {}
+
+    def upload_file_to_folder(
+        self, folder_id: int | str, filename: str, content: bytes
+    ) -> dict:
+        import base64
+
+        result = self.call(
+            "disk.folder.uploadfile",
+            {
+                "id": folder_id,
+                "data": {"NAME": filename},
+                "fileContent": [filename, base64.b64encode(content).decode("ascii")],
+            },
+        )
+        return result if isinstance(result, dict) else {"ID": result}
+
+    def attach_file_to_task(self, task_id: int | str, file_id: int | str) -> dict:
+        try:
+            return self.call(
+                "tasks.task.files.attach",
+                {"taskId": task_id, "fileId": file_id},
+            )
+        except BitrixAPIError:
+            return self.call(
+                "task.item.addfile",
+                {"TASKID": task_id, "FILE_ID": file_id},
+            )
+
+    def list_task_files(self, task_id: int | str) -> list[dict]:
+        try:
+            result = self.call("tasks.task.files.getlist", {"taskId": task_id})
+        except BitrixAPIError:
+            try:
+                result = self.call("task.item.getfiles", {"TASKID": task_id})
+            except BitrixAPIError:
+                return []
+        if isinstance(result, list):
+            return [r for r in result if isinstance(r, dict)]
+        if isinstance(result, dict):
+            for key in ("files", "result", "items"):
+                val = result.get(key)
+                if isinstance(val, list):
+                    return [r for r in val if isinstance(r, dict)]
+        return []
+
+    def download_disk_file(self, file_id: int | str) -> bytes:
+        meta = self.call("disk.file.get", {"id": file_id})
+        if not isinstance(meta, dict):
+            return b""
+        url = (
+            meta.get("DOWNLOAD_URL")
+            or meta.get("downloadUrl")
+            or meta.get("DOWNLOAD_URL_INTERNAL")
+            or ""
+        )
+        if not url:
+            return b""
+        self._ensure_token()
+        resp = requests.get(url, params={"auth": self.portal.access_token}, timeout=60)
+        if resp.status_code >= 400:
+            raise BitrixAPIError(f"download failed {resp.status_code}")
+        return resp.content
+
 
 # Bitrix task status: 2=Pending, 3=In progress, 4=Supposedly completed, 5=Completed, 6=Deferred
 BITRIX_STATUS_PENDING = 2

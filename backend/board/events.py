@@ -1,15 +1,17 @@
-from datetime import date
+from datetime import date, datetime
 
 from .models import Comment, Task
 
 
-def _format_due(value: date | None) -> str:
+def _format_due(value: date | datetime | None) -> str:
     if not value:
         return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d.%m.%Y %H:%M")
     return value.strftime("%d.%m.%Y")
 
 
-def due_event_text(old: date | None, new: date | None) -> str | None:
+def due_event_text(old, new) -> str | None:
     if old == new:
         return None
     if new and not old:
@@ -24,7 +26,7 @@ def append_task_change_events(
     task: Task,
     author,
     old_status: str,
-    old_due: date | None,
+    old_due,
 ) -> list[Comment]:
     """Create system chat lines for deadline changes only.
 
