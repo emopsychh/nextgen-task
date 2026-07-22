@@ -1032,6 +1032,54 @@ a {
   margin: 0 0 4px;
 }
 
+.how-it-works {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+@media (max-width: 900px) {
+  .how-it-works {
+    grid-template-columns: 1fr;
+  }
+}
+
+.how-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+}
+
+.how-step strong {
+  font-size: 0.95rem;
+  letter-spacing: -0.02em;
+}
+
+.how-step p {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--ink-muted);
+}
+
+.how-num {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
 .connect-panel,
 .connect-card {
   background: var(--bg-elevated);
@@ -1049,6 +1097,12 @@ a {
 
 .connect-head .section-title {
   margin: 0;
+}
+
+.connect-empty {
+  margin: 0;
+  padding: 8px 0 2px;
+  font-size: 0.92rem;
 }
 
 .portal-pick-grid,

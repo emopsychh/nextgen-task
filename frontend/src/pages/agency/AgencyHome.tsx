@@ -203,11 +203,35 @@ export function AgencyHome() {
       {error && <div className="error-banner">{error}</div>}
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
-      {available.length > 0 ? (
-        <section className="connect-card">
-          <div className="connect-head">
-            <h2 className="section-title">Подключить</h2>
+      <section className="how-it-works" aria-label="Как это работает">
+        <div className="how-step">
+          <span className="how-num">1</span>
+          <div>
+            <strong>Установите приложение</strong>
+            <p>На портале клиента в Битрикс24</p>
           </div>
+        </div>
+        <div className="how-step">
+          <span className="how-num">2</span>
+          <div>
+            <strong>Подключите клиента здесь</strong>
+            <p>Выберите портал из списка ниже</p>
+          </div>
+        </div>
+        <div className="how-step">
+          <span className="how-num">3</span>
+          <div>
+            <strong>Укажите компанию CRM</strong>
+            <p>Сделку найдём сами, часы спишутся с остатка</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="connect-card" data-tour="tour-connect-client">
+        <div className="connect-head">
+          <h2 className="section-title">Подключить клиента</h2>
+        </div>
+        {available.length > 0 ? (
           <form className="connect-form" onSubmit={linkClient}>
             <div className="portal-pick-list" role="listbox" aria-label="Клиентские порталы">
               {available.map((p) => {
@@ -244,20 +268,19 @@ export function AgencyHome() {
               </button>
             </div>
           </form>
-        </section>
-      ) : null}
+        ) : (
+          <p className="connect-empty muted">Клиентов для подключения нет</p>
+        )}
+      </section>
 
-      <section className="linked-section" data-tour="tour-connect-client">
+      <section className="linked-section">
         <div className="linked-head">
           <h2 className="section-title">Ваши клиенты</h2>
         </div>
 
         {links.length === 0 ? (
           <div className="empty-linked">
-            <p className="empty-linked-title">Пока пусто</p>
-            <p className="muted empty-linked-sub">
-              Клиент ставит Nextgen на своём портале — он появится здесь для подключения.
-            </p>
+            <p className="muted">Пока никого нет</p>
           </div>
         ) : (
           <div className="linked-grid">
