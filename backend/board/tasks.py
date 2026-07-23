@@ -166,16 +166,14 @@ def _stop_bitrix_timer_quiet(client: BitrixClient, bitrix_task_id: str) -> None:
 
 
 def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local: str) -> None:
-    """Push local work-state to Bitrix under the "app is source of truth" model.
+    """Push local work-state to Bitrix (locked product model).
 
-    Only two transitions are ever pushed:
-      * in_progress → mark the Bitrix task "in progress" once (start_once), so a
-        manager sees work has begun. Pausing does NOT touch Bitrix.
-      * done → post elapsed time (handled by the caller) and complete the task.
+      • todo (pause)     → no-op. Bitrix stays «in progress»; pause is app-only.
+      • in_progress      → start Bitrix if not already in progress (resume after
+                           local pause is a no-op when Bitrix is already running).
+      • done             → complete Bitrix (elapsed time is posted by the caller).
 
-    Pause (todo) is app-only and is intentionally a no-op here: we never send
-    pause/start toggles to Bitrix, which is what used to cause the status
-    ping-pong between the app and the two Bitrix copies.
+    Never push pause/todo — that was the source of status ping-pong.
     """
     target = _normalize_local(target_local)
 
@@ -201,7 +199,7 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         client.complete_task(bitrix_task_id)
         return
 
-    # target == in_progress (start_once)
+    # target == in_progress — start once; noop if already running.
     if current == BITRIX_STATUS_IN_PROGRESS:
         return
     if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
@@ -232,19 +230,33 @@ def _extract_elapsed_id(result) -> str:
     return ""
 
 
-def _post_time_entries_elapsed(client: BitrixClient, bitrix_task_id: str, task, portal) -> None:
+def _post_time_entries_elapsed(
+    client: BitrixClient,
+    bitrix_task_id: str,
+    task,
+    portal,
+    *,
+    id_attr: str = "bitrix_elapsed_id",
+) -> None:
     """Post local time entries into the Bitrix task «Учёт времени».
 
-    Idempotent: each TimeEntry stores its Bitrix elapsed id, so re-syncing a
-    completed task never double-counts time. Called on completion only.
+    Idempotent: each TimeEntry stores the Bitrix elapsed id in `id_attr`
+    (agency → bitrix_elapsed_id, client → client_bitrix_elapsed_id).
+    Called on completion only. Also ensures ALLOW_TIME_TRACKING is on.
     """
     from django.db.models import Q
 
-    from board.models import TimeEntry
+    if id_attr not in ("bitrix_elapsed_id", "client_bitrix_elapsed_id"):
+        id_attr = "bitrix_elapsed_id"
+
+    try:
+        client.update_task(bitrix_task_id, {"ALLOW_TIME_TRACKING": "Y"})
+    except BitrixAPIError:
+        pass
 
     entries = (
         task.time_entries.filter(ended_at__isnull=False)
-        .filter(Q(bitrix_elapsed_id="") | Q(bitrix_elapsed_id__isnull=True))
+        .filter(Q(**{id_attr: ""}) | Q(**{f"{id_attr}__isnull": True}))
         .order_by("id")
     )
     for entry in entries:
@@ -268,8 +280,8 @@ def _post_time_entries_elapsed(client: BitrixClient, bitrix_task_id: str, task, 
             continue
         eid = _extract_elapsed_id(result)
         if eid:
-            entry.bitrix_elapsed_id = eid
-            entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
+            setattr(entry, id_attr, eid)
+            entry.save(update_fields=[id_attr, "updated_at"])
 
 
 def _ensure_project_agency_parent(project) -> tuple[str, str]:
@@ -313,7 +325,6 @@ def _sync_one_portal(
     group_id: str | None = None,
     parent_id: str | None = None,
     crm_bindings: list[str] | None = None,
-    post_elapsed_on_done: bool = False,
 ) -> str:
     """Create/update Bitrix task on a portal; return bitrix task id."""
     if not portal.access_token:
@@ -333,6 +344,12 @@ def _sync_one_portal(
     if title != task.title:
         task.title = title
         task.save(update_fields=["title", "updated_at"])
+
+    elapsed_attr = (
+        "client_bitrix_elapsed_id"
+        if portal.id == task.project.portal_id
+        else "bitrix_elapsed_id"
+    )
 
     if existing_id:
         push_deadline = _deadline_needs_push(client, existing_id, task.due_date)
@@ -354,10 +371,11 @@ def _sync_one_portal(
         )
         client.update_task(existing_id, fields)
         # Only push status on explicit local→Bitrix sync (PENDING).
-        # Title/deadline cleanup must not re-drive status.
         if task.sync_status == task.SyncStatus.PENDING:
-            if task.status == "done" and post_elapsed_on_done:
-                _post_time_entries_elapsed(client, existing_id, task, portal)
+            if task.status == "done":
+                _post_time_entries_elapsed(
+                    client, existing_id, task, portal, id_attr=elapsed_attr
+                )
             try:
                 apply_bitrix_status(client, existing_id, task.status)
             except BitrixAPIError as exc:
@@ -376,8 +394,10 @@ def _sync_one_portal(
     result = client.create_task(fields)
     bitrix_id = _extract_bitrix_id(result)
     if bitrix_id and task.status != "todo":
-        if task.status == "done" and post_elapsed_on_done:
-            _post_time_entries_elapsed(client, bitrix_id, task, portal)
+        if task.status == "done":
+            _post_time_entries_elapsed(
+                client, bitrix_id, task, portal, id_attr=elapsed_attr
+            )
         try:
             apply_bitrix_status(client, bitrix_id, task.status)
         except BitrixAPIError as exc:
@@ -463,12 +483,13 @@ def _do_sync_project_to_bitrix(project_id: int) -> dict:
 
 
 def _sync_task_locked(task) -> dict:
-    """Create/update the Bitrix copies for a task.
+    """Create/update the agency Bitrix subtask for a task.
 
-    Assumes the caller holds a row lock (select_for_update) on this Task, so two
-    concurrent runs cannot both see an empty bitrix_task_id and both create a
-    Bitrix task (which would duplicate it). All ids are saved here, inside the
-    caller's transaction, so they are committed before any Celery retry.
+    Client Bitrix «Задачи» are intentionally NOT created/updated — clients see
+    work only in the Nextgen app. Agency portal gets the subtask under the
+    company project (PARENT_ID + GROUP_ID + CRM deal binding).
+
+    Assumes the caller holds a row lock (select_for_update) on this Task.
     """
     from board.models import Task
 
@@ -476,20 +497,6 @@ def _sync_task_locked(task) -> dict:
     errors: list[str] = []
     update_fields = ["sync_status", "sync_error", "updated_at"]
 
-    # 1) Client portal — flat task
-    try:
-        client_id = _sync_one_portal(
-            task, client_portal, existing_id=task.bitrix_task_id or ""
-        )
-        if client_id and client_id != task.bitrix_task_id:
-            task.bitrix_task_id = client_id
-            update_fields.append("bitrix_task_id")
-    except BitrixAPIError as exc:
-        errors.append(f"клиент: {exc}")
-    except Exception as exc:
-        errors.append(f"клиент: {exc}")
-
-    # 2) Agency portal — subtask in company project (+ CRM deal binding)
     agency = _agency_portal_for_client(client_portal)
     if agency and agency.id != client_portal.id:
         try:
@@ -502,7 +509,6 @@ def _sync_task_locked(task) -> dict:
                 group_id=group_id,
                 parent_id=parent_id,
                 crm_bindings=crm_bindings or None,
-                post_elapsed_on_done=True,
             )
             if agency_id and agency_id != task.agency_bitrix_task_id:
                 task.agency_bitrix_task_id = agency_id
@@ -511,6 +517,9 @@ def _sync_task_locked(task) -> dict:
             errors.append(f"агентство: {exc}")
         except Exception as exc:
             errors.append(f"агентство: {exc}")
+    elif not agency:
+        # No PortalLink — nothing to push; keep pending reason visible.
+        errors.append("агентство: клиент не привязан к агентству")
 
     if errors:
         task.sync_status = Task.SyncStatus.ERROR
@@ -625,11 +634,10 @@ def sync_comment_to_bitrix(self, comment_id: int):
         return {"ok": False, "reason": "empty"}
 
     task = comment.task
+    # Comments go only to the agency Bitrix subtask — we do not create/mirror
+    # tasks on the client Bitrix portal.
     targets: list[tuple] = []
     client_portal = task.project.portal
-    if task.bitrix_task_id and client_portal.access_token:
-        targets.append((client_portal, task.bitrix_task_id))
-
     agency = _agency_portal_for_client(client_portal)
     if agency and task.agency_bitrix_task_id and agency.access_token:
         targets.append((agency, task.agency_bitrix_task_id))
@@ -661,18 +669,12 @@ def sync_comment_to_bitrix(self, comment_id: int):
                         cid = val
                         break
             if cid:
-                if portal.id == client_portal.id:
-                    saved_ids["bitrix_comment_id"] = cid
-                else:
-                    saved_ids["agency_bitrix_comment_id"] = cid
+                saved_ids["agency_bitrix_comment_id"] = cid
         except BitrixAPIError as exc:
             errors.append(f"{portal.domain}: {exc}")
 
     if saved_ids:
         update_fields = []
-        if "bitrix_comment_id" in saved_ids and not comment.bitrix_comment_id:
-            comment.bitrix_comment_id = saved_ids["bitrix_comment_id"]
-            update_fields.append("bitrix_comment_id")
         if "agency_bitrix_comment_id" in saved_ids and not comment.agency_bitrix_comment_id:
             comment.agency_bitrix_comment_id = saved_ids["agency_bitrix_comment_id"]
             update_fields.append("agency_bitrix_comment_id")
@@ -829,23 +831,7 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
     elif not agency:
         errors.append("agency: portal not linked")
 
-    if task.bitrix_task_id and client_portal.access_token and not attachment.bitrix_file_id:
-        try:
-            fid = upload_and_attach(
-                client=BitrixClient(client_portal),
-                bitrix_task_id=task.bitrix_task_id,
-                attachment=attachment,
-            )
-            attachment.bitrix_file_id = fid
-            update_fields.append("bitrix_file_id")
-        except BitrixAPIError as exc:
-            errors.append(f"client: {exc}")
-            logger.warning(
-                "client attach failed attachment=%s task=%s: %s",
-                attachment_id,
-                task.bitrix_task_id,
-                exc,
-            )
+    # Client Bitrix tasks are not created/updated — files go only to agency.
 
     if update_fields:
         attachment.save(update_fields=update_fields)

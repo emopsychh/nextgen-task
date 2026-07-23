@@ -370,10 +370,10 @@ class TaskViewSet(viewsets.ModelViewSet):
         extras = {
             "created_by": self.request.user.bitrix_user,
             "sync_status": Task.SyncStatus.PENDING,
+            # New tasks always start as waiting — status is chosen later via
+            # Start / Pause / Complete, never at create time.
+            "status": Task.Status.TODO,
         }
-        # Client places work for the agency — always starts as waiting.
-        if self.request.user.is_client:
-            extras["status"] = Task.Status.TODO
         task = serializer.save(**extras)
         enqueue_bitrix_sync(task.id)
         publish_task_event(task, kind="task_create")
@@ -406,14 +406,15 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         if self.request.user.is_agency and old_status != task.status:
             author = self.request.user.bitrix_user
-            # Pause / complete → stop timer
+            # Pause / complete → stop timer (local only; Bitrix pause is never pushed)
             if old_status == Task.Status.IN_PROGRESS and task.status in (
                 Task.Status.TODO,
                 Task.Status.DONE,
             ):
                 for running in task.time_entries.filter(ended_at__isnull=True):
                     stop_time_entry(running)
-            # Start / resume → start timer
+            # Start / resume → start local timer; Bitrix start is pushed by sync
+            # only when Bitrix is not already in progress.
             if task.status == Task.Status.IN_PROGRESS:
                 for running in TimeEntry.objects.filter(author=author, ended_at__isnull=True):
                     stop_time_entry(running)
@@ -423,9 +424,13 @@ class TaskViewSet(viewsets.ModelViewSet):
                         author=author,
                         started_at=timezone.now(),
                     )
-                    # Time is tracked locally and posted to Bitrix «Учёт времени»
-                    # only on completion — no live Bitrix timer (avoids status
-                    # ping-pong). Status in_progress is pushed once by the sync.
+            if task.status == Task.Status.DONE and old_status != Task.Status.DONE:
+                try:
+                    from board.completion import finalize_task_completion
+
+                    finalize_task_completion(task, author=author)
+                except Exception:
+                    logger.exception("finalize_task_completion failed task=%s", task.id)
 
         append_task_change_events(
             task=task,

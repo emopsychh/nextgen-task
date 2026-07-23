@@ -97,8 +97,9 @@ class UpsertCommentTests(TestCase):
         )
         self.assertEqual(Comment.objects.filter(task=self.task).count(), 1)
 
-    def test_system_log_not_imported_but_sets_status(self):
+    def test_system_log_pause_ignored_start_applies(self):
         # SYNCED so the "don't clobber a fresh pending push" guard does not apply.
+        # Pause from Bitrix must NOT change app status (product rule).
         Task.objects.filter(pk=self.task.pk).update(
             status=Task.Status.IN_PROGRESS, sync_status=Task.SyncStatus.SYNCED
         )
@@ -111,7 +112,20 @@ class UpsertCommentTests(TestCase):
         self.assertFalse(created)
         self.assertEqual(Comment.objects.filter(task=self.task).count(), 0)
         self.task.refresh_from_db()
-        self.assertEqual(self.task.status, Task.Status.TODO)
+        self.assertEqual(self.task.status, Task.Status.IN_PROGRESS)
+
+        # Start from Bitrix still applies.
+        Task.objects.filter(pk=self.task.pk).update(
+            status=Task.Status.TODO, sync_status=Task.SyncStatus.SYNCED
+        )
+        self.task.refresh_from_db()
+        upsert_comment_from_bitrix_payload(
+            task=self.task,
+            portal=self.portal,
+            payload={"ID": "14", "AUTHOR_NAME": "Иван", "POST_MESSAGE": "Иван: начал выполнять задачу"},
+        )
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, Task.Status.IN_PROGRESS)
 
     def test_echo_guard_attaches_id_instead_of_duplicating(self):
         # Local outbound comment posted moments ago, still without a Bitrix id.

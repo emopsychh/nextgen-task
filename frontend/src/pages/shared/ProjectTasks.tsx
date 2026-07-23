@@ -19,8 +19,7 @@ import { CalendarGlyph, FlameIcon } from "../../components/icons";
 
 export function ProjectTasks() {
   const { projectId } = useParams();
-  const { token, portal } = useAuth();
-  const isAgency = portal?.role === "agency";
+  const { token } = useAuth();
   const toast = useFlashToast();
 
   const [project, setProject] = useState<Project | null>(null);
@@ -31,7 +30,6 @@ export function ProjectTasks() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState("");
-  const [status, setStatus] = useState<TaskStatus>("todo");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [enteringId, setEnteringId] = useState<number | null>(null);
@@ -231,7 +229,7 @@ export function ProjectTasks() {
             title,
             description,
             due_date: dueDate || null,
-            status: isAgency ? status : "todo",
+            status: "todo",
           }),
         },
         token
@@ -239,7 +237,6 @@ export function ProjectTasks() {
       setTitle("");
       setDescription("");
       setDueDate("");
-      setStatus("todo");
       setShowCreate(false);
       setEnteringId(created.id);
       toast.show("Она появилась в списке ниже", "Задача создана");
@@ -289,7 +286,7 @@ export function ProjectTasks() {
         <form className="connect-panel create-task-panel stack" onSubmit={createTask}>
           <div>
             <h2 className="section-title">Новая задача</h2>
-            <p className="muted">Название, статус и срок — остальное можно уточнить позже.</p>
+            <p className="muted">Название и срок — статус всегда «Ждёт выполнения».</p>
           </div>
 
           <div className="field">
@@ -313,27 +310,9 @@ export function ProjectTasks() {
             />
           </div>
 
-          {isAgency && (
-            <div className="field">
-              <label>Статус</label>
-              <div className="status-picker" role="group" aria-label="Статус задачи">
-                {(["todo", "in_progress", "done"] as const).map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    className={`status-picker-btn ${STATUS_TONE[s]}${status === s ? " active" : ""}`}
-                    onClick={() => setStatus(s)}
-                  >
-                    {STATUS_LABEL[s]}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div className="field">
             <label>Срок</label>
-            <DueDatePicker value={dueDate} onChange={setDueDate} status={status} />
+            <DueDatePicker value={dueDate} onChange={setDueDate} status="todo" />
           </div>
 
           <button className="btn btn-accent" disabled={busy} style={{ alignSelf: "start" }}>

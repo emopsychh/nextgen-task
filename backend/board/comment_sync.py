@@ -104,13 +104,24 @@ def status_from_bitrix_system_comment(text: str) -> str | None:
 
 
 def apply_status_from_bitrix_system_comment(task, text: str) -> bool:
-    """Apply inbound status inferred from a Bitrix system comment. No chat row."""
+    """Apply inbound status inferred from a Bitrix system comment. No chat row.
+
+    Pause lines are ignored (product rule: Bitrix pause does not affect the app).
+    Only start → in_progress and complete → done are applied.
+    """
     status = status_from_bitrix_system_comment(text)
-    if not status:
+    if status not in ("in_progress", "done"):
         return False
     from board.status_sync import apply_inbound_status
 
     changed = apply_inbound_status(task, status, force=True)
+    if changed and status == "done":
+        try:
+            from board.completion import finalize_task_completion
+
+            finalize_task_completion(task)
+        except Exception:
+            logger.exception("finalize from system comment failed task=%s", task.id)
     if changed:
         logger.info(
             "status from Bitrix system comment task=%s → %s (%r)",

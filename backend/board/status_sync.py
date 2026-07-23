@@ -324,26 +324,22 @@ def _agency_portal_for_client(client_portal):
 def resolve_bitrix_task_source(task) -> tuple | tuple[None, None]:
     """
     Prefer agency Bitrix task (company workgroup / subtasks) — that is where
-    managers edit deadlines. Fall back to the client portal copy.
+    managers edit deadlines. Client Bitrix tasks are no longer created.
     """
     client_portal = task.project.portal
     agency = _agency_portal_for_client(client_portal)
     if agency and task.agency_bitrix_task_id and agency.access_token:
         return agency, str(task.agency_bitrix_task_id)
-    if task.bitrix_task_id and client_portal.access_token:
-        return client_portal, str(task.bitrix_task_id)
     return None, None
 
 
 def resolve_all_bitrix_task_sources(task) -> list[tuple]:
-    """Agency first, then client — for pulls that should reconcile both copies."""
+    """Agency Bitrix subtask only (client portal tasks are not synced)."""
     sources: list[tuple] = []
     client_portal = task.project.portal
     agency = _agency_portal_for_client(client_portal)
     if agency and task.agency_bitrix_task_id and agency.access_token:
         sources.append((agency, str(task.agency_bitrix_task_id)))
-    if task.bitrix_task_id and client_portal.access_token:
-        sources.append((client_portal, str(task.bitrix_task_id)))
     return sources
 
 
@@ -470,7 +466,9 @@ def apply_inbound_status(
 ) -> bool:
     """
     Apply status that originated in Bitrix. Does not push back to Bitrix.
-    Returns True if the local row changed.
+
+    Locked model: callers must only pass in_progress or done — never todo/pause
+    (pause from Bitrix is ignored). Done is terminal: inbound cannot reopen it.
     """
     from django.utils import timezone
 
@@ -483,9 +481,19 @@ def apply_inbound_status(
         Task.Status.DONE,
     ):
         return False
+    # Pause from Bitrix is never applied (product rule).
+    if new_status == Task.Status.TODO:
+        return False
+    # Done is terminal unless the app explicitly renews (outbound PENDING).
+    if (
+        task.status == Task.Status.DONE
+        and new_status != Task.Status.DONE
+        and task.sync_status != Task.SyncStatus.PENDING
+    ):
+        return False
     if task.status == new_status:
         # Heal drift without a status change
-        if stop_timers and new_status in (Task.Status.TODO, Task.Status.DONE):
+        if stop_timers and new_status == Task.Status.DONE:
             stopped = False
             for running in task.time_entries.filter(ended_at__isnull=True):
                 stop_time_entry(running, sync_bitrix=False)
@@ -501,7 +509,7 @@ def apply_inbound_status(
         return False
     # Avoid clobbering an in-flight local→Bitrix push.
     # force=True (webhooks / pull): still skip for a short window so we don't
-    # regress in_progress → todo from a stale Bitrix echo before start() lands.
+    # regress from a stale Bitrix echo before the outbound lands.
     if task.sync_status == Task.SyncStatus.PENDING:
         if not force:
             return False
@@ -516,15 +524,10 @@ def apply_inbound_status(
     task.sync_error = ""
     task.save(update_fields=["status", "sync_status", "sync_error", "updated_at"])
 
-    if stop_timers and old == Task.Status.IN_PROGRESS and new_status in (
-        Task.Status.TODO,
-        Task.Status.DONE,
-    ):
+    if stop_timers and old == Task.Status.IN_PROGRESS and new_status == Task.Status.DONE:
         for running in task.time_entries.filter(ended_at__isnull=True):
-            # Do not echo pauseTimer back to Bitrix — status already came from there.
             stop_time_entry(running, sync_bitrix=False)
     elif stop_timers and new_status == Task.Status.IN_PROGRESS:
-        # Status-driven start: do not rely on task.timer.get (wrong OAuth user).
         _start_local_timer_from_inbound(task)
 
     logger.info(
@@ -844,24 +847,83 @@ def mirror_work_status_to_other_bitrix_copies(
             )
 
 
+def _inbound_work_status(task) -> str | None:
+    """Scan agency+client Bitrix copies; return done | in_progress | None.
+
+    Pause/todo on either copy is ignored so it can never win a split-brain vote.
+    Done beats in_progress when both appear.
+    """
+    from board.comment_sync import (
+        latest_bitrix_work_activity,
+        resolve_status_with_timer_activity,
+    )
+
+    seen_done = False
+    seen_progress = False
+    for portal, bitrix_id in resolve_all_bitrix_task_sources(task):
+        try:
+            data = BitrixClient(portal).get_task(bitrix_id) or {}
+        except BitrixAPIError:
+            continue
+        if not data:
+            continue
+        mapped = local_status_from_bitrix_task(data)
+        try:
+            activity = latest_bitrix_work_activity(portal, bitrix_id, data)
+        except Exception:
+            activity = None
+        # Do not let pause activity override — we only care about start/done.
+        if activity == "todo":
+            activity = None
+        resolved = resolve_status_with_timer_activity(mapped, activity)
+        if resolved == "done":
+            seen_done = True
+        elif resolved == "in_progress":
+            seen_progress = True
+    if seen_done:
+        return "done"
+    if seen_progress:
+        return "in_progress"
+    return None
+
+
 def pull_task_status_from_bitrix(task) -> bool:
     """
     Fetch Bitrix status + deadline + title/description from agency+client copies.
     """
     from board.titles import strip_portal_title_prefix
 
-    local, data, portal, bitrix_id = resolve_inbound_status_from_sources(task)
+    work = _inbound_work_status(task)
+    _, data, portal, bitrix_id = resolve_inbound_status_from_sources(task)
     if not data or not portal or not bitrix_id:
+        # Still apply work status if we could read it from a partial scan
+        if work in ("in_progress", "done") and task.status != work:
+            prev = task.status
+            applied = apply_inbound_status(task, work, force=True)
+            if applied and work == "done" and prev != "done":
+                try:
+                    from board.completion import finalize_task_completion
+
+                    finalize_task_completion(task)
+                except Exception:
+                    logger.exception("finalize_task_completion failed task=%s", task.id)
+            return applied
         return False
 
+    local = work if work in ("in_progress", "done") else None
+
     changed = False
-    # App is the single source of truth for start/pause. From Bitrix we accept
-    # ONLY a terminal completion (cannot oscillate); start/pause toggles are
-    # ignored here to remove the status ping-pong between the app and both
-    # Bitrix copies. Time is posted to Bitrix «Учёт времени» only on completion,
-    # so there is no live-timer reconciliation either.
-    if local == "done" and task.status != "done":
-        changed = apply_inbound_status(task, "done", force=True) or changed
+    if local and task.status != local:
+        prev = task.status
+        applied = apply_inbound_status(task, local, force=True)
+        changed = applied or changed
+        if applied and local == "done" and prev != "done":
+            try:
+                from board.completion import finalize_task_completion
+
+                finalize_task_completion(task)
+            except Exception:
+                logger.exception("finalize_task_completion failed task=%s", task.id)
 
     due = parse_bitrix_deadline(data)
     task.refresh_from_db()
@@ -925,20 +987,35 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         status_changed = False
         due_changed = False
         meta_changed = False
-        # App is the source of truth for start/pause. From Bitrix we accept ONLY
-        # a terminal completion (which cannot oscillate); start/pause toggles in
-        # Bitrix are intentionally ignored to prevent status ping-pong. No mirror
-        # to the other copy and no live-timer reconciliation.
+        # Locked model: accept start + done from Bitrix; ignore pause.
         after_status = local_status_from_bitrix_task(after) if after else None
+        before_status = local_status_from_bitrix_task(before) if before else None
         data_status = local_status_from_bitrix_task(data) if data else None
         local = after_status if after_status is not None else data_status
+        # Prefer an explicit FIELDS_BEFORE→AFTER transition when present.
+        if (
+            after_status is not None
+            and before_status is not None
+            and after_status != before_status
+        ):
+            local = after_status
         logger.info(
-            "OnTaskUpdate id=%s mapped=%s (accept-done-only)",
+            "OnTaskUpdate id=%s mapped=%s (start+done only; pause ignored)",
             bitrix_task_id,
             local,
         )
-        if local == "done" and task.status != "done":
-            status_changed = apply_inbound_status(task, "done", force=True)
+        if local in ("in_progress", "done") and task.status != local:
+            prev = task.status
+            status_changed = apply_inbound_status(task, local, force=True)
+            if status_changed and local == "done" and prev != "done":
+                try:
+                    from board.completion import finalize_task_completion
+
+                    finalize_task_completion(task)
+                except Exception:
+                    logger.exception(
+                        "finalize_task_completion failed id=%s", bitrix_task_id
+                    )
 
         # Title / description from Bitrix (strip legacy portal prefixes)
         from board.titles import strip_portal_title_prefix

@@ -149,8 +149,10 @@ class TimeEntry(models.Model):
         blank=True,
         help_text="When this session was deducted from the CRM deal remaining hours",
     )
-    # Bitrix task.elapseditem id when session was posted as a closed record
+    # Bitrix task.elapseditem id on the agency copy (closed record)
     bitrix_elapsed_id = models.CharField(max_length=64, blank=True)
+    # Same for the client portal Bitrix copy (idempotent dual-post)
+    client_bitrix_elapsed_id = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

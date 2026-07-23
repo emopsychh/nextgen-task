@@ -130,13 +130,14 @@ class ApplyInboundStatusTests(TestCase):
         TimeEntry.objects.create(task=task, author=self.user, started_at=timezone.now())
         return task
 
-    def test_pause_stops_running_timer(self):
+    def test_pause_from_bitrix_is_ignored(self):
+        # Product rule: Bitrix pause must never change the app status/timer.
         task = self._running_task()
         changed = apply_inbound_status(task, "todo", force=True)
         task.refresh_from_db()
-        self.assertTrue(changed)
-        self.assertEqual(task.status, Task.Status.TODO)
-        self.assertFalse(task.time_entries.filter(ended_at__isnull=True).exists())
+        self.assertFalse(changed)
+        self.assertEqual(task.status, Task.Status.IN_PROGRESS)
+        self.assertTrue(task.time_entries.filter(ended_at__isnull=True).exists())
 
     def test_done_stops_running_timer(self):
         task = self._running_task()
@@ -169,8 +170,8 @@ class ApplyInboundStatusTests(TestCase):
             sync_status=Task.SyncStatus.PENDING,
             created_by=self.user,
         )
-        # A stale Bitrix echo (force=False) must not regress a pending local push.
-        changed = apply_inbound_status(task, "todo", force=False)
+        # Pause echo is ignored regardless; also done/start without force skip.
+        changed = apply_inbound_status(task, "done", force=False)
         task.refresh_from_db()
         self.assertFalse(changed)
         self.assertEqual(task.status, Task.Status.IN_PROGRESS)
@@ -183,10 +184,10 @@ class ApplyInboundStatusTests(TestCase):
             created_by=self.user,
         )
         # Fresh update_at (<12s): even force=True defers to avoid regressing start().
-        changed = apply_inbound_status(task, "todo", force=True)
+        changed = apply_inbound_status(task, "done", force=True)
         self.assertFalse(changed)
 
-    def test_force_pending_old_push_applies(self):
+    def test_force_pending_old_push_applies_done(self):
         task = make_task(
             self.project,
             status=Task.Status.IN_PROGRESS,
@@ -197,7 +198,19 @@ class ApplyInboundStatusTests(TestCase):
             updated_at=timezone.now() - timedelta(seconds=30)
         )
         task.refresh_from_db()
-        changed = apply_inbound_status(task, "todo", force=True)
+        changed = apply_inbound_status(task, "done", force=True)
         task.refresh_from_db()
         self.assertTrue(changed)
-        self.assertEqual(task.status, Task.Status.TODO)
+        self.assertEqual(task.status, Task.Status.DONE)
+
+    def test_done_is_terminal_against_inbound_start(self):
+        task = make_task(
+            self.project,
+            status=Task.Status.DONE,
+            sync_status=Task.SyncStatus.SYNCED,
+            created_by=self.user,
+        )
+        changed = apply_inbound_status(task, "in_progress", force=True)
+        task.refresh_from_db()
+        self.assertFalse(changed)
+        self.assertEqual(task.status, Task.Status.DONE)
