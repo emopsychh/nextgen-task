@@ -79,7 +79,7 @@ class SyncTaskIdempotencyTests(TestCase):
         # Call the locked worker directly to avoid Celery retry timing.
         with patch.object(board_tasks, "BitrixClient", return_value=client):
             with transaction.atomic():
-                locked = Task.objects.select_for_update().select_related(
+                locked = Task.objects.select_for_update(of=("self",)).select_related(
                     "project", "project__portal", "created_by"
                 ).get(pk=task.id)
                 outcome = board_tasks._sync_task_locked(locked)

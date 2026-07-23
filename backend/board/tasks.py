@@ -492,8 +492,12 @@ def sync_task_to_bitrix(self, task_id: int):
     try:
         with transaction.atomic():
             try:
+                # Lock ONLY the task row. `created_by` is nullable, so
+                # select_related() adds a LEFT OUTER JOIN and Postgres refuses
+                # "FOR UPDATE" on the nullable side of an outer join. of=("self",)
+                # restricts the lock to the Task table and avoids that error.
                 task = (
-                    Task.objects.select_for_update()
+                    Task.objects.select_for_update(of=("self",))
                     .select_related("project", "project__portal", "created_by")
                     .get(pk=task_id)
                 )
