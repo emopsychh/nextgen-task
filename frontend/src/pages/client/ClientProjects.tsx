@@ -12,7 +12,7 @@ import {
 import { useAuth } from "../../auth/AuthContext";
 import { DealHoursCard } from "../../components/DealHoursCard";
 import { FlashToast } from "../../components/FlashToast";
-import { FlameIcon } from "../../components/icons";
+import { FlameIcon, DisputeIcon } from "../../components/icons";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
@@ -372,32 +372,43 @@ export function ClientProjects() {
           ) : (
             <>
               {disputedReports.length > 0 ? (
-                <section className="workspace-focus-block">
+                <section className="workspace-focus-block workspace-dispute-section">
                   <div className="linked-head">
-                    <h2 className="section-title">На споре</h2>
+                    <div className="workspace-dispute-title-row">
+                      <h2 className="section-title workspace-dispute-title">
+                        <span className="workspace-dispute-badge" aria-hidden>
+                          <DisputeIcon size={15} />
+                        </span>
+                        <span>На споре</span>
+                      </h2>
+                    </div>
                     <p className="muted">Клиент оспорил отчёт — нужно разобрать</p>
                   </div>
                   <div className="workspace-attention-list">
-                    {disputedReports.map((r) => (
-                      <Link
-                        key={`dispute-${r.id}`}
-                        to={reportDetailPath(portalId, true, r.id)}
-                        className="workspace-attention-card is-dispute"
-                      >
-                        <div className="workspace-attention-top">
-                          <span className={`report-status-pill status-${r.status}`}>
-                            {STATUS_LABEL_RU[r.status]}
-                          </span>
-                          <span className="muted">Отчёт</span>
-                        </div>
-                        <strong>{reportTitle(r)}</strong>
-                        <span className="muted">
-                          {r.client_comment?.trim()
-                            ? r.client_comment.trim()
-                            : "Открыть и вернуть в работу или уточнить"}
-                        </span>
-                      </Link>
-                    ))}
+                    {disputedReports.map((r) => {
+                      const comment = r.client_comment?.trim();
+                      return (
+                        <Link
+                          key={`dispute-${r.id}`}
+                          to={reportDetailPath(portalId, true, r.id)}
+                          className="workspace-attention-card is-dispute"
+                        >
+                          <div className="workspace-attention-top">
+                            <span className="workspace-dispute-pill">Оспорен</span>
+                            <span className="muted">Отчёт</span>
+                          </div>
+                          <strong>{reportTitle(r)}</strong>
+                          {comment ? (
+                            <blockquote className="workspace-dispute-quote">
+                              <span className="workspace-dispute-quote-label">Клиент</span>
+                              <span className="workspace-dispute-quote-text">{comment}</span>
+                            </blockquote>
+                          ) : (
+                            <span className="muted">Открыть и вернуть в работу или уточнить</span>
+                          )}
+                        </Link>
+                      );
+                    })}
                   </div>
                 </section>
               ) : null}

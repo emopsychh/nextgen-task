@@ -645,8 +645,93 @@ a {
 }
 
 .workspace-attention-card.is-dispute {
-  background: color-mix(in srgb, #c45c3e 7%, #fff);
-  border-color: color-mix(in srgb, #c45c3e 28%, var(--line));
+  position: relative;
+  padding-left: 18px;
+  background: linear-gradient(135deg, #fff8f4 0%, #fff 58%);
+  border-color: color-mix(in srgb, #c45c3e 38%, var(--line));
+  box-shadow: 0 8px 22px rgba(160, 50, 20, 0.06);
+  overflow: hidden;
+}
+
+.workspace-attention-card.is-dispute::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(180deg, #e07a4a, #b23a1a);
+}
+
+.workspace-attention-card.is-dispute:hover {
+  border-color: color-mix(in srgb, #c45c3e 55%, var(--line));
+  box-shadow: 0 10px 26px rgba(160, 50, 20, 0.1);
+}
+
+.workspace-dispute-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-dispute-title {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #8f3218;
+}
+
+.workspace-dispute-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(135deg, #e07a4a, #b23a1a);
+  box-shadow: 0 2px 6px rgba(178, 58, 26, 0.3);
+  flex-shrink: 0;
+}
+
+.workspace-dispute-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(135deg, #e07a4a, #b23a1a);
+}
+
+.workspace-dispute-quote {
+  margin: 2px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #c45c3e 22%, var(--line));
+  background: color-mix(in srgb, #c45c3e 8%, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workspace-dispute-quote-label {
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #9a4a2e;
+}
+
+.workspace-dispute-quote-text {
+  color: var(--ink);
+  font-size: 0.92rem;
+  line-height: 1.4;
+  font-style: italic;
 }
 
 .workspace-attention-card.is-overdue {
