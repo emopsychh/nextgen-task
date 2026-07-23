@@ -113,9 +113,11 @@ class Command(BaseCommand):
                 or data.get("status")
                 or data.get("STATUS")
             )
+            action = data.get("action") or data.get("ACTION") or {}
             self.stdout.write(
                 f"  {portal.role} {portal.domain}#{bitrix_id}: "
-                f"raw={raw!r} → local={remote!r}"
+                f"raw={raw!r} action.start={action.get('start')!r} "
+                f"action.pause={action.get('pause')!r} → local={remote!r}"
             )
 
         if options["pull"]:

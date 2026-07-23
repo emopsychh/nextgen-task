@@ -7,6 +7,8 @@ import logging
 from django.conf import settings
 
 from portals.bitrix import (
+    BITRIX_STATUS_COMPLETED,
+    BITRIX_STATUS_SUPPOSEDLY_COMPLETED,
     BITRIX_TO_LOCAL,
     BitrixAPIError,
     BitrixClient,
@@ -82,7 +84,44 @@ def ensure_task_event_bindings(portal) -> bool:
 
 
 def local_status_from_bitrix_task(task_data: dict) -> str | None:
+    """
+    Map Bitrix task → local status.
+
+    New Bitrix UI often keeps a misleading STATUS label after «остановить работу»
+    while the action buttons already say «Начать». Prefer action.start/pause when
+    present — that matches what the user can click.
+    """
+    if not isinstance(task_data, dict):
+        return None
+
     code = bitrix_status_code(task_data)
+    if code in (
+        BITRIX_STATUS_COMPLETED,
+        BITRIX_STATUS_SUPPOSEDLY_COMPLETED,
+    ):
+        return "done"
+
+    action = task_data.get("action") or task_data.get("ACTION") or {}
+    if isinstance(action, dict) and action:
+        pause = action.get("pause")
+        start = action.get("start")
+        # Normalize Bitrix bool-ish values
+        def _flag(v) -> bool | None:
+            if v is True or str(v).lower() in ("true", "1", "y"):
+                return True
+            if v is False or str(v).lower() in ("false", "0", "n"):
+                return False
+            return None
+
+        pause_b = _flag(pause)
+        start_b = _flag(start)
+        # Can pause → work is active
+        if pause_b is True:
+            return "in_progress"
+        # Can start, cannot pause → waiting / paused work (app «Пауза»)
+        if start_b is True and pause_b is False:
+            return "todo"
+
     if code is None:
         return None
     return BITRIX_TO_LOCAL.get(code)
