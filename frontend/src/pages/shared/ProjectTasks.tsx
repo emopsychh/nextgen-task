@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
+  unwrapList,
   type Paginated,
   type Project,
   type Task,
   type TaskCounts,
   type TaskStatus,
+  type WorkReport,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { DueDatePicker } from "../../components/DueDatePicker";
@@ -19,7 +21,8 @@ import { CalendarGlyph, FlameIcon } from "../../components/icons";
 
 export function ProjectTasks() {
   const { projectId } = useParams();
-  const { token } = useAuth();
+  const { token, portal } = useAuth();
+  const isAgency = portal?.role === "agency";
   const toast = useFlashToast();
 
   const [project, setProject] = useState<Project | null>(null);
@@ -43,6 +46,7 @@ export function ProjectTasks() {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [activeReport, setActiveReport] = useState<WorkReport | null>(null);
   const loadedPagesRef = useRef(1);
   const sentinelRef = useRef<HTMLDivElement>(null);
   // Discard responses that resolve after project/filter/search changed.
@@ -86,6 +90,21 @@ export function ProjectTasks() {
     }
   }
 
+  async function loadActiveReport() {
+    if (!token || !projectId) return;
+    try {
+      const data = await api<WorkReport[] | Paginated<WorkReport>>(
+        `/api/reports/?project=${projectId}&active=1`,
+        {},
+        token
+      );
+      const list = unwrapList(data);
+      setActiveReport(list[0] ?? null);
+    } catch {
+      setActiveReport(null);
+    }
+  }
+
   async function loadFirst() {
     if (!token || !projectId) return;
     const gen = genRef.current;
@@ -99,6 +118,7 @@ export function ProjectTasks() {
     setHasMore(Boolean(taskData.next));
     loadedPagesRef.current = 1;
     void loadCounts();
+    void loadActiveReport();
   }
 
   async function loadMore() {
@@ -159,8 +179,11 @@ export function ProjectTasks() {
     token,
     portalId: project?.portal ?? null,
     enabled: !!projectId,
-    onEvent: () => {
+    onEvent: (payload) => {
       pullNowRef.current = true;
+      if (!payload?.kind || payload.kind.startsWith("report_")) {
+        void loadActiveReport();
+      }
     },
   });
 
@@ -268,17 +291,61 @@ export function ProjectTasks() {
               : "Задачи этого модуля"}
           </p>
         </div>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => setShowCreate((v) => !v)}
-          data-tour="tour-new-task"
-        >
-          {showCreate ? "Закрыть" : "Новая задача"}
-        </button>
+        <div className="report-header-actions">
+          <Link to={`/projects/${projectId}/reports`} className="btn btn-ghost">
+            Отчёты
+            {activeReport ? (
+              <span className={`report-status-pill compact status-${activeReport.status}`}>
+                {activeReport.status === "pending_client"
+                  ? "на согласовании"
+                  : activeReport.status === "disputed"
+                    ? "оспорен"
+                    : activeReport.status === "draft"
+                      ? "черновик"
+                      : "активен"}
+              </span>
+            ) : null}
+          </Link>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setShowCreate((v) => !v)}
+            data-tour="tour-new-task"
+          >
+            {showCreate ? "Закрыть" : "Новая задача"}
+          </button>
+        </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+
+      {!isAgency && activeReport?.status === "pending_client" ? (
+        <div className="report-banner">
+          <div>
+            <strong>Отчёт на согласовании</strong>
+            <p className="muted" style={{ margin: "4px 0 0" }}>
+              Проверьте выполненные работы и подтвердите или оспорьте.
+            </p>
+          </div>
+          <Link to={`/projects/${projectId}/reports`} className="btn btn-accent">
+            Открыть отчёт
+          </Link>
+        </div>
+      ) : null}
+
+      {isAgency && activeReport?.status === "disputed" ? (
+        <div className="report-banner report-banner-warn">
+          <div>
+            <strong>Клиент оспорил отчёт</strong>
+            <p className="muted" style={{ margin: "4px 0 0" }}>
+              Посмотрите замечания и верните отчёт в черновик.
+            </p>
+          </div>
+          <Link to={`/projects/${projectId}/reports`} className="btn btn-primary">
+            К отчёту
+          </Link>
+        </div>
+      ) : null}
 
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 

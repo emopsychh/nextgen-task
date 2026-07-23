@@ -7,6 +7,7 @@ import { ProjectSidebarNav } from "./components/ProjectSidebar";
 import { LoginPage } from "./pages/LoginPage";
 import { AgencyHome } from "./pages/agency/AgencyHome";
 import { ClientProjects } from "./pages/client/ClientProjects";
+import { ProjectReports } from "./pages/shared/ProjectReports";
 import { ProjectTasks } from "./pages/shared/ProjectTasks";
 import { TaskDetail } from "./pages/shared/TaskDetail";
 
@@ -81,6 +82,7 @@ export default function App() {
         <Route index element={isAgency ? <AgencyHome /> : <ClientProjects />} />
         <Route path="portals/:portalId/projects" element={<ClientProjects />} />
         <Route path="projects/:projectId" element={<ProjectTasks />} />
+        <Route path="projects/:projectId/reports" element={<ProjectReports />} />
         <Route path="tasks/:taskId" element={<TaskDetail />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

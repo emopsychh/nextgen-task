@@ -4345,3 +4345,235 @@ a.task-card.is-done:hover,
   }
 }
 
+/* —— Work reports —— */
+.report-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.report-header-actions a.btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  margin-bottom: 20px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
+}
+
+.report-banner-warn {
+  background: color-mix(in srgb, #c45c26 12%, var(--bg-elevated));
+}
+
+.report-hint {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  border: 1px dashed var(--line);
+  color: var(--ink-muted);
+}
+
+.report-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.report-list-panel,
+.report-detail-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+
+.report-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.report-list-item {
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: inherit;
+}
+
+.report-list-item:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.report-list-item.is-active {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.report-list-meta {
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+.report-status-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #edf1f0;
+  color: var(--ink);
+  width: fit-content;
+}
+
+.report-status-pill.compact {
+  font-size: 0.72rem;
+  padding: 2px 6px;
+}
+
+.report-status-pill.status-draft {
+  background: #e8eef5;
+}
+
+.report-status-pill.status-pending_client {
+  background: color-mix(in srgb, var(--accent) 22%, #fff);
+}
+
+.report-status-pill.status-disputed {
+  background: #f8e4d8;
+}
+
+.report-status-pill.status-accepted {
+  background: #d9efe4;
+}
+
+.report-status-pill.status-paid {
+  background: #e2e2e8;
+}
+
+.report-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.report-deal-hours {
+  margin-bottom: 14px;
+  color: var(--ink-muted);
+  font-size: 0.92rem;
+}
+
+.report-dispute-banner {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f8e4d8;
+}
+
+.report-dispute-banner ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.report-dispute-form {
+  margin-bottom: 18px;
+}
+
+.report-task-checkboxes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.report-task-checkboxes label {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.report-tasks-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 18px;
+}
+
+.report-tasks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.report-tasks-table th,
+.report-tasks-table td {
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.report-tasks-table th {
+  color: var(--ink-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.report-events ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (max-width: 860px) {
+  .report-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .report-detail-head {
+    flex-direction: column;
+  }
+
+  .report-banner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+

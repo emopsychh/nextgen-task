@@ -19,7 +19,7 @@ from portals.models import Portal, PortalLink
 from portals.permissions import IsPortalAuthenticated, can_access_client_portal
 
 from .events import append_task_change_events
-from .models import Attachment, Comment, Project, Task, TimeEntry
+from .models import Attachment, Comment, Project, Task, TimeEntry, WorkReport
 from .naming import display_attachment_name
 from .serializers import (
     ATTACHMENT_SIGN_SALT,
@@ -28,6 +28,9 @@ from .serializers import (
     ProjectSerializer,
     TaskListSerializer,
     TaskSerializer,
+    WorkReportDisputeInputSerializer,
+    WorkReportListSerializer,
+    WorkReportSerializer,
     serialize_thread_items,
 )
 from .tasks import sync_comment_to_bitrix, sync_project_to_bitrix, sync_task_to_bitrix
@@ -230,6 +233,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 except Exception:
                     logger.exception("Bitrix project pull failed for portal %s", portal_id)
         return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        if not request.user.is_agency:
+            raise PermissionDenied("Создавать проекты может только агентство")
+        return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
         if not self.request.user.is_agency:
@@ -714,3 +722,144 @@ class AttachmentViewSet(viewsets.ModelViewSet):
         resp = FileResponse(attachment.file.open("rb"), content_type=content_type)
         resp["Content-Disposition"] = disposition
         return resp
+
+
+class WorkReportViewSet(viewsets.ModelViewSet):
+    """Project work reports: agency creates/sends; client accepts or disputes."""
+
+    permission_classes = [IsPortalAuthenticated]
+    http_method_names = ["get", "post", "head", "options"]
+
+    def get_queryset(self):
+        from django.db.models import Count
+
+        ids = accessible_portal_ids(self.request.user)
+        qs = (
+            WorkReport.objects.filter(project__portal_id__in=ids)
+            .select_related("project", "project__portal", "created_by")
+            .prefetch_related("events__actor", "dispute_items__task")
+            .annotate(_dispute_count=Count("dispute_items", distinct=True))
+        )
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        status = self.request.query_params.get("status")
+        if status:
+            qs = qs.filter(status=status)
+        active = self.request.query_params.get("active")
+        if active in ("1", "true", "yes"):
+            qs = qs.filter(status__in=WorkReport.ACTIVE_STATUSES)
+        return qs.order_by("-created_at")
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return WorkReportListSerializer
+        return WorkReportSerializer
+
+    def _actor(self):
+        return getattr(self.request.user, "bitrix_user", None)
+
+    def create(self, request, *args, **kwargs):
+        from board.reports import create_report, require_agency
+
+        require_agency(request.user)
+        project_id = request.data.get("project")
+        if not project_id:
+            return Response({"detail": "project required"}, status=400)
+        try:
+            project = Project.objects.select_related("portal").get(pk=project_id)
+        except Project.DoesNotExist:
+            return Response({"detail": "Project not found"}, status=404)
+        if not can_access_client_portal(request.user, project.portal):
+            raise PermissionDenied("No access to this portal")
+        report = create_report(project, self._actor())
+        serializer = WorkReportSerializer(report, context={"request": request})
+        return Response(serializer.data, status=201)
+
+    def update(self, request, *args, **kwargs):
+        raise PermissionDenied("Отчёты изменяются только через действия")
+
+    def partial_update(self, request, *args, **kwargs):
+        raise PermissionDenied("Отчёты изменяются только через действия")
+
+    def destroy(self, request, *args, **kwargs):
+        raise PermissionDenied("Удаление отчётов отключено")
+
+    def retrieve(self, request, *args, **kwargs):
+        report = self.get_object()
+        if not can_access_client_portal(request.user, report.project.portal):
+            raise PermissionDenied("No access to this portal")
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"])
+    def send(self, request, pk=None):
+        from board.reports import require_agency, send_to_client
+
+        require_agency(request.user)
+        report = self.get_object()
+        if not can_access_client_portal(request.user, report.project.portal):
+            raise PermissionDenied("No access to this portal")
+        report = send_to_client(report, self._actor())
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"])
+    def accept(self, request, pk=None):
+        from board.reports import accept_report, require_client
+
+        require_client(request.user)
+        report = self.get_object()
+        if not can_access_client_portal(request.user, report.project.portal):
+            raise PermissionDenied("No access to this portal")
+        report = accept_report(report, self._actor())
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"])
+    def dispute(self, request, pk=None):
+        from board.reports import dispute_report, require_client
+
+        require_client(request.user)
+        report = self.get_object()
+        if not can_access_client_portal(request.user, report.project.portal):
+            raise PermissionDenied("No access to this portal")
+        ser = WorkReportDisputeInputSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        notes_raw = ser.validated_data.get("notes") or {}
+        notes_by_task = {}
+        for key, value in notes_raw.items():
+            try:
+                notes_by_task[int(key)] = value
+            except (TypeError, ValueError):
+                continue
+        report = dispute_report(
+            report,
+            self._actor(),
+            comment=ser.validated_data["client_comment"],
+            task_ids=ser.validated_data["task_ids"],
+            notes_by_task=notes_by_task,
+        )
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="reopen")
+    def reopen(self, request, pk=None):
+        from board.reports import reopen_to_draft, require_agency
+
+        require_agency(request.user)
+        report = self.get_object()
+        if not can_access_client_portal(request.user, report.project.portal):
+            raise PermissionDenied("No access to this portal")
+        report = reopen_to_draft(report, self._actor())
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="mark_paid")
+    def mark_paid(self, request, pk=None):
+        from board.reports import mark_paid, require_agency
+
+        require_agency(request.user)
+        report = self.get_object()
+        if not can_access_client_portal(request.user, report.project.portal):
+            raise PermissionDenied("No access to this portal")
+        report = mark_paid(report, self._actor())
+        return Response(WorkReportSerializer(report, context={"request": request}).data)

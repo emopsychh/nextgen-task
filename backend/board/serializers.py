@@ -4,7 +4,7 @@ from rest_framework import serializers
 from portals.models import Portal
 from portals.permissions import can_access_client_portal
 
-from .models import Attachment, Comment, Project, Task, TimeEntry
+from .models import Attachment, Comment, Project, Task, TimeEntry, WorkReport, WorkReportDisputeItem, WorkReportEvent
 from .naming import display_attachment_name
 
 
@@ -404,3 +404,160 @@ class ProjectSerializer(serializers.ModelSerializer):
             # Allow creating projects on client portals primarily
             pass
         return portal
+
+
+class WorkReportEventSerializer(serializers.ModelSerializer):
+    actor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WorkReportEvent
+        fields = ("id", "kind", "actor", "actor_name", "payload", "created_at")
+        read_only_fields = fields
+
+    def get_actor_name(self, obj):
+        if obj.actor:
+            return obj.actor.display_name
+        return ""
+
+
+class WorkReportDisputeItemSerializer(serializers.ModelSerializer):
+    task_title = serializers.CharField(source="task.title", read_only=True)
+
+    class Meta:
+        model = WorkReportDisputeItem
+        fields = ("id", "task", "task_title", "note", "created_at")
+        read_only_fields = fields
+
+
+class WorkReportSerializer(serializers.ModelSerializer):
+    project_name = serializers.CharField(source="project.name", read_only=True)
+    portal_id = serializers.IntegerField(source="project.portal_id", read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    tasks = serializers.SerializerMethodField()
+    total_tracked_seconds = serializers.SerializerMethodField()
+    deal_hours = serializers.SerializerMethodField()
+    events = WorkReportEventSerializer(many=True, read_only=True)
+    dispute_items = WorkReportDisputeItemSerializer(many=True, read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = WorkReport
+        fields = (
+            "id",
+            "project",
+            "project_name",
+            "portal_id",
+            "status",
+            "created_by",
+            "created_by_name",
+            "client_comment",
+            "sent_at",
+            "accepted_at",
+            "paid_at",
+            "created_at",
+            "updated_at",
+            "is_active",
+            "tasks",
+            "total_tracked_seconds",
+            "deal_hours",
+            "events",
+            "dispute_items",
+        )
+        read_only_fields = (
+            "id",
+            "status",
+            "created_by",
+            "created_by_name",
+            "client_comment",
+            "sent_at",
+            "accepted_at",
+            "paid_at",
+            "created_at",
+            "updated_at",
+            "is_active",
+            "tasks",
+            "total_tracked_seconds",
+            "deal_hours",
+            "events",
+            "dispute_items",
+            "project_name",
+            "portal_id",
+        )
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.display_name
+        return ""
+
+    def get_tasks(self, obj):
+        from board.reports import live_task_rows
+
+        return live_task_rows(obj.project_id)
+
+    def get_total_tracked_seconds(self, obj):
+        from board.reports import live_total_seconds
+
+        return live_total_seconds(obj.project_id)
+
+    def get_deal_hours(self, obj):
+        from board.reports import deal_hours_for_portal
+
+        return deal_hours_for_portal(obj.project.portal_id)
+
+
+class WorkReportListSerializer(serializers.ModelSerializer):
+    project_name = serializers.CharField(source="project.name", read_only=True)
+    portal_id = serializers.IntegerField(source="project.portal_id", read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    total_tracked_seconds = serializers.SerializerMethodField()
+    is_active = serializers.BooleanField(read_only=True)
+    dispute_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WorkReport
+        fields = (
+            "id",
+            "project",
+            "project_name",
+            "portal_id",
+            "status",
+            "created_by",
+            "created_by_name",
+            "client_comment",
+            "sent_at",
+            "accepted_at",
+            "paid_at",
+            "created_at",
+            "updated_at",
+            "is_active",
+            "total_tracked_seconds",
+            "dispute_count",
+        )
+        read_only_fields = fields
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.display_name
+        return ""
+
+    def get_total_tracked_seconds(self, obj):
+        from board.reports import live_total_seconds
+
+        return live_total_seconds(obj.project_id)
+
+    def get_dispute_count(self, obj):
+        if hasattr(obj, "_dispute_count"):
+            return obj._dispute_count
+        return obj.dispute_items.count()
+
+
+class WorkReportDisputeInputSerializer(serializers.Serializer):
+    client_comment = serializers.CharField(allow_blank=False, trim_whitespace=True)
+    task_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+    )
+    notes = serializers.DictField(
+        child=serializers.CharField(allow_blank=True),
+        required=False,
+    )

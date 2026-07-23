@@ -7,6 +7,7 @@ from .views import (
     CommentViewSet,
     ProjectViewSet,
     TaskViewSet,
+    WorkReportViewSet,
 )
 from .stream import PortalStreamView, StreamTokenView, SyncCursorView
 
@@ -15,6 +16,7 @@ router.register("projects", ProjectViewSet, basename="project")
 router.register("tasks", TaskViewSet, basename="task")
 router.register("comments", CommentViewSet, basename="comment")
 router.register("attachments", AttachmentViewSet, basename="attachment")
+router.register("reports", WorkReportViewSet, basename="report")
 
 urlpatterns = [
     path("activity/", ActivityFeedView.as_view(), name="activity-feed"),

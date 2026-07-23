@@ -1,6 +1,15 @@
 from django.contrib import admin
 
-from .models import Attachment, Comment, Project, Task, TimeEntry
+from .models import (
+    Attachment,
+    Comment,
+    Project,
+    Task,
+    TimeEntry,
+    WorkReport,
+    WorkReportDisputeItem,
+    WorkReportEvent,
+)
 
 
 class CommentInline(admin.TabularInline):
@@ -19,6 +28,18 @@ class TimeEntryInline(admin.TabularInline):
     model = TimeEntry
     extra = 0
     readonly_fields = ("created_at", "updated_at")
+
+
+class WorkReportEventInline(admin.TabularInline):
+    model = WorkReportEvent
+    extra = 0
+    readonly_fields = ("kind", "actor", "payload", "created_at")
+
+
+class WorkReportDisputeInline(admin.TabularInline):
+    model = WorkReportDisputeItem
+    extra = 0
+    readonly_fields = ("task", "note", "created_at")
 
 
 @admin.register(Project)
@@ -60,3 +81,11 @@ class TimeEntryAdmin(admin.ModelAdmin):
     list_display = ("task", "author", "started_at", "ended_at", "duration_seconds")
     list_filter = ("ended_at",)
     search_fields = ("task__title", "note")
+
+
+@admin.register(WorkReport)
+class WorkReportAdmin(admin.ModelAdmin):
+    list_display = ("id", "project", "status", "created_by", "sent_at", "accepted_at", "paid_at")
+    list_filter = ("status",)
+    search_fields = ("project__name",)
+    inlines = [WorkReportEventInline, WorkReportDisputeInline]

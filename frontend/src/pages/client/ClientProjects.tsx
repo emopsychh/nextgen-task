@@ -182,7 +182,8 @@ export function ClientProjects() {
 
   async function createProject(e: React.FormEvent) {
     e.preventDefault();
-    if (!token || !portalId) return;
+    // Projects are agency-only — clients never create modules.
+    if (!token || !portalId || !isAgency) return;
     setBusy(true);
     setError(null);
     try {

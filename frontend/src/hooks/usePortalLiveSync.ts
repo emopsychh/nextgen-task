@@ -6,7 +6,13 @@ type Options = {
   portalId: number | string | null | undefined;
   enabled?: boolean;
   /** Called when portal data may have changed (SSE or cursor bump). */
-  onEvent: (payload?: { kind?: string; task_id?: number; v?: number }) => void;
+  onEvent: (payload?: {
+    kind?: string;
+    task_id?: number;
+    project_id?: number;
+    report_id?: number;
+    v?: number;
+  }) => void;
 };
 
 /**

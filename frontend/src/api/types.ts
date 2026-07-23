@@ -143,6 +143,67 @@ export type TimeEntry = {
   updated_at: string;
 };
 
+export type WorkReportStatus =
+  | "draft"
+  | "pending_client"
+  | "disputed"
+  | "accepted"
+  | "paid";
+
+export type WorkReportTaskRow = {
+  id: number;
+  title: string;
+  status: TaskStatus;
+  tracked_seconds: number;
+};
+
+export type WorkReportEvent = {
+  id: number;
+  kind: "created" | "sent" | "accepted" | "disputed" | "paid" | "reopened";
+  actor: number | null;
+  actor_name: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type WorkReportDisputeItem = {
+  id: number;
+  task: number;
+  task_title: string;
+  note: string;
+  created_at: string;
+};
+
+export type WorkReportDealHours = {
+  deal_id: string;
+  deal_title: string;
+  paid_hours: number | null;
+  remaining_hours: number | null;
+} | null;
+
+export type WorkReport = {
+  id: number;
+  project: number;
+  project_name: string;
+  portal_id: number;
+  status: WorkReportStatus;
+  created_by: number | null;
+  created_by_name: string;
+  client_comment: string;
+  sent_at: string | null;
+  accepted_at: string | null;
+  paid_at: string | null;
+  created_at: string;
+  updated_at: string;
+  is_active: boolean;
+  tasks?: WorkReportTaskRow[];
+  total_tracked_seconds: number;
+  deal_hours?: WorkReportDealHours;
+  events?: WorkReportEvent[];
+  dispute_items?: WorkReportDisputeItem[];
+  dispute_count?: number;
+};
+
 export type DealBinding = {
   id: number;
   agency_portal: number;

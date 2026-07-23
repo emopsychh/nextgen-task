@@ -165,3 +165,90 @@ class TimeEntry(models.Model):
     @property
     def is_running(self) -> bool:
         return self.ended_at is None
+
+
+class WorkReport(models.Model):
+    """Live work report for one project — agency sends, client agrees or disputes."""
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        PENDING_CLIENT = "pending_client", "Pending client"
+        DISPUTED = "disputed", "Disputed"
+        ACCEPTED = "accepted", "Accepted"
+        PAID = "paid", "Paid"
+
+    ACTIVE_STATUSES = (Status.DRAFT, Status.PENDING_CLIENT, Status.DISPUTED)
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="work_reports")
+    status = models.CharField(
+        max_length=32, choices=Status.choices, default=Status.DRAFT, db_index=True
+    )
+    created_by = models.ForeignKey(
+        BitrixUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_work_reports",
+    )
+    client_comment = models.TextField(blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"WorkReport#{self.pk} project={self.project_id} {self.status}"
+
+    @property
+    def is_active(self) -> bool:
+        return self.status in self.ACTIVE_STATUSES
+
+
+class WorkReportEvent(models.Model):
+    class Kind(models.TextChoices):
+        CREATED = "created", "Created"
+        SENT = "sent", "Sent"
+        ACCEPTED = "accepted", "Accepted"
+        DISPUTED = "disputed", "Disputed"
+        PAID = "paid", "Paid"
+        REOPENED = "reopened", "Reopened"
+
+    report = models.ForeignKey(WorkReport, on_delete=models.CASCADE, related_name="events")
+    actor = models.ForeignKey(
+        BitrixUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="work_report_events",
+    )
+    kind = models.CharField(max_length=32, choices=Kind.choices)
+    payload = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"WorkReportEvent#{self.pk} {self.kind}"
+
+
+class WorkReportDisputeItem(models.Model):
+    report = models.ForeignKey(
+        WorkReport, on_delete=models.CASCADE, related_name="dispute_items"
+    )
+    task = models.ForeignKey(
+        Task, on_delete=models.CASCADE, related_name="work_report_disputes"
+    )
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+        unique_together = [("report", "task")]
+
+    def __str__(self):
+        return f"Dispute report={self.report_id} task={self.task_id}"
