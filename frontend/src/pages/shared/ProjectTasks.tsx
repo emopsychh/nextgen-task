@@ -8,6 +8,7 @@ import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { dueMeta } from "../../lib/dates";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
+import { CalendarGlyph } from "../../components/icons";
 
 export function ProjectTasks() {
   const { projectId } = useParams();
@@ -342,8 +343,19 @@ export function ProjectTasks() {
                   ) : null}
                 </div>
                 <div className={`task-due ${due.tone}`}>
-                  <span className="task-due-label">{due.label}</span>
-                  {due.detail && <span className="task-due-date">{due.detail}</span>}
+                  <span className="task-due-icon" aria-hidden>
+                    <CalendarGlyph />
+                  </span>
+                  <span className="task-due-body">
+                    {due.detail ? (
+                      <>
+                        <span className="task-due-date">{due.detail}</span>
+                        <span className="task-due-label">{due.label}</span>
+                      </>
+                    ) : (
+                      <span className="task-due-date">{due.label}</span>
+                    )}
+                  </span>
                 </div>
               </Link>
             );

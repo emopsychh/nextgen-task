@@ -113,6 +113,15 @@ export type DueTone =
   | "due-overdue"
   | "due-done";
 
+function pluralDays(n: number): string {
+  const abs = Math.abs(n) % 100;
+  const n1 = abs % 10;
+  if (abs > 10 && abs < 20) return "дней";
+  if (n1 === 1) return "день";
+  if (n1 >= 2 && n1 <= 4) return "дня";
+  return "дней";
+}
+
 export function dueMeta(
   due: string | null | undefined,
   status: "todo" | "in_progress" | "done" = "todo"
@@ -120,7 +129,7 @@ export function dueMeta(
   if (status === "done") {
     const detail = due ? formatRuDate(due) : undefined;
     return {
-      label: "Завершена",
+      label: "Готово",
       tone: "due-done",
       detail: detail || undefined,
     };
@@ -145,15 +154,17 @@ export function dueMeta(
   if (target.getTime() < now.getTime()) {
     const n = Math.max(1, Math.abs(days));
     return {
-      label: n === 1 ? "Просрочено на 1 день" : `Просрочено на ${n} дн.`,
+      label: n === 1 ? "Просрочено" : `${n} ${pluralDays(n)} назад`,
       tone: "due-overdue",
       detail,
     };
   }
-  if (days === 0) return { label: "Срок сегодня", tone: "due-today", detail };
+  if (days === 0) return { label: "Сегодня", tone: "due-today", detail };
   if (days === 1) return { label: "Завтра", tone: "due-soon", detail };
-  if (days <= 7) return { label: `${days} дн. осталось`, tone: "due-soon", detail };
-  return { label: `${days} дн. осталось`, tone: "due-ok", detail };
+  if (days <= 7) {
+    return { label: `через ${days} ${pluralDays(days)}`, tone: "due-soon", detail };
+  }
+  return { label: `через ${days} ${pluralDays(days)}`, tone: "due-ok", detail };
 }
 
 export function daysInMonth(year: number, month: number): number {
