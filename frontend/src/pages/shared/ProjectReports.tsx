@@ -97,6 +97,8 @@ export function ProjectReports() {
   const [showCreate, setShowCreate] = useState(false);
   const [pickedProjects, setPickedProjects] = useState<Set<number>>(new Set());
   const [expandedProjects, setExpandedProjects] = useState<Set<number>>(new Set());
+  const [expandedTasks, setExpandedTasks] = useState<Set<number>>(new Set());
+  const [taskFilter, setTaskFilter] = useState<"all" | "with" | "without">("all");
   const [disputeComment, setDisputeComment] = useState("");
   const [selectedTasks, setSelectedTasks] = useState<Set<number>>(new Set());
   const [showDispute, setShowDispute] = useState(false);
@@ -157,8 +159,11 @@ export function ProjectReports() {
       if (!token) return;
       const data = await api<WorkReport>(`/api/reports/${id}/`, {}, token);
       setDetail(data);
-      // Open all projects by default so hours/outcomes are visible immediately.
-      setExpandedProjects(new Set((data.projects_detail || []).map((p) => p.id)));
+      setExpandedTasks(new Set());
+      setTaskFilter("all");
+      // One project open is enough to start reading without a huge scroll.
+      const firstId = data.projects_detail?.[0]?.id;
+      setExpandedProjects(firstId ? new Set([firstId]) : new Set());
     },
     [token]
   );
@@ -266,6 +271,15 @@ export function ProjectReports() {
 
   function toggleExpand(id: number) {
     setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleTaskExpand(id: number) {
+    setExpandedTasks((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -636,10 +650,37 @@ export function ProjectReports() {
               ) : null}
 
               <div className="report-section">
-                <h3 className="report-section-title">Проекты и итоги</h3>
+                <div className="report-section-head">
+                  <h3 className="report-section-title">Проекты и итоги</h3>
+                  <div className="report-task-filters" role="group" aria-label="Фильтр задач">
+                    {(
+                      [
+                        { id: "all", label: "Все" },
+                        { id: "with", label: "С итогом" },
+                        { id: "without", label: "Без итога" },
+                      ] as const
+                    ).map((f) => (
+                      <button
+                        key={f.id}
+                        type="button"
+                        className={`report-mini-chip${taskFilter === f.id ? " active" : ""}`}
+                        onClick={() => setTaskFilter(f.id)}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <div className="report-project-blocks">
                   {(detail.projects_detail || []).map((block) => {
                     const open = expandedProjects.has(block.id);
+                    const withOutcome = block.tasks.filter((t) => t.outcome?.trim()).length;
+                    const visibleTasks = block.tasks.filter((t) => {
+                      const has = Boolean(t.outcome?.trim());
+                      if (taskFilter === "with") return has;
+                      if (taskFilter === "without") return !has;
+                      return true;
+                    });
                     return (
                       <article
                         key={block.id}
@@ -656,36 +697,92 @@ export function ProjectReports() {
                               {formatDuration(block.total_tracked_seconds)}
                             </span>
                             <span>
-                              {block.tasks.length}{" "}
-                              {block.tasks.length === 1 ? "задача" : "задач"}
+                              {withOutcome}/{block.tasks.length} с итогом
                             </span>
                             <span className="report-task-chevron">{open ? "▾" : "▸"}</span>
                           </span>
                         </button>
                         {open ? (
                           <div className="report-project-block-body">
-                            {block.tasks.map((t) => (
-                              <div key={t.id} className="report-outcome-row">
-                                <div className="report-outcome-row-head">
-                                  <Link to={`/tasks/${t.id}`}>{t.title}</Link>
-                                  <span className="report-outcome-meta">
-                                    <span>{STATUS_LABEL[t.status]}</span>
-                                    <strong>{formatDuration(t.tracked_seconds)}</strong>
-                                  </span>
+                            {visibleTasks.length === 0 ? (
+                              <p className="muted report-tasks-empty">
+                                Нет задач в этом фильтре
+                              </p>
+                            ) : (
+                              <div className="report-task-table" role="table">
+                                <div className="report-task-table-head" role="row">
+                                  <span>Задача</span>
+                                  <span>Итог</span>
+                                  <span>Статус</span>
+                                  <span>Время</span>
                                 </div>
-                                {t.outcome?.trim() ? (
-                                  <p className="report-outcome-text">{t.outcome}</p>
-                                ) : (
-                                  <p className="muted report-outcome-empty">
-                                    Итог не указан
-                                    {t.status !== "done" ? " (задача ещё не завершена)" : ""}
-                                  </p>
-                                )}
+                                {visibleTasks.map((t) => {
+                                  const taskOpen = expandedTasks.has(t.id);
+                                  const outcome = (t.outcome || "").trim();
+                                  return (
+                                    <div
+                                      key={t.id}
+                                      className={`report-task-row${taskOpen ? " is-open" : ""}${
+                                        outcome ? " has-outcome" : ""
+                                      }`}
+                                      role="row"
+                                    >
+                                      <button
+                                        type="button"
+                                        className="report-task-row-main"
+                                        onClick={() => toggleTaskExpand(t.id)}
+                                      >
+                                        <span className="report-task-name">
+                                          <Link
+                                            to={`/tasks/${t.id}`}
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            {t.title}
+                                          </Link>
+                                        </span>
+                                        <span
+                                          className={`report-task-outcome-preview${
+                                            outcome ? "" : " is-empty"
+                                          }`}
+                                        >
+                                          {outcome
+                                            ? outcome.length > 90
+                                              ? `${outcome.slice(0, 90)}…`
+                                              : outcome
+                                            : "Итог не указан"}
+                                        </span>
+                                        <span className="report-task-status">
+                                          {STATUS_LABEL[t.status]}
+                                        </span>
+                                        <span className="report-task-time">
+                                          {formatDuration(t.tracked_seconds)}
+                                        </span>
+                                      </button>
+                                      {taskOpen ? (
+                                        <div className="report-task-row-detail">
+                                          {outcome ? (
+                                            <p className="report-outcome-text">{outcome}</p>
+                                          ) : (
+                                            <p className="muted report-outcome-empty">
+                                              Итог не указан
+                                              {t.status !== "done"
+                                                ? " — задача ещё не завершена"
+                                                : " — можно дописать в карточке задачи"}
+                                            </p>
+                                          )}
+                                          <Link
+                                            className="report-task-open-link"
+                                            to={`/tasks/${t.id}`}
+                                          >
+                                            Открыть задачу →
+                                          </Link>
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })}
                               </div>
-                            ))}
-                            {block.tasks.length === 0 ? (
-                              <p className="muted">В проекте пока нет задач</p>
-                            ) : null}
+                            )}
                           </div>
                         ) : null}
                       </article>
