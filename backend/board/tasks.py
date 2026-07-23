@@ -1,4 +1,5 @@
 from celery import shared_task
+import logging
 
 from portals.bitrix import (
     BITRIX_STATUS_COMPLETED,
@@ -563,6 +564,8 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
     from board.models import Attachment
     from board.realtime import publish_task_event
 
+    logger = logging.getLogger(__name__)
+
     try:
         attachment = Attachment.objects.select_related(
             "task", "task__project", "task__project__portal", "comment", "comment__task"
@@ -584,6 +587,15 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
     errors = []
     update_fields = []
 
+    logger.info(
+        "sync_attachment start id=%s task=%s agency_task=%s client_task=%s name=%s",
+        attachment_id,
+        task.id,
+        task.agency_bitrix_task_id,
+        task.bitrix_task_id,
+        attachment.original_name,
+    )
+
     # Ensure agency subtask exists — that's where managers look for files
     if agency and agency.access_token and not task.agency_bitrix_task_id:
         try:
@@ -600,6 +612,7 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
                 task.save(update_fields=["agency_bitrix_task_id", "updated_at"])
         except Exception as exc:
             errors.append(f"ensure agency task: {exc}")
+            logger.exception("ensure agency task failed attachment=%s", attachment_id)
 
     # Agency first (Проекты → задача → подзадача)
     if (
@@ -618,6 +631,16 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
             update_fields.append("agency_bitrix_file_id")
         except BitrixAPIError as exc:
             errors.append(f"agency: {exc}")
+            logger.warning(
+                "agency attach failed attachment=%s task=%s: %s",
+                attachment_id,
+                task.agency_bitrix_task_id,
+                exc,
+            )
+    elif agency and not task.agency_bitrix_task_id:
+        errors.append("agency: no agency_bitrix_task_id")
+    elif not agency:
+        errors.append("agency: portal not linked")
 
     if task.bitrix_task_id and client_portal.access_token and not attachment.bitrix_file_id:
         try:
@@ -630,12 +653,21 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
             update_fields.append("bitrix_file_id")
         except BitrixAPIError as exc:
             errors.append(f"client: {exc}")
+            logger.warning(
+                "client attach failed attachment=%s task=%s: %s",
+                attachment_id,
+                task.bitrix_task_id,
+                exc,
+            )
 
     if update_fields:
         attachment.save(update_fields=update_fields)
         publish_task_event(task, kind="attachment_synced")
 
     if errors and not update_fields:
+        logger.error(
+            "sync_attachment failed id=%s errors=%s", attachment_id, errors
+        )
         try:
             raise self.retry(exc=BitrixAPIError("; ".join(errors)))
         except self.MaxRetriesExceededError:

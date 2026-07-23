@@ -257,24 +257,27 @@ class BitrixClient:
     ) -> dict:
         import base64
 
+        fid = int(folder_id) if str(folder_id).isdigit() else folder_id
         result = self.call(
             "disk.folder.uploadfile",
             {
-                "id": folder_id,
+                "id": fid,
                 "data": {"NAME": filename},
                 "fileContent": [filename, base64.b64encode(content).decode("ascii")],
+                "generateUniqueName": True,
             },
             timeout=120,
         )
         return result if isinstance(result, dict) else {"ID": result}
 
     def attach_file_to_task(self, task_id: int | str, file_id: int | str) -> dict:
+        tid = int(task_id) if str(task_id).isdigit() else task_id
+        fid = int(file_id) if str(file_id).isdigit() else file_id
         last_exc: BitrixAPIError | None = None
         for method, params in (
-            ("tasks.task.files.attach", {"taskId": task_id, "fileId": file_id}),
-            ("tasks.task.files.attach", {"TASK_ID": task_id, "FILE_ID": file_id}),
-            ("task.files.attach", {"TASK_ID": task_id, "FILE_ID": file_id}),
-            ("task.item.addfile", {"TASKID": task_id, "FILE_ID": file_id}),
+            ("tasks.task.files.attach", {"taskId": tid, "fileId": fid}),
+            ("tasks.task.file.attach", {"taskId": tid, "fileIds": [fid]}),
+            ("tasks.task.files.attach", {"TASK_ID": tid, "FILE_ID": fid}),
         ):
             try:
                 return self.call(method, params)
