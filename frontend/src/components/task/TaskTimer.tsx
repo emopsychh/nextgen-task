@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { formatDuration, formatTimerClock } from "../../lib/format";
+import {
+  asPackageHours,
+  formatDuration,
+  formatPackageHours,
+  formatTimerClock,
+} from "../../lib/format";
 
 type Props = {
   /** Sum of finished time entries (seconds), without the active run. */
@@ -11,17 +16,6 @@ type Props = {
   /** Remaining hours on the deal. */
   remainingHours?: number | null;
 };
-
-function asHours(value: number | string | null | undefined): number | null {
-  if (value == null || value === "") return null;
-  const n = typeof value === "number" ? value : Number(String(value).replace(",", "."));
-  return Number.isFinite(n) ? n : null;
-}
-
-function hoursLabel(h: number): string {
-  const n = Math.round(h * 100) / 100;
-  return Number.isInteger(n) ? String(n) : n.toFixed(2);
-}
 
 export function TaskTimer({
   closedSeconds,
@@ -47,8 +41,8 @@ export function TaskTimer({
   const displaySec = Math.max(0, closedSeconds + live);
   const clock = isRunning ? formatTimerClock(displaySec) : formatDuration(displaySec);
 
-  const paid = asHours(paidHours);
-  const remaining = asHours(remainingHours);
+  const paid = asPackageHours(paidHours);
+  const remaining = asPackageHours(remainingHours);
   const hasPackage = paid != null && paid > 0;
   // Package consumption across all billed work (not this task alone)
   const usedHours =
@@ -74,10 +68,13 @@ export function TaskTimer({
         {hasPackage ? (
           <div className="task-timer-scale-meta">
             <span>
-              пакет: {usedHours != null ? hoursLabel(usedHours) : "—"} / {hoursLabel(paid)} ч
+              пакет: {usedHours != null ? formatPackageHours(usedHours) : "—"} /{" "}
+              {formatPackageHours(paid)}
             </span>
             {remaining != null ? (
-              <span className="task-timer-scale-remain">остаток {hoursLabel(remaining)} ч</span>
+              <span className="task-timer-scale-remain">
+                остаток {formatPackageHours(remaining)}
+              </span>
             ) : null}
           </div>
         ) : null}

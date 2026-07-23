@@ -48,7 +48,10 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
   ref
 ) {
   return (
-    <article className={`task-summary-card${canManage ? " is-editable" : ""}`} ref={ref}>
+    <article
+      className={`task-summary-card${canManage ? " is-editable" : ""}${task.status === "done" ? " is-done" : ""}`}
+      ref={ref}
+    >
       <div className="task-summary-intro">
         <span className="user-mark">{creator}</span>
         <span className="task-summary-intro-rest"> создал задачу</span>

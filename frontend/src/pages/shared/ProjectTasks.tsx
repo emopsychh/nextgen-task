@@ -318,7 +318,7 @@ export function ProjectTasks() {
               <Link
                 key={t.id}
                 to={`/tasks/${t.id}`}
-                className={`task-card${enteringId === t.id ? " is-entering" : ""}`}
+                className={`task-card${t.status === "done" ? " is-done" : ""}${enteringId === t.id ? " is-entering" : ""}`}
               >
                 <div className="task-card-main">
                   <div className="task-card-top">
