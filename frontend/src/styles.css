@@ -1944,32 +1944,45 @@ a {
   animation: linked-card-in 0.55s cubic-bezier(0.34, 1.35, 0.64, 1);
 }
 
+a.task-card.is-done,
 .task-card.is-done {
-  background: #f4f6f5;
-  border-color: #dfe6e3;
+  background: #eef1ef;
+  border-color: #d2dbd7;
   box-shadow: none;
-  opacity: 0.72;
+  opacity: 0.58;
+  filter: grayscale(0.35);
 }
 
+a.task-card.is-done:hover,
 .task-card.is-done:hover {
-  border-color: #d0dad5;
+  border-color: #c5d0cb;
   box-shadow: none;
   transform: none;
-  opacity: 0.88;
+  opacity: 0.72;
+  filter: grayscale(0.2);
 }
 
-.task-card.is-done .task-card-title {
-  text-decoration: line-through;
-  text-decoration-thickness: 1.5px;
-  text-decoration-color: rgba(70, 82, 78, 0.45);
-  color: #6a7571;
-  font-weight: 600;
+.task-card.is-done .task-card-title,
+.task-card.is-done .task-card-title.is-struck,
+.task-card-title.is-struck {
+  color: #8a9490 !important;
+  font-weight: 550;
+  text-decoration: line-through !important;
+  text-decoration-thickness: 2px !important;
+  text-decoration-color: #5c6864 !important;
 }
 
 .task-card.is-done .task-card-desc,
 .task-card.is-done .task-due,
-.task-card.is-done .task-comments {
-  opacity: 0.75;
+.task-card.is-done .task-comments,
+.task-card.is-done .task-status-pill {
+  opacity: 0.7;
+}
+
+.task-card.is-done .task-status-pill.status-done {
+  background: #e2ebe6;
+  color: #5a6b63;
+  border-color: #c5d3cc;
 }
 
 .task-card-main {
@@ -3351,18 +3364,21 @@ a {
 }
 
 .task-summary-card.is-done {
-  background: #f5f7f6;
-  border-color: #dfe6e3;
+  background: #eef1ef;
+  border-color: #d2dbd7;
   box-shadow: 0 4px 14px rgba(18, 20, 22, 0.03);
-  opacity: 0.82;
+  opacity: 0.65;
+  filter: grayscale(0.3);
 }
 
 .task-summary-card.is-done .task-summary-title,
-.task-summary-card.is-done .task-summary-title-input {
-  text-decoration: line-through;
-  text-decoration-thickness: 1.5px;
-  text-decoration-color: rgba(70, 82, 78, 0.4);
-  color: #6a7571;
+.task-summary-card.is-done .task-summary-title-input,
+.task-summary-title.is-struck,
+.task-summary-title-input.is-struck {
+  color: #8a9490 !important;
+  text-decoration: line-through !important;
+  text-decoration-thickness: 2px !important;
+  text-decoration-color: #5c6864 !important;
 }
 
 .task-summary-intro {

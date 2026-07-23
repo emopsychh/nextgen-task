@@ -332,7 +332,11 @@ export function ProjectTasks() {
                       <span className="task-comments muted">{t.comments_count} комм.</span>
                     )}
                   </div>
-                  <strong className="task-card-title">{t.title}</strong>
+                  <strong
+                    className={`task-card-title${t.status === "done" ? " is-struck" : ""}`}
+                  >
+                    {t.title}
+                  </strong>
                   {t.description ? (
                     <span className="task-card-desc muted">{t.description}</span>
                   ) : null}

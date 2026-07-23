@@ -63,7 +63,7 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
         </span>
         {canManage ? (
           <input
-            className="task-summary-title-input"
+            className={`task-summary-title-input${task.status === "done" ? " is-struck" : ""}`}
             value={draftTitle}
             onChange={(e) => onDraftTitle(e.target.value)}
             onBlur={() => onCommitTitle()}
@@ -77,7 +77,9 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
             aria-label="Название задачи"
           />
         ) : (
-          <h1 className="task-summary-title">{task.title}</h1>
+          <h1 className={`task-summary-title${task.status === "done" ? " is-struck" : ""}`}>
+            {task.title}
+          </h1>
         )}
       </div>
 
