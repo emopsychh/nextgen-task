@@ -49,18 +49,10 @@ class AttachmentSerializer(serializers.ModelSerializer):
     def get_url(self, obj):
         if not obj.file:
             return None
-        request = self.context.get("request")
-        if request:
-            uri = request.build_absolute_uri(obj.file.url)
-        else:
-            uri = obj.file.url
-        # Behind TLS-terminating proxy nginx may report http — force public scheme
-        public = (settings.PUBLIC_APP_URL or "").rstrip("/")
-        if public.startswith("https://") and isinstance(uri, str) and uri.startswith("http://"):
-            uri = "https://" + uri[len("http://") :]
-        elif public and isinstance(uri, str) and uri.startswith("/"):
-            uri = f"{public}{uri}"
-        return uri
+        # Relative same-origin URL — browser keeps https; avoids Mixed Content
+        # when TLS terminates at Caddy and Django sees http.
+        path = obj.file.url
+        return path if path.startswith("/") else f"/{path}"
 
 
 class CommentSerializer(serializers.ModelSerializer):
