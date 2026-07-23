@@ -644,6 +644,11 @@ a {
   background: color-mix(in srgb, var(--accent) 6%, #fff);
 }
 
+.workspace-attention-card.is-dispute {
+  background: color-mix(in srgb, #c45c3e 7%, #fff);
+  border-color: color-mix(in srgb, #c45c3e 28%, var(--line));
+}
+
 .workspace-attention-card.is-overdue {
   border-color: color-mix(in srgb, #c45c3e 35%, var(--line));
 }

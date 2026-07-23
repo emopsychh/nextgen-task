@@ -41,6 +41,7 @@ export function ClientProjects() {
   const [openTasks, setOpenTasks] = useState<Task[]>([]);
   const [recentDone, setRecentDone] = useState<Task[]>([]);
   const [pendingReports, setPendingReports] = useState<WorkReport[]>([]);
+  const [disputedReports, setDisputedReports] = useState<WorkReport[]>([]);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -75,7 +76,8 @@ export function ClientProjects() {
     const gen = loadGenRef.current;
     loadInFlightRef.current = true;
     try {
-      const [openData, doneData, portalsData, hoursData, reportsData] = await Promise.all([
+      const [openData, doneData, portalsData, hoursData, reportsData, disputedData] =
+        await Promise.all([
         api<Task[] | Paginated<Task>>(
           `/api/tasks/?portal=${portalId}&open=1`,
           {},
@@ -105,6 +107,13 @@ export function ClientProjects() {
               token
             )
           : Promise.resolve([] as WorkReport[]),
+        isAgency
+          ? api<WorkReport[] | Paginated<WorkReport>>(
+              `/api/reports/?portal=${portalId}&status=disputed`,
+              {},
+              token
+            )
+          : Promise.resolve([] as WorkReport[]),
       ]);
       if (gen !== loadGenRef.current) return;
 
@@ -118,6 +127,7 @@ export function ClientProjects() {
             .slice(0, 6)
         );
         setPendingReports(unwrapList(reportsData as WorkReport[] | Paginated<WorkReport>));
+        setDisputedReports([]);
         setDealHours(hoursData as DealBinding | null);
         setPortalInfo(portal);
       } else {
@@ -125,6 +135,7 @@ export function ClientProjects() {
         setDealHours(bindings[0] || null);
         setRecentDone([]);
         setPendingReports([]);
+        setDisputedReports(unwrapList(disputedData as WorkReport[] | Paginated<WorkReport>));
         const found = unwrapList(portalsData as Portal[] | Paginated<Portal>).find(
           (p) => p.id === portalId
         );
@@ -196,7 +207,8 @@ export function ClientProjects() {
 
   const titleName = portalInfo?.name || portalInfo?.domain || "Клиент";
   const clientNeedsAttention = pendingReports.length > 0 || recentDone.length > 0;
-  const agencyNeedsAttention = clientTasks.length > 0 || hotTasks.length > 0;
+  const agencyNeedsAttention =
+    disputedReports.length > 0 || clientTasks.length > 0 || hotTasks.length > 0;
 
   return (
     <div className="workspace-page">
@@ -205,7 +217,7 @@ export function ClientProjects() {
           <h1 className="page-title">{isAgency ? titleName : "Рабочее пространство"}</h1>
           <p className="page-sub">
             {isAgency
-              ? "Часы, задачи клиента и то, что горит по срокам"
+              ? "Часы, споры по отчётам, задачи клиента и сроки"
               : "Часы и то, что ждёт вашего ответа"}
           </p>
         </div>
@@ -314,84 +326,117 @@ export function ClientProjects() {
           {!agencyNeedsAttention ? (
             <div className="empty-linked workspace-empty">
               <p className="muted">
-                Нет клиентских задач и горящих сроков. Проекты — в панели слева.
+                Нет споров, клиентских задач и горящих сроков. Проекты — в панели слева.
               </p>
             </div>
           ) : (
-            <div className="workspace-split-focus">
-              <section className="workspace-focus-block">
-                <div className="linked-head">
-                  <h2 className="section-title">От клиента</h2>
-                  <p className="muted">Задачи, которые поставил клиент</p>
-                </div>
-                {clientTasks.length === 0 ? (
-                  <div className="empty-linked workspace-empty">
-                    <p className="muted">Пока нет открытых задач от клиента.</p>
+            <>
+              {disputedReports.length > 0 ? (
+                <section className="workspace-focus-block">
+                  <div className="linked-head">
+                    <h2 className="section-title">На споре</h2>
+                    <p className="muted">Клиент оспорил отчёт — нужно разобрать</p>
                   </div>
-                ) : (
                   <div className="workspace-attention-list">
-                    {clientTasks.slice(0, 12).map((t) => (
+                    {disputedReports.map((r) => (
                       <Link
-                        key={t.id}
-                        to={`/tasks/${t.id}`}
-                        className="workspace-attention-card"
+                        key={`dispute-${r.id}`}
+                        to={reportDetailPath(portalId, true, r.id)}
+                        className="workspace-attention-card is-dispute"
                       >
                         <div className="workspace-attention-top">
-                          <span className="workspace-chip tone-client">Клиент</span>
-                          <span className="muted">{STATUS_LABEL[t.status]}</span>
+                          <span className={`report-status-pill status-${r.status}`}>
+                            {STATUS_LABEL_RU[r.status]}
+                          </span>
+                          <span className="muted">Отчёт</span>
                         </div>
-                        <strong>{t.title}</strong>
+                        <strong>{reportTitle(r)}</strong>
                         <span className="muted">
-                          {t.project_name}
-                          {t.created_by_name ? ` · ${t.created_by_name}` : ""}
+                          {r.client_comment?.trim()
+                            ? r.client_comment.trim()
+                            : "Открыть и вернуть в работу или уточнить"}
                         </span>
                       </Link>
                     ))}
                   </div>
-                )}
-              </section>
+                </section>
+              ) : null}
 
-              <section className="workspace-focus-block">
-                <div className="linked-head">
-                  <h2 className="section-title">Горят</h2>
-                  <p className="muted">Просроченные и важные</p>
-                </div>
-                {hotTasks.length === 0 ? (
-                  <div className="empty-linked workspace-empty">
-                    <p className="muted">Сроков и важных задач нет.</p>
+              <div className="workspace-split-focus">
+                <section className="workspace-focus-block">
+                  <div className="linked-head">
+                    <h2 className="section-title">От клиента</h2>
+                    <p className="muted">Задачи, которые поставил клиент</p>
                   </div>
-                ) : (
-                  <div className="workspace-attention-list">
-                    {hotTasks.map((t) => {
-                      const overdue = isTaskOverdue(t.due_date, t.status);
-                      const due = taskDueLabel(t);
-                      return (
+                  {clientTasks.length === 0 ? (
+                    <div className="empty-linked workspace-empty">
+                      <p className="muted">Пока нет открытых задач от клиента.</p>
+                    </div>
+                  ) : (
+                    <div className="workspace-attention-list">
+                      {clientTasks.slice(0, 12).map((t) => (
                         <Link
                           key={t.id}
                           to={`/tasks/${t.id}`}
-                          className={`workspace-attention-card${overdue ? " is-overdue" : ""}`}
+                          className="workspace-attention-card"
                         >
                           <div className="workspace-attention-top">
-                            {overdue ? (
-                              <span className="workspace-chip tone-overdue">Просрочена</span>
-                            ) : null}
-                            {t.is_important ? (
-                              <span className="workspace-chip tone-important">Важная</span>
-                            ) : null}
-                            <span className="muted">{t.project_name}</span>
+                            <span className="workspace-chip tone-client">Клиент</span>
+                            <span className="muted">{STATUS_LABEL[t.status]}</span>
                           </div>
                           <strong>{t.title}</strong>
                           <span className="muted">
-                            {STATUS_LABEL[t.status]}
-                            {due ? ` · до ${due}` : ""}
+                            {t.project_name}
+                            {t.created_by_name ? ` · ${t.created_by_name}` : ""}
                           </span>
                         </Link>
-                      );
-                    })}
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <section className="workspace-focus-block">
+                  <div className="linked-head">
+                    <h2 className="section-title">Горят</h2>
+                    <p className="muted">Просроченные и важные</p>
                   </div>
-                )}
-              </section>
-            </div>
+                  {hotTasks.length === 0 ? (
+                    <div className="empty-linked workspace-empty">
+                      <p className="muted">Сроков и важных задач нет.</p>
+                    </div>
+                  ) : (
+                    <div className="workspace-attention-list">
+                      {hotTasks.map((t) => {
+                        const overdue = isTaskOverdue(t.due_date, t.status);
+                        const due = taskDueLabel(t);
+                        return (
+                          <Link
+                            key={t.id}
+                            to={`/tasks/${t.id}`}
+                            className={`workspace-attention-card${overdue ? " is-overdue" : ""}`}
+                          >
+                            <div className="workspace-attention-top">
+                              {overdue ? (
+                                <span className="workspace-chip tone-overdue">Просрочена</span>
+                              ) : null}
+                              {t.is_important ? (
+                                <span className="workspace-chip tone-important">Важная</span>
+                              ) : null}
+                              <span className="muted">{t.project_name}</span>
+                            </div>
+                            <strong>{t.title}</strong>
+                            <span className="muted">
+                              {STATUS_LABEL[t.status]}
+                              {due ? ` · до ${due}` : ""}
+                            </span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              </div>
+            </>
           )}
         </div>
       )}

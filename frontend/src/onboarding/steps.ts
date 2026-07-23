@@ -62,7 +62,7 @@ export const AGENCY_STEPS: TourStep[] = [
     id: "focus",
     target: "tour-agency-focus",
     title: "Что важно сейчас",
-    body: "Здесь пакет часов, задачи от клиента и то, что горит по срокам или отмечено важным.",
+    body: "Здесь пакет часов, оспоренные отчёты, задачи от клиента и то, что горит по срокам.",
     placement: "left",
     route: "client-workspace",
   },
