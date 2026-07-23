@@ -879,7 +879,9 @@ def pull_task_status_from_bitrix(task) -> bool:
     changed = apply_inbound_deadline(task, due, allow_while_pending=True) or changed
 
     important = bitrix_task_is_important(data)
-    changed = apply_inbound_importance(task, important, allow_while_pending=True) or changed
+    # Do NOT clobber a pending local toggle: Bitrix lags right after we push,
+    # so a pull mid-flight would reset the flag before the outbound sync lands.
+    changed = apply_inbound_importance(task, important, allow_while_pending=False) or changed
 
     raw_title = str(data.get("title") or data.get("TITLE") or "").strip()
     if raw_title:
@@ -1061,8 +1063,9 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         important = bitrix_task_is_important(data or merged)
         if important is None and after:
             important = bitrix_task_is_important(after)
+        # Skip while a local push is pending so we don't undo it with a stale echo.
         importance_changed = apply_inbound_importance(
-            task, important, allow_while_pending=True
+            task, important, allow_while_pending=False
         )
 
         return {

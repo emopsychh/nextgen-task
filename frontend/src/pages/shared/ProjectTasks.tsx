@@ -15,7 +15,7 @@ import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { dueMeta } from "../../lib/dates";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
-import { CalendarGlyph } from "../../components/icons";
+import { CalendarGlyph, FlameIcon } from "../../components/icons";
 
 export function ProjectTasks() {
   const { projectId } = useParams();
@@ -419,16 +419,9 @@ export function ProjectTasks() {
                 <div className="task-card-main">
                   <div className="task-card-top">
                     {t.is_important ? (
-                      <span className="task-important-flag" title="Важная задача" aria-label="Важная задача">
-                        <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-                          <path
-                            d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.9l-5.2 2.73.99-5.79-4.21-4.1 5.82-.85L12 3.5z"
-                            fill="currentColor"
-                            stroke="currentColor"
-                            strokeWidth="1.7"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
+                      <span className="task-important-pill" title="Важная задача">
+                        <FlameIcon filled size={14} />
+                        Важно
                       </span>
                     ) : null}
                     <span className={`task-status-pill ${STATUS_TONE[t.status]}`}>

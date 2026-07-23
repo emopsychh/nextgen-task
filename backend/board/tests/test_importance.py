@@ -57,6 +57,25 @@ class ApplyInboundImportanceTests(TestCase):
         task.refresh_from_db()
         self.assertFalse(task.is_important)
 
+    def test_pull_does_not_reset_pending_important_flag(self):
+        # Regression: user just marked important (PENDING); a mid-flight pull sees
+        # Bitrix still at normal priority and must NOT reset the flag to False.
+        task = make_task(
+            self.project, is_important=True, sync_status=Task.SyncStatus.PENDING
+        )
+        changed = apply_inbound_importance(task, False, allow_while_pending=False)
+        task.refresh_from_db()
+        self.assertFalse(changed)
+        self.assertTrue(task.is_important)
+
+    def test_real_bitrix_change_applies_when_synced(self):
+        # Bitrix→app: task is SYNCED, Bitrix now marks it important → apply it.
+        task = make_task(self.project, sync_status=Task.SyncStatus.SYNCED)
+        changed = apply_inbound_importance(task, True, allow_while_pending=False)
+        task.refresh_from_db()
+        self.assertTrue(changed)
+        self.assertTrue(task.is_important)
+
 
 class OutboundPriorityFieldTests(TestCase):
     def setUp(self):

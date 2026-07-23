@@ -3626,33 +3626,36 @@ a.task-card.is-done:hover,
   margin-bottom: 12px;
 }
 
-/* «Важная задача» toggle (task card) + list flag */
+/* «Важная задача» toggle (task detail card) */
 .task-important-toggle {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 34px;
+  gap: 6px;
   height: 34px;
+  padding: 0 12px 0 10px;
   margin-top: 2px;
   margin-left: auto;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  color: #b4bdb9;
+  border: 1.5px solid #dfe4e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #7c8783;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease,
-    transform 0.1s ease;
+    box-shadow 0.15s ease, transform 0.1s ease;
 }
 
 .task-important-toggle:hover:not(:disabled) {
-  color: #e0a300;
-  background: rgba(240, 180, 0, 0.1);
-  border-color: rgba(240, 180, 0, 0.28);
+  color: #e2510d;
+  background: #fff4ec;
+  border-color: #ffcaa6;
 }
 
 .task-important-toggle:active:not(:disabled) {
-  transform: scale(0.92);
+  transform: scale(0.95);
 }
 
 .task-important-toggle:disabled {
@@ -3661,29 +3664,56 @@ a.task-card.is-done:hover,
 }
 
 .task-important-toggle.is-important {
-  color: #f0a500;
+  color: #d94a09;
+  background: linear-gradient(135deg, #fff1e6, #ffe2cf);
+  border-color: #ff8a4c;
+  box-shadow: 0 3px 10px rgba(226, 81, 13, 0.18);
+}
+
+.task-important-toggle.is-important svg {
+  filter: drop-shadow(0 1px 2px rgba(226, 81, 13, 0.4));
+  animation: flame-flicker 1.8s ease-in-out infinite;
 }
 
 .task-important-toggle.is-static {
   cursor: default;
-  background: transparent;
-  border-color: transparent;
 }
 
-.task-important-flag {
+.task-important-label {
+  line-height: 1;
+}
+
+@keyframes flame-flicker {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  40% { transform: scale(1.08) rotate(-3deg); }
+  70% { transform: scale(0.96) rotate(2deg); }
+}
+
+/* «Важно» pill in the task list */
+.task-important-pill {
   display: inline-flex;
   align-items: center;
-  color: #f0a500;
+  gap: 4px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(135deg, #ff7a2f, #e2440a);
+  box-shadow: 0 2px 6px rgba(226, 68, 10, 0.32);
   flex-shrink: 0;
 }
 
 .task-card.is-important {
-  border-color: #f2d38a;
-  box-shadow: inset 3px 0 0 #f0a500;
+  border-color: #ffb488;
+  box-shadow: inset 4px 0 0 #ff6a1a;
 }
 
 .task-card.is-important:hover {
-  border-color: #eec661;
+  border-color: #ff9a63;
+  box-shadow: inset 4px 0 0 #ff6a1a, 0 8px 20px rgba(226, 68, 10, 0.12);
 }
 
 .task-summary-icon {

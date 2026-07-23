@@ -1,25 +1,11 @@
 import { forwardRef } from "react";
 import type { Task, TaskStatus } from "../../api/types";
 import { DueDatePicker } from "../DueDatePicker";
-import { TaskGlyph } from "../icons";
+import { FlameIcon, TaskGlyph } from "../icons";
 import { formatClock, formatDateTime, formatDueFull } from "../../lib/format";
 import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import type { DueTone } from "../../lib/dates";
 import { TaskTimer } from "./TaskTimer";
-
-function StarIcon({ filled }: { filled: boolean }) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
-      <path
-        d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.9l-5.2 2.73.99-5.79-4.21-4.1 5.82-.85L12 3.5z"
-        fill={filled ? "currentColor" : "none"}
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 type Props = {
   task: Task;
@@ -108,7 +94,8 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
             title={important ? "Снять отметку «Важная»" : "Отметить как важную"}
             aria-label={important ? "Снять отметку «Важная»" : "Отметить как важную"}
           >
-            <StarIcon filled={important} />
+            <FlameIcon filled={important} size={20} />
+            <span className="task-important-label">{important ? "Важно" : "Важная"}</span>
           </button>
         ) : important ? (
           <span
@@ -116,7 +103,8 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
             title="Важная задача"
             aria-label="Важная задача"
           >
-            <StarIcon filled />
+            <FlameIcon filled size={20} />
+            <span className="task-important-label">Важно</span>
           </span>
         ) : null}
       </div>
