@@ -12,10 +12,11 @@ import {
 import { useAuth } from "../../auth/AuthContext";
 import { DealHoursCard } from "../../components/DealHoursCard";
 import { FlashToast } from "../../components/FlashToast";
+import { FlameIcon } from "../../components/icons";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
-import { formatDueFull } from "../../lib/format";
 import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
+import { formatDueFull } from "../../lib/format";
 import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
 import {
   reportDetailPath,
@@ -434,18 +435,19 @@ export function ClientProjects() {
                   )}
                 </section>
 
-                <section
-                  className={`workspace-focus-block workspace-hot-panel${
-                    hotTasks.length > 0 ? " is-lit" : ""
-                  }`}
-                >
-                  <div className="workspace-hot-head">
+                <section className="workspace-focus-block">
+                  <div className="linked-head">
                     <div className="workspace-hot-title-row">
-                      <span className="workspace-hot-flame" aria-hidden>
-                        <span className="workspace-hot-flame-core" />
-                        <span className="workspace-hot-flame-glow" />
-                      </span>
-                      <h2 className="section-title workspace-hot-title">Горят</h2>
+                      <h2
+                        className={`section-title workspace-hot-title${
+                          hotTasks.length > 0 ? " is-shaking" : ""
+                        }`}
+                      >
+                        <span className="workspace-hot-badge" aria-hidden>
+                          <FlameIcon filled size={15} />
+                        </span>
+                        <span className="workspace-hot-label">Горят</span>
+                      </h2>
                     </div>
                     <p className="muted">Просроченные, срок 1–2 дня и важные</p>
                   </div>
@@ -475,7 +477,10 @@ export function ClientProjects() {
                                 <span className="workspace-chip tone-soon">Скоро срок</span>
                               ) : null}
                               {t.is_important ? (
-                                <span className="workspace-chip tone-important">Важная</span>
+                                <span className="task-important-pill" title="Важная задача">
+                                  <FlameIcon filled size={14} />
+                                  Важно
+                                </span>
                               ) : null}
                               <span className="muted">{t.project_name}</span>
                             </div>
