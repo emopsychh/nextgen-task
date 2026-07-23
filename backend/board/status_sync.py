@@ -611,15 +611,40 @@ def apply_inbound_deadline(task, new_due, *, allow_while_pending: bool = True) -
     return True
 
 
-def _bitrix_status_changed_ts(task_data: dict) -> float:
-    """Best-effort timestamp for when Bitrix status last changed."""
+def _parse_bitrix_ts(raw) -> float:
     from django.utils.dateparse import parse_datetime
 
+    if raw in (None, "", False):
+        return 0.0
+    text = str(raw).strip().replace(" ", "T", 1)
+    dt = parse_datetime(text)
+    return dt.timestamp() if dt is not None else 0.0
+
+
+def _bitrix_status_changed_date_only(task_data: dict) -> float:
+    """
+    Only STATUS_CHANGED_DATE.
+
+    Do not fall back to CHANGED_DATE — timer ticks / title edits bump that while
+    STATUS stays 3 and wrongly beat a real pause on the other portal.
+    """
     if not isinstance(task_data, dict):
         return 0.0
+    for key in ("statusChangedDate", "STATUS_CHANGED_DATE"):
+        ts = _parse_bitrix_ts(task_data.get(key))
+        if ts:
+            return ts
+    return 0.0
+
+
+def _bitrix_status_changed_ts(task_data: dict) -> float:
+    """Best-effort timestamp for ranking (status change first, then activity)."""
+    if not isinstance(task_data, dict):
+        return 0.0
+    status_ts = _bitrix_status_changed_date_only(task_data)
+    if status_ts:
+        return status_ts
     for key in (
-        "statusChangedDate",
-        "STATUS_CHANGED_DATE",
         "changedDate",
         "CHANGED_DATE",
         "changed",
@@ -627,13 +652,9 @@ def _bitrix_status_changed_ts(task_data: dict) -> float:
         "activityDate",
         "ACTIVITY_DATE",
     ):
-        raw = task_data.get(key)
-        if raw in (None, "", False):
-            continue
-        text = str(raw).strip().replace(" ", "T", 1)
-        dt = parse_datetime(text)
-        if dt is not None:
-            return dt.timestamp()
+        ts = _parse_bitrix_ts(task_data.get(key))
+        if ts:
+            return ts
     return 0.0
 
 
@@ -693,7 +714,7 @@ def resolve_inbound_status_from_sources(task) -> tuple[str | None, dict | None, 
             (ts, _status_rank(resolved), resolved, data, portal, str(bitrix_id))
         )
         logger.info(
-            "pull candidate task=%s %s#%s mapped=%s activity=%s resolved=%s ts=%s",
+            "pull candidate task=%s %s#%s mapped=%s activity=%s resolved=%s ts=%s status_ts=%s",
             task.id,
             portal.role,
             bitrix_id,
@@ -701,24 +722,34 @@ def resolve_inbound_status_from_sources(task) -> tuple[str | None, dict | None, 
             activity,
             resolved,
             ts,
+            _bitrix_status_changed_date_only(data),
         )
 
     if not candidates:
         return None, None, None, None
 
-    # Split-brain agency vs client: compare by status-change time.
-    # Example from prod: agency#96 still STATUS=3, client#25 already STATUS=2 after pause.
+    # Split-brain: one portal paused (todo), the other still in_progress.
+    # Prod: client STATUS=2, agency STATUS=3 with a newer CHANGED_DATE (or even
+    # statusChangedDate from timer/sync noise). Pause must win — otherwise the
+    # app never stops. Re-start is handled by OnTaskUpdate + mirror to the other
+    # copy so both agree before the next pull.
     todos = [c for c in candidates if c[2] == "todo"]
     progs = [c for c in candidates if c[2] == "in_progress"]
     if todos and progs:
-        best_todo = max(todos, key=lambda row: (row[0], row[1]))
-        best_prog = max(progs, key=lambda row: (row[0], row[1]))
-        chosen = best_todo if best_todo[0] >= best_prog[0] else best_prog
+        best_todo = max(
+            todos,
+            key=lambda row: (_bitrix_status_changed_date_only(row[3]), row[0], row[1]),
+        )
+        best_prog = max(
+            progs,
+            key=lambda row: (_bitrix_status_changed_date_only(row[3]), row[0], row[1]),
+        )
+        chosen = best_todo
         logger.info(
-            "pull split-brain task=%s todo_ts=%s prog_ts=%s → %s",
+            "pull split-brain task=%s todo_status_ts=%s prog_status_ts=%s → pause wins (%s)",
             task.id,
-            best_todo[0],
-            best_prog[0],
+            _bitrix_status_changed_date_only(best_todo[3]),
+            _bitrix_status_changed_date_only(best_prog[3]),
             chosen[2],
         )
         _ts, _rank, status, data, portal, bitrix_id = chosen
@@ -728,6 +759,41 @@ def resolve_inbound_status_from_sources(task) -> tuple[str | None, dict | None, 
     candidates.sort(key=lambda row: (row[0], row[1]), reverse=True)
     _ts, _rank, status, data, portal, bitrix_id = candidates[0]
     return status, data, portal, bitrix_id
+
+
+def mirror_work_status_to_other_bitrix_copies(
+    task, status: str, *, source_portal=None
+) -> None:
+    """
+    After inbound pause/start from one Bitrix copy, push the same work state
+    to the other copy so agency/client stop disagreeing.
+    """
+    if status not in ("todo", "in_progress", "done"):
+        return
+    from board.tasks import apply_bitrix_status
+
+    for portal, bitrix_id in resolve_all_bitrix_task_sources(task):
+        if source_portal is not None and getattr(portal, "id", None) == getattr(
+            source_portal, "id", None
+        ):
+            continue
+        try:
+            apply_bitrix_status(BitrixClient(portal), str(bitrix_id), status)
+            logger.info(
+                "mirrored status=%s task=%s → %s#%s",
+                status,
+                task.id,
+                portal.role,
+                bitrix_id,
+            )
+        except BitrixAPIError as exc:
+            logger.info(
+                "mirror status failed task=%s %s#%s: %s",
+                task.id,
+                portal.role,
+                bitrix_id,
+                exc,
+            )
 
 
 def pull_task_status_from_bitrix(task) -> bool:
@@ -741,8 +807,19 @@ def pull_task_status_from_bitrix(task) -> bool:
         return False
 
     changed = False
+    status_applied = False
     if local:
-        changed = apply_inbound_status(task, local, force=True) or changed
+        prev_status = task.status
+        status_applied = apply_inbound_status(task, local, force=True)
+        changed = status_applied or changed
+        # Keep agency/client Bitrix copies aligned after inbound pause/start.
+        if status_applied and local in ("todo", "in_progress", "done") and local != prev_status:
+            try:
+                mirror_work_status_to_other_bitrix_copies(
+                    task, local, source_portal=portal
+                )
+            except Exception:
+                logger.exception("mirror work status failed task=%s", task.id)
 
     try:
         running, timer_payload, spent = fetch_bitrix_timer_state(
@@ -826,11 +903,12 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         data_status = local_status_from_bitrix_task(data) if data else None
         local = after_status if after_status is not None else data_status
         # Explicit transition in the event beats a stale get_task snapshot
-        if (
+        explicit_transition = (
             after_status is not None
             and before_status is not None
             and after_status != before_status
-        ):
+        )
+        if explicit_transition:
             local = after_status
         # Activity chat/comments beat STATUS when user paused work but label lags
         try:
@@ -859,12 +937,26 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
             status_changed = apply_inbound_status(task, local, force=True)
 
         # Agency vs client copies can diverge (prod: agency still 3, client already 2).
+        # Do not let pause-wins reconcile undo an explicit start/pause from this event —
+        # mirror the event instead so the other copy catches up.
         try:
-            recon, _, _, _ = resolve_inbound_status_from_sources(task)
-            if recon and recon != local:
-                if apply_inbound_status(task, recon, force=True):
-                    status_changed = True
-                    local = recon
+            if not explicit_transition:
+                recon, _, recon_portal, _ = resolve_inbound_status_from_sources(task)
+                if recon and recon != local:
+                    if apply_inbound_status(task, recon, force=True):
+                        status_changed = True
+                        local = recon
+                        if recon_portal is not None:
+                            portal = recon_portal
+            if status_changed and local in ("todo", "in_progress", "done"):
+                try:
+                    mirror_work_status_to_other_bitrix_copies(
+                        task, local, source_portal=portal
+                    )
+                except Exception:
+                    logger.exception(
+                        "OnTaskUpdate mirror status failed id=%s", bitrix_task_id
+                    )
         except Exception:
             logger.exception(
                 "OnTaskUpdate multi-source reconcile failed id=%s", bitrix_task_id
