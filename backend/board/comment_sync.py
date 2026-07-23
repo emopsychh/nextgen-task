@@ -29,11 +29,50 @@ _BITRIX_SYSTEM_LOG_RE = re.compile(
     r"возобновил(?:а)?\s+работу|"
     r"завершил(?:а)?\s+(?:работу|задач)|"
     r"время\s+выполнения|"
+    r"уч[её]т(?:а)?\s+(?:своего\s+)?времени|"
+    r"включил(?:а)?\s+уч[её]т|"
+    r"выключил(?:а)?\s+уч[её]т|"
+    r"останов(?:ил(?:а)?|ка)\s+уч[её]т|"
+    r"приостанов(?:ил(?:а)?|ка)\s+уч[её]т|"
+    r"затратил(?:а)?.{0,60}(?:час|мин|сек)|"
     r"changed\s+the\s+deadline|"
     r"paused\s+the\s+task|"
+    r"paused\s+time|"
     r"started\s+work|"
+    r"started\s+time|"
     r"completed\s+the\s+task|"
-    r"time\s+spent"
+    r"time\s+spent|"
+    r"time\s+tracking"
+    r")"
+)
+
+_PAUSE_ACTIVITY_RE = re.compile(
+    r"(?i)("
+    r"остановил(?:а)?\s+работу|"
+    r"приостановил(?:а)?\s+работу|"
+    r"выключил(?:а)?\s+уч[её]т|"
+    r"останов(?:ил(?:а)?|ка)\s+уч[её]т|"
+    r"приостанов(?:ил(?:а)?|ка)\s+уч[её]т|"
+    r"paused\s+the\s+task|"
+    r"paused\s+time|"
+    r"stopped\s+time|"
+    r"затратил(?:а)?.{0,60}(?:час|мин|сек|hour|min)"
+    r")"
+)
+_START_ACTIVITY_RE = re.compile(
+    r"(?i)("
+    r"начал(?:а)?\s+работу|"
+    r"возобновил(?:а)?\s+работу|"
+    r"включил(?:а)?\s+уч[её]т|"
+    r"started\s+work|"
+    r"started\s+time|"
+    r"resumed\s+(?:work|time)"
+    r")"
+)
+_COMPLETE_ACTIVITY_RE = re.compile(
+    r"(?i)("
+    r"завершил(?:а)?\s+(?:работу|задач)|"
+    r"completed\s+the\s+task"
     r")"
 )
 
@@ -46,6 +85,84 @@ def is_bitrix_system_log_comment(text: str) -> bool:
     if not cleaned:
         return False
     return bool(_BITRIX_SYSTEM_LOG_RE.search(cleaned))
+
+
+def status_from_bitrix_system_comment(text: str) -> str | None:
+    """Infer todo/in_progress/done from Bitrix activity-stream comment text."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    if _COMPLETE_ACTIVITY_RE.search(cleaned):
+        return "done"
+    if _PAUSE_ACTIVITY_RE.search(cleaned):
+        return "todo"
+    if _START_ACTIVITY_RE.search(cleaned):
+        return "in_progress"
+    return None
+
+
+def apply_status_from_bitrix_system_comment(task, text: str) -> bool:
+    """Apply inbound status inferred from a Bitrix system comment. No chat row."""
+    status = status_from_bitrix_system_comment(text)
+    if not status:
+        return False
+    from board.status_sync import apply_inbound_status
+
+    changed = apply_inbound_status(task, status, force=True)
+    if changed:
+        logger.info(
+            "status from Bitrix system comment task=%s → %s (%r)",
+            task.id,
+            status,
+            (text or "")[:120],
+        )
+    return changed
+
+
+def resolve_status_with_timer_activity(
+    status_from_task: str | None, activity: str | None
+) -> str | None:
+    """
+    Prefer activity-stream start/pause when Bitrix STATUS stays in_progress
+    after stopwatch Pause. Otherwise keep STATUS from tasks.task.get.
+    """
+    if activity == "done":
+        return "done"
+    if activity == "todo" and status_from_task in (None, "in_progress"):
+        return "todo"
+    if activity == "in_progress":
+        return "in_progress"
+    return status_from_task
+
+
+def latest_timer_status_from_bitrix_comments(portal, bitrix_task_id: str) -> str | None:
+    """
+    Scan newest Bitrix comments for start/pause/complete activity lines.
+    Timer Pause in Bitrix often leaves STATUS=in_progress — comments are the signal.
+    """
+    client = BitrixClient(portal)
+    try:
+        rows = client.list_task_comments(bitrix_task_id)
+    except BitrixAPIError as exc:
+        logger.info("comment list for timer status failed id=%s: %s", bitrix_task_id, exc)
+        return None
+    if not isinstance(rows, list):
+        return None
+    for row in reversed(rows):
+        if not isinstance(row, dict):
+            continue
+        author_name = str(
+            row.get("AUTHOR_NAME")
+            or row.get("AUTHOR_NAME_FORMATTED")
+            or row.get("authorName")
+            or ""
+        ).strip()
+        raw = str(row.get("POST_MESSAGE") or row.get("MESSAGE") or row.get("text") or "")
+        text = _normalize_message(author_name, raw)
+        status = status_from_bitrix_system_comment(text)
+        if status:
+            return status
+    return None
 
 
 def is_nextgen_file_echo(text: str) -> bool:
@@ -135,7 +252,9 @@ def upsert_comment_from_bitrix_payload(
         return False
 
     # Skip Bitrix built-in status/deadline/timer log lines — they loop in chat.
+    # But use them as the inbound start/pause signal (STATUS often stays in_progress).
     if is_bitrix_system_log_comment(text):
+        apply_status_from_bitrix_system_comment(task, text)
         return False
 
     # Skip our own file-sync posts (file already exists as Attachment in app).

@@ -597,14 +597,24 @@ def pull_task_status_from_bitrix(task) -> bool:
 
     changed = False
     local = local_status_from_bitrix_task(data)
+    # Timer Pause in Bitrix keeps STATUS=in_progress; activity comments tell the truth.
+    portal, bitrix_id = sources[0]
+    try:
+        from board.comment_sync import (
+            latest_timer_status_from_bitrix_comments,
+            resolve_status_with_timer_activity,
+        )
+
+        activity = latest_timer_status_from_bitrix_comments(portal, bitrix_id)
+        local = resolve_status_with_timer_activity(local, activity)
+    except Exception:
+        logger.exception("timer activity comment scan failed task=%s", task.id)
+
     if local:
         # Same as webhooks: Bitrix is source of truth on pull; short PENDING
         # window still protects against stale echo right after local→Bitrix push.
         changed = apply_inbound_status(task, local, force=True) or changed
 
-    # Timer sync. Empty task.timer.get is ignored while STATUS=in_progress
-    # (app token user ≠ person who clicked Start in Bitrix UI).
-    portal, bitrix_id = sources[0]
     try:
         running, timer_payload, spent = fetch_bitrix_timer_state(
             portal, bitrix_id, data
@@ -693,6 +703,21 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
             and after_status != before_status
         ):
             local = after_status
+        # Activity comments beat STATUS when user only paused the stopwatch
+        try:
+            from board.comment_sync import (
+                latest_timer_status_from_bitrix_comments,
+                resolve_status_with_timer_activity,
+            )
+
+            activity = latest_timer_status_from_bitrix_comments(
+                portal, str(bitrix_task_id)
+            )
+            local = resolve_status_with_timer_activity(local, activity)
+        except Exception:
+            logger.exception(
+                "timer activity comment scan failed id=%s", bitrix_task_id
+            )
         if local:
             # force=True: Bitrix start/pause/complete must update the app even during PENDING sync
             status_changed = apply_inbound_status(task, local, force=True)
