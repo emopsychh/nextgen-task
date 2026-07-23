@@ -220,8 +220,59 @@ def latest_timer_status_from_task_chat(portal, task_data: dict) -> str | None:
     return None
 
 
+def latest_activity_from_bitrix_history(portal, bitrix_task_id: str) -> str | None:
+    """
+    Use tasks.task.history.list (scope: task) — works without `im`.
+
+    Newest REAL_STATUS/STATUS wins. TIME_SPENT_IN_LOGS without a newer status
+    change means the stopwatch was paused while STATUS stayed «in progress».
+    """
+    from portals.bitrix import BITRIX_TO_LOCAL, parse_bitrix_status
+
+    client = BitrixClient(portal)
+    try:
+        result = client.call(
+            "tasks.task.history.list",
+            {
+                "taskId": int(bitrix_task_id),
+                "order": {"createdDate": "DESC"},
+            },
+        )
+    except (BitrixAPIError, TypeError, ValueError) as exc:
+        logger.info("history.list failed id=%s: %s", bitrix_task_id, exc)
+        return None
+
+    items = []
+    if isinstance(result, dict):
+        items = result.get("list") or result.get("LIST") or []
+    elif isinstance(result, list):
+        items = result
+    if not isinstance(items, list):
+        return None
+
+    for row in items[:40]:
+        if not isinstance(row, dict):
+            continue
+        field = str(row.get("field") or row.get("FIELD") or "").upper()
+        value = row.get("value") or row.get("VALUE") or {}
+        if not isinstance(value, dict):
+            value = {}
+        if field in ("REAL_STATUS", "STATUS"):
+            to_raw = value.get("to") if "to" in value else value.get("TO")
+            code = parse_bitrix_status(to_raw)
+            if code is not None and code in BITRIX_TO_LOCAL:
+                return BITRIX_TO_LOCAL[code]
+        if field == "TIME_SPENT_IN_LOGS":
+            # Stopwatch pause flushes elapsed time; STATUS often stays 3.
+            return "todo"
+    return None
+
+
 def latest_bitrix_work_activity(portal, bitrix_task_id: str, task_data: dict | None = None) -> str | None:
-    """Prefer task chat activity, fall back to classic comments."""
+    """Prefer history (task scope), then chat, then classic comments."""
+    hist = latest_activity_from_bitrix_history(portal, bitrix_task_id)
+    if hist:
+        return hist
     chat_status = latest_timer_status_from_task_chat(portal, task_data or {})
     if chat_status:
         return chat_status

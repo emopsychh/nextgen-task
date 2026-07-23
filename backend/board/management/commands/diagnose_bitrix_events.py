@@ -227,6 +227,37 @@ class Command(BaseCommand):
                 f"    mapped_from_task={remote!r} activity={activity!r} "
                 f"resolved={resolved!r}"
             )
+            # Probe history + chat for debugging pause detection
+            try:
+                from board.comment_sync import latest_activity_from_bitrix_history
+                from portals.bitrix import BitrixAPIError as BxErr
+
+                hist = latest_activity_from_bitrix_history(portal, bitrix_id)
+                self.stdout.write(f"    history_activity={hist!r}")
+                try:
+                    chat_probe = BitrixClient(portal).call(
+                        "im.dialog.messages.get",
+                        {
+                            "DIALOG_ID": f"chat{chat}" if chat and not str(chat).startswith("chat") else str(chat or ""),
+                            "LIMIT": 5,
+                        },
+                    )
+                    msgs = []
+                    if isinstance(chat_probe, dict):
+                        msgs = chat_probe.get("messages") or []
+                    self.stdout.write(
+                        f"    chat_probe ok msgs={len(msgs) if isinstance(msgs, list) else type(msgs)}"
+                    )
+                    if isinstance(msgs, list):
+                        for m in msgs[:3]:
+                            if isinstance(m, dict):
+                                self.stdout.write(
+                                    f"      chat_msg: {(m.get('text') or m.get('TEXT') or '')[:120]!r}"
+                                )
+                except BxErr as exc:
+                    self.stdout.write(self.style.WARNING(f"    chat_probe FAIL: {exc}"))
+            except Exception as exc:
+                self.stdout.write(self.style.WARNING(f"    history/chat probe FAIL: {exc}"))
 
         if options["pull"]:
             changed = pull_task_status_from_bitrix(task)

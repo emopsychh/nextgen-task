@@ -227,10 +227,13 @@ def _sync_one_portal(
         )
         fields["TITLE"] = title
         client.update_task(existing_id, fields)
-        try:
-            apply_bitrix_status(client, existing_id, task.status)
-        except BitrixAPIError as exc:
-            raise BitrixAPIError(f"не удалось сменить статус в Bitrix: {exc}") from exc
+        # Only push status on explicit local→Bitrix sync (PENDING).
+        # Title/deadline cleanup must not call start() and undo a Bitrix pause.
+        if task.sync_status == task.SyncStatus.PENDING:
+            try:
+                apply_bitrix_status(client, existing_id, task.status)
+            except BitrixAPIError as exc:
+                raise BitrixAPIError(f"не удалось сменить статус в Bitrix: {exc}") from exc
         return existing_id
 
     fields = _task_fields(
