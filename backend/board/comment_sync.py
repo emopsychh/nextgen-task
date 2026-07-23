@@ -25,6 +25,7 @@ _BITRIX_SYSTEM_LOG_RE = re.compile(
     r"снял(?:а)?\s+крайний\s+срок|"
     r"остановил(?:а)?\s+работу|"
     r"приостановил(?:а)?\s+работу|"
+    r"начал(?:а)?\s+(?:выполнять\s+)?задач|"
     r"начал(?:а)?\s+работу|"
     r"возобновил(?:а)?\s+работу|"
     r"завершил(?:а)?\s+(?:работу|задач)|"
@@ -61,6 +62,7 @@ _PAUSE_ACTIVITY_RE = re.compile(
 )
 _START_ACTIVITY_RE = re.compile(
     r"(?i)("
+    r"начал(?:а)?\s+(?:выполнять\s+)?задач|"
     r"начал(?:а)?\s+работу|"
     r"возобновил(?:а)?\s+работу|"
     r"включил(?:а)?\s+уч[её]т|"
@@ -123,15 +125,16 @@ def resolve_status_with_timer_activity(
     status_from_task: str | None, activity: str | None
 ) -> str | None:
     """
-    Prefer activity-stream start/pause when Bitrix STATUS stays in_progress
-    after stopwatch Pause. Otherwise keep STATUS from tasks.task.get.
+    Only use activity comments to detect PAUSE when STATUS/action still look
+    like in_progress. Never let a stale «включил учёт» override an already
+    detected pause (action.start / STATUS waiting).
     """
     if activity == "done":
         return "done"
     if activity == "todo" and status_from_task in (None, "in_progress"):
         return "todo"
-    if activity == "in_progress":
-        return "in_progress"
+    # Do NOT map activity=in_progress over todo — pause messages often live in
+    # task chat, while the last commentitem is still «включил учёт».
     return status_from_task
 
 
@@ -163,6 +166,66 @@ def latest_timer_status_from_bitrix_comments(portal, bitrix_task_id: str) -> str
         if status:
             return status
     return None
+
+
+def latest_timer_status_from_task_chat(portal, task_data: dict) -> str | None:
+    """
+    New Bitrix task card writes «остановил работу» into the task CHAT, not commentitem.
+    Requires `im` scope; fails soft if missing.
+    """
+    if not isinstance(task_data, dict):
+        return None
+    chat_id = (
+        task_data.get("chatId")
+        or task_data.get("CHAT_ID")
+        or task_data.get("chat_id")
+        or ""
+    )
+    if not chat_id or str(chat_id) in ("0", "false"):
+        return None
+    dialog_id = str(chat_id)
+    if not dialog_id.startswith("chat"):
+        dialog_id = f"chat{dialog_id}"
+    client = BitrixClient(portal)
+    try:
+        result = client.call(
+            "im.dialog.messages.get",
+            {"DIALOG_ID": dialog_id, "LIMIT": 30},
+        )
+    except BitrixAPIError as exc:
+        logger.info("task chat messages failed chat=%s: %s", dialog_id, exc)
+        return None
+    messages = []
+    if isinstance(result, dict):
+        messages = result.get("messages") or result.get("MESSAGES") or []
+        if not messages and isinstance(result.get("result"), dict):
+            messages = result["result"].get("messages") or []
+    if not isinstance(messages, list):
+        return None
+    # API returns newest first usually — scan in order, then reverse if ids increase
+    ordered = list(messages)
+    try:
+        ordered.sort(key=lambda m: int(m.get("id") or m.get("ID") or 0))
+    except Exception:
+        pass
+    for row in reversed(ordered):
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("text") or row.get("TEXT") or row.get("message") or "")
+        # Strip simple BBCode
+        text = re.sub(r"\[/?[^\]]+\]", "", text)
+        status = status_from_bitrix_system_comment(text)
+        if status:
+            return status
+    return None
+
+
+def latest_bitrix_work_activity(portal, bitrix_task_id: str, task_data: dict | None = None) -> str | None:
+    """Prefer task chat activity, fall back to classic comments."""
+    chat_status = latest_timer_status_from_task_chat(portal, task_data or {})
+    if chat_status:
+        return chat_status
+    return latest_timer_status_from_bitrix_comments(portal, bitrix_task_id)
 
 
 def is_nextgen_file_echo(text: str) -> bool:

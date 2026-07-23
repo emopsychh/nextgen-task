@@ -636,16 +636,25 @@ def pull_task_status_from_bitrix(task) -> bool:
 
     changed = False
     local = local_status_from_bitrix_task(data)
-    # Timer Pause in Bitrix keeps STATUS=in_progress; activity comments tell the truth.
+    # Timer/work pause in Bitrix: STATUS label may stay «Выполняется», while
+    # chat says «остановил работу» and/or action.start=true.
     portal, bitrix_id = sources[0]
     try:
         from board.comment_sync import (
-            latest_timer_status_from_bitrix_comments,
+            latest_bitrix_work_activity,
             resolve_status_with_timer_activity,
         )
 
-        activity = latest_timer_status_from_bitrix_comments(portal, bitrix_id)
+        activity = latest_bitrix_work_activity(portal, bitrix_id, data)
         local = resolve_status_with_timer_activity(local, activity)
+        logger.info(
+            "pull status task=%s mapped=%s activity=%s raw_status=%s action=%s",
+            task.id,
+            local,
+            activity,
+            data.get("status") or data.get("STATUS") or data.get("realStatus"),
+            (data.get("action") or data.get("ACTION") or {}),
+        )
     except Exception:
         logger.exception("timer activity comment scan failed task=%s", task.id)
 
@@ -742,17 +751,24 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
             and after_status != before_status
         ):
             local = after_status
-        # Activity comments beat STATUS when user only paused the stopwatch
+        # Activity chat/comments beat STATUS when user paused work but label lags
         try:
             from board.comment_sync import (
-                latest_timer_status_from_bitrix_comments,
+                latest_bitrix_work_activity,
                 resolve_status_with_timer_activity,
             )
 
-            activity = latest_timer_status_from_bitrix_comments(
-                portal, str(bitrix_task_id)
+            activity = latest_bitrix_work_activity(
+                portal, str(bitrix_task_id), data or merged
             )
             local = resolve_status_with_timer_activity(local, activity)
+            logger.info(
+                "OnTaskUpdate id=%s mapped=%s activity=%s action=%s",
+                bitrix_task_id,
+                local,
+                activity,
+                (data or {}).get("action") or (data or {}).get("ACTION") or {},
+            )
         except Exception:
             logger.exception(
                 "timer activity comment scan failed id=%s", bitrix_task_id
