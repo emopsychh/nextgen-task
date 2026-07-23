@@ -58,6 +58,9 @@ export function useTaskLiveSync({
   const serverRef = useRef<{ title: string; description: string } | null>(null);
   const fpRef = useRef<string>("");
   const pullNowRef = useRef(false);
+  // Ignore in-flight polls that raced a local PATCH (e.g. Complete → done
+  // was overwritten by a slow ?pull=1 that still had in_progress).
+  const updatedAtRef = useRef<string>("");
 
   onUpdateRef.current = onUpdate;
   draftRef.current = { title: draftTitle, description: draftDescription };
@@ -69,11 +72,15 @@ export function useTaskLiveSync({
       description: task.description || "",
     };
     fpRef.current = fingerprint(task);
+    if (task.updated_at && (!updatedAtRef.current || task.updated_at >= updatedAtRef.current)) {
+      updatedAtRef.current = task.updated_at;
+    }
   }, [task]);
 
   useEffect(() => {
     fpRef.current = "";
     serverRef.current = null;
+    updatedAtRef.current = "";
   }, [taskId]);
 
   usePortalLiveSync({
@@ -104,6 +111,14 @@ export function useTaskLiveSync({
         const pull = wantPull ? "?pull=1" : "";
         const data = await api<Task>(`/api/tasks/${taskId}/${pull}`, {}, token);
         if (cancelled) return;
+        // Drop stale responses that predate a local save (Complete/Pause/etc.).
+        if (
+          updatedAtRef.current &&
+          data.updated_at &&
+          data.updated_at < updatedAtRef.current
+        ) {
+          return;
+        }
         const fp = fingerprint(data);
         if (fp === fpRef.current) return;
 
@@ -116,6 +131,7 @@ export function useTaskLiveSync({
         if (prevServer && local.description === prevServer.description) {
           drafts.description = data.description || "";
         }
+        if (data.updated_at) updatedAtRef.current = data.updated_at;
         onUpdateRef.current(data, drafts);
       } catch {
         // Ignore transient poll errors; next tick retries.

@@ -141,14 +141,24 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
             data-tour="tour-status-actions"
           >
             {task.status === "todo" && (
-              <button
-                type="button"
-                className="btn btn-accent"
-                disabled={saveBusy}
-                onClick={() => onSetStatus("in_progress")}
-              >
-                Начать
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn btn-accent"
+                  disabled={saveBusy}
+                  onClick={() => onSetStatus("in_progress")}
+                >
+                  Начать
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={saveBusy}
+                  onClick={() => onSetStatus("done")}
+                >
+                  Завершить
+                </button>
+              </>
             )}
             {task.status === "in_progress" && (
               <>

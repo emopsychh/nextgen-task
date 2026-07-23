@@ -357,8 +357,30 @@ export function TaskDetail() {
   }
 
   async function setStatus(status: TaskStatus) {
-    if (!task || !canChangeStatus || task.status === status) return;
-    await patchTask({ status });
+    if (!token || !task || !canChangeStatus || task.status === status) return;
+    // Optimistic UI so a slow in-flight ?pull=1 cannot flash the old status
+    // back over Complete/Pause before the PATCH response arrives.
+    const prev = task;
+    const optimisticAt = new Date().toISOString();
+    setTask({ ...task, status, updated_at: optimisticAt });
+    setSaveBusy(true);
+    setError(null);
+    try {
+      const updated = await api<Task>(
+        `/api/tasks/${task.id}/`,
+        { method: "PATCH", body: JSON.stringify({ status }) },
+        token
+      );
+      setTask(updated);
+      setDraftTitle(updated.title);
+      setDraftDescription(updated.description || "");
+      window.dispatchEvent(new Event("projects-updated"));
+    } catch (err) {
+      setTask(prev);
+      setError(err instanceof Error ? err.message : "Не удалось сохранить");
+    } finally {
+      setSaveBusy(false);
+    }
   }
 
   async function setDueDate(iso: string) {
