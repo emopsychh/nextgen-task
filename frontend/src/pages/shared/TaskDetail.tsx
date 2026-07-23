@@ -198,13 +198,25 @@ export function TaskDetail() {
 
   function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const list = e.target.files;
-    if (!list?.length) return;
-    setPendingFiles((prev) => [...prev, ...Array.from(list)]);
+    if (!list?.length) {
+      console.info("[nextgen-attach] onPickFiles: empty FileList");
+      return;
+    }
+    const files = Array.from(list);
+    console.info("[nextgen-attach] onPickFiles → pending", {
+      added: files.map((f) => ({ name: f.name, size: f.size, type: f.type })),
+    });
+    setPendingFiles((prev) => {
+      const next = [...prev, ...files];
+      console.info("[nextgen-attach] pendingFiles now", next.length);
+      return next;
+    });
     e.target.value = "";
   }
 
   function onAddFiles(files: File[]) {
     if (!files.length) return;
+    console.info("[nextgen-attach] onAddFiles", files.map((f) => f.name));
     setPendingFiles((prev) => [...prev, ...files]);
   }
 
@@ -213,20 +225,45 @@ export function TaskDetail() {
   }
 
   async function uploadAttachment(file: File, opts: { taskId: number; commentId?: number }) {
-    if (!token) return;
+    if (!token) {
+      console.warn("[nextgen-attach] upload skipped: no token");
+      return;
+    }
     const form = new FormData();
     form.append("task", String(opts.taskId));
     if (opts.commentId) form.append("comment", String(opts.commentId));
     form.append("file", file);
-    await api("/api/attachments/", { method: "POST", body: form }, token);
+    console.info("[nextgen-attach] POST /api/attachments/", {
+      name: file.name,
+      size: file.size,
+      taskId: opts.taskId,
+      commentId: opts.commentId,
+    });
+    try {
+      const res = await api("/api/attachments/", { method: "POST", body: form }, token);
+      console.info("[nextgen-attach] upload ok", res);
+      return res;
+    } catch (err) {
+      console.error("[nextgen-attach] upload failed", err);
+      throw err;
+    }
   }
 
   async function sendMessage(e?: React.FormEvent) {
     e?.preventDefault();
-    if (!token || !task) return;
+    if (!token || !task) {
+      console.warn("[nextgen-attach] sendMessage blocked", { hasToken: !!token, hasTask: !!task });
+      return;
+    }
     const text = comment.trim();
     const files = pendingFiles;
     if (!text && files.length === 0) return;
+
+    console.info("[nextgen-attach] sendMessage", {
+      textLen: text.length,
+      files: files.map((f) => f.name),
+      taskId: task.id,
+    });
 
     setSendBusy(true);
     setError(null);
@@ -238,6 +275,7 @@ export function TaskDetail() {
         { method: "POST", body: JSON.stringify({ task: task.id, text }) },
         token
       );
+      console.info("[nextgen-attach] comment created", created.id);
 
       for (const file of files) {
         await uploadAttachment(file, {
@@ -251,6 +289,7 @@ export function TaskDetail() {
       await load();
       toast.show(text ? "Сообщение отправлено" : "Файл отправлен");
     } catch (err) {
+      console.error("[nextgen-attach] sendMessage failed", err);
       setError(err instanceof Error ? err.message : "Не удалось отправить");
     } finally {
       setSendBusy(false);

@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useState } from "react";
 import { FileGlyph, PaperclipIcon, SendIcon } from "../icons";
 import { isImageFile } from "../../lib/files";
 
@@ -42,24 +42,24 @@ export const TaskComposer = forwardRef<HTMLTextAreaElement, Props>(function Task
   },
   ref
 ) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
-
-  function openFilePicker() {
-    const input = fileInputRef.current;
-    if (!input) return;
-    // Programmatic click from a user gesture — more reliable in Bitrix iframes
-    // than relying on <label> alone (slider / openApplication / mobile).
-    input.click();
-  }
 
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
     const list = e.dataTransfer?.files;
-    if (!list?.length) return;
-    onAddFiles(Array.from(list));
+    if (!list?.length) {
+      console.info("[nextgen-attach] drop: empty FileList");
+      return;
+    }
+    const files = Array.from(list);
+    console.info("[nextgen-attach] drop", {
+      count: files.length,
+      names: files.map((f) => f.name),
+      sizes: files.map((f) => f.size),
+    });
+    onAddFiles(files);
   }
 
   return (
@@ -107,29 +107,38 @@ export const TaskComposer = forwardRef<HTMLTextAreaElement, Props>(function Task
 
       <div className="msg-composer-bar">
         {/*
-          Do not use input[hidden]/display:none — Bitrix iframe often blocks
-          the native file dialog for fully hidden inputs. Overlay + explicit
-          button click works across slider / fullscreen / openApplication.
+          Direct user click on a full-size transparent <input type="file">.
+          Do NOT nest file input inside <button> (invalid HTML — browsers may
+          drop change events). Do NOT use display:none / 1px clip + input.click()
+          (Bitrix iframe often opens the dialog then never fires onChange).
         */}
-        <button
-          type="button"
+        <label
           className="msg-attach"
           title="Прикрепить файл или фото"
           aria-label="Прикрепить файл или фото"
-          onClick={openFilePicker}
         >
           <span className="msg-attach-icon" aria-hidden>
             <PaperclipIcon />
           </span>
           <input
-            ref={fileInputRef}
             type="file"
             multiple
             className="msg-attach-input"
-            tabIndex={-1}
-            onChange={onPickFiles}
+            onClick={(e) => {
+              // Reset so selecting the same file again still fires change
+              e.currentTarget.value = "";
+              console.info("[nextgen-attach] picker opened");
+            }}
+            onChange={(e) => {
+              const list = e.target.files;
+              console.info("[nextgen-attach] input change", {
+                count: list?.length ?? 0,
+                names: list ? Array.from(list).map((f) => f.name) : [],
+              });
+              onPickFiles(e);
+            }}
           />
-        </button>
+        </label>
 
         <textarea
           ref={ref}
