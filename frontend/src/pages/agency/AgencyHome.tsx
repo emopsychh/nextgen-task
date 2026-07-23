@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, unwrapList, type DealBinding, type Portal } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
+import { asPackageHours, formatPackageHours } from "../../lib/format";
 import { hueFromId, initialsFromLabel } from "../../lib/portalUi";
 
 type LinkRow = {
@@ -21,6 +22,57 @@ function initials(portal: Portal): string {
   return initialsFromLabel(portal.name || portal.domain || "?");
 }
 
+function DealHoursBlock({ binding }: { binding: DealBinding }) {
+  const paid = asPackageHours(binding.paid_hours);
+  const remaining = asPackageHours(binding.remaining_hours);
+  if (paid == null && remaining == null) return null;
+
+  const packageSize = paid != null && paid > 0 ? paid : null;
+  const remainPct =
+    packageSize != null && remaining != null
+      ? Math.max(0, Math.min(100, (remaining / packageSize) * 100))
+      : null;
+  const over = remaining != null && remaining <= 0;
+
+  return (
+    <div
+      className={`deal-hours-scale${over ? " is-over" : ""}`}
+      aria-label="Часы по сделке сопровождения"
+    >
+      {paid != null ? (
+        <p className="deal-hours-paid">
+          Оплачено <strong>{formatPackageHours(paid)}</strong>
+        </p>
+      ) : null}
+
+      {remaining != null ? (
+        <div className="deal-hours-remain-row">
+          <span className="deal-hours-remain-label">Осталось</span>
+          <strong className="deal-hours-remain-value">{formatPackageHours(remaining)}</strong>
+        </div>
+      ) : null}
+
+      {remainPct != null ? (
+        <div
+          className="deal-hours-track"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(remainPct)}
+          aria-label="Оставшиеся часы пакета"
+        >
+          <div
+            className="deal-hours-fill"
+            style={{
+              width: `${Math.max(remainPct, remaining != null && remaining > 0 ? 1.5 : 0)}%`,
+            }}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function AgencyHome() {
   const { token } = useAuth();
   const toast = useFlashToast();
@@ -34,6 +86,8 @@ export function AgencyHome() {
   const [pendingUnlink, setPendingUnlink] = useState<PendingUnlink | null>(null);
   const [unlinking, setUnlinking] = useState(false);
   const [dealBusyId, setDealBusyId] = useState<number | null>(null);
+  const bindingsRef = useRef(bindings);
+  bindingsRef.current = bindings;
 
   const available = useMemo(
     () => portals.filter((p) => !links.some((l) => l.client_portal.id === p.id)),
@@ -48,7 +102,7 @@ export function AgencyHome() {
     return map;
   }, [bindings]);
 
-  async function load() {
+  const load = useCallback(async () => {
     if (!token) return;
     const [linkData, portalData, dealData] = await Promise.all([
       api<LinkRow[] | { results: LinkRow[] }>("/api/portal-links/", {}, token),
@@ -58,11 +112,57 @@ export function AgencyHome() {
     setLinks(unwrapList(linkData));
     setPortals(unwrapList(portalData).filter((p) => p.role === "client"));
     setBindings(unwrapList(dealData));
-  }
+  }, [token]);
+
+  const refreshAllDealHours = useCallback(async () => {
+    if (!token) return;
+    const active = bindingsRef.current.filter((b) => b.is_active);
+    if (!active.length) return;
+    await Promise.allSettled(
+      active.map((b) =>
+        api(`/api/deal-bindings/${b.id}/refresh-hours/`, { method: "POST" }, token)
+      )
+    );
+    const dealData = await api<DealBinding[] | { results: DealBinding[] }>(
+      "/api/deal-bindings/",
+      {},
+      token
+    );
+    setBindings(unwrapList(dealData));
+  }, [token]);
 
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка загрузки"));
-  }, [token]);
+  }, [load]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+
+    async function tick() {
+      if (cancelled || document.visibilityState === "hidden") return;
+      if (!bindingsRef.current.some((b) => b.is_active)) return;
+      try {
+        await refreshAllDealHours();
+      } catch {
+        // ignore background refresh errors
+      }
+    }
+
+    const interval = window.setInterval(() => void tick(), 45000);
+    const onFocus = () => void tick();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    const first = window.setTimeout(() => void tick(), 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.clearTimeout(first);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [token, refreshAllDealHours]);
 
   async function linkClient(e: React.FormEvent) {
     e.preventDefault();
@@ -120,47 +220,10 @@ export function AgencyHome() {
         },
         token
       );
-      toast.show(
-        "Сделка найдена по ссылке на портал в CRM",
-        "Сделка привязана"
-      );
+      toast.show("Сделка найдена по ссылке на портал в CRM", "Сделка привязана");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось найти сделку");
-    } finally {
-      setDealBusyId(null);
-    }
-  }
-
-  async function clearDealBinding(portalId: number) {
-    if (!token) return;
-    const binding = bindingByPortal.get(portalId);
-    if (!binding) return;
-    setDealBusyId(portalId);
-    setError(null);
-    try {
-      await api(`/api/deal-bindings/${binding.id}/`, { method: "DELETE" }, token);
-      toast.show("Привязка снята");
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось снять привязку");
-    } finally {
-      setDealBusyId(null);
-    }
-  }
-
-  async function refreshDealHours(portalId: number) {
-    if (!token) return;
-    const binding = bindingByPortal.get(portalId);
-    if (!binding) return;
-    setDealBusyId(portalId);
-    setError(null);
-    try {
-      await api(`/api/deal-bindings/${binding.id}/refresh-hours/`, { method: "POST" }, token);
-      toast.show("Часы обновлены из сделки");
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось обновить часы");
     } finally {
       setDealBusyId(null);
     }
@@ -298,83 +361,34 @@ export function AgencyHome() {
                   </header>
 
                   <div className="deal-bind">
-                    {hasDeal ? (
+                    {hasDeal && binding ? (
                       <div className="deal-bind-status">
                         <div className="deal-bind-status-text">
                           <span className="deal-bind-kicker">Сделка сопровождения</span>
                           <strong className="deal-bind-deal-name">
-                            {binding?.deal_title || `Сделка #${binding?.deal_id}`}
+                            {binding.deal_title || `Сделка #${binding.deal_id}`}
                           </strong>
-                          {binding?.deal_id ? (
+                          {binding.deal_id ? (
                             <span className="deal-bind-deal-id">#{binding.deal_id}</span>
                           ) : null}
                         </div>
-                        {(binding?.paid_hours != null || binding?.remaining_hours != null) && (
-                          <div className="deal-hours" aria-label="Часы по сделке">
-                            {binding.paid_hours != null ? (
-                              <div className="deal-hours-cell">
-                                <span className="deal-hours-label">Оплачено</span>
-                                <span className="deal-hours-value">{binding.paid_hours}</span>
-                                <span className="deal-hours-unit">ч</span>
-                              </div>
-                            ) : null}
-                            {binding.remaining_hours != null ? (
-                              <div className="deal-hours-cell is-remaining">
-                                <span className="deal-hours-label">Остаток</span>
-                                <span className="deal-hours-value">{binding.remaining_hours}</span>
-                                <span className="deal-hours-unit">ч</span>
-                              </div>
-                            ) : null}
-                          </div>
-                        )}
+                        <DealHoursBlock binding={binding} />
                       </div>
                     ) : (
-                      <p className="deal-bind-hint muted">
-                        Сделка ищется по полю «Ссылка на портал» в CRM
-                      </p>
+                      <>
+                        <p className="deal-bind-hint muted">
+                          Сделка ищется по полю «Ссылка на портал» в CRM
+                        </p>
+                        <button
+                          type="button"
+                          className="btn btn-accent"
+                          disabled={dealBusy}
+                          onClick={() => void findDealByPortal(p.id)}
+                        >
+                          {dealBusy ? "Ищем…" : "Найти сделку"}
+                        </button>
+                      </>
                     )}
-
-                    <div className="deal-bind-form">
-                      <div className="deal-bind-actions">
-                        {!hasDeal ? (
-                          <button
-                            type="button"
-                            className="btn btn-accent"
-                            disabled={dealBusy}
-                            onClick={() => void findDealByPortal(p.id)}
-                          >
-                            {dealBusy ? "Ищем…" : "Найти сделку"}
-                          </button>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              className="deal-bind-linkbtn"
-                              disabled={dealBusy}
-                              onClick={() => void refreshDealHours(p.id)}
-                            >
-                              Обновить часы
-                            </button>
-                            <button
-                              type="button"
-                              className="deal-bind-linkbtn"
-                              disabled={dealBusy}
-                              onClick={() => void findDealByPortal(p.id)}
-                            >
-                              Перепривязать
-                            </button>
-                            <button
-                              type="button"
-                              className="deal-bind-linkbtn is-danger"
-                              disabled={dealBusy}
-                              onClick={() => void clearDealBinding(p.id)}
-                            >
-                              Снять привязку
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
                   </div>
                 </article>
               );

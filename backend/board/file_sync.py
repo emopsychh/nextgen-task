@@ -60,16 +60,6 @@ def _extract_drive_object_id(result) -> str:
     return ""
 
 
-def _disk_doc_ref(disk_file_id: str) -> str:
-    """UF_FORUM_MESSAGE_DOC needs `n{driveId}` for newly uploaded Disk files."""
-    fid = str(disk_file_id or "").strip()
-    if not fid:
-        return ""
-    if fid[0] in "nNfF" and fid[1:].isdigit():
-        return fid
-    return f"n{fid}"
-
-
 def _read_access_task_id(client: BitrixClient) -> int | None:
     """disk.rights.getTasks → disk_access_read id (usually 71)."""
     try:
@@ -193,8 +183,8 @@ def _attach_drive_file_to_task(
             if item is None or item is False or item == "":
                 continue
             refs.append(str(item))
-        doc = _disk_doc_ref(str(file_id))
-        if doc and doc not in refs and str(file_id) not in refs:
+        doc = f"n{file_id}"
+        if doc not in refs and str(file_id) not in refs:
             refs.append(doc)
         client.update_task(bitrix_task_id, {"UF_TASK_WEBDAV_FILES": refs})
         logger.info(
@@ -207,73 +197,6 @@ def _attach_drive_file_to_task(
         errors.append(f"UF_TASK_WEBDAV_FILES: {exc}")
 
     raise BitrixAPIError("; ".join(errors) or "attach failed")
-
-
-def _post_file_to_task_chat(
-    *,
-    client: BitrixClient,
-    bitrix_task_id: str,
-    disk_file_id: str,
-    name: str,
-    message: str | None = None,
-) -> None:
-    """Best-effort: show the file in the Bitrix task comment/chat stream."""
-    body = (message or "").strip()
-    text = f"[Файл из Nextgen] {body}" if body else f"[Файл из Nextgen] {name}"
-    doc_ref = _disk_doc_ref(disk_file_id)
-    errors: list[str] = []
-
-    if doc_ref:
-        for fields in (
-            {"POST_MESSAGE": text, "UF_FORUM_MESSAGE_DOC": [doc_ref]},
-            {"POST_MESSAGE": text, "UF_FORUM_MESSAGE_DOC": [disk_file_id]},
-        ):
-            try:
-                client.call(
-                    "task.commentitem.add",
-                    {"TASKID": bitrix_task_id, "FIELDS": fields},
-                )
-                return
-            except BitrixAPIError as exc:
-                errors.append(f"commentitem: {exc}")
-
-    try:
-        task_data = client.get_task(bitrix_task_id) or {}
-        chat_id = (
-            task_data.get("chatId")
-            or task_data.get("CHAT_ID")
-            or task_data.get("chat_id")
-            or ""
-        )
-        if chat_id:
-            file_id = _as_int_id(disk_file_id) or disk_file_id
-            for params in (
-                {
-                    "CHAT_ID": int(chat_id) if str(chat_id).isdigit() else chat_id,
-                    "FILE_ID": [file_id],
-                    "MESSAGE": text,
-                },
-                {
-                    "DIALOG_ID": f"chat{chat_id}",
-                    "FILE_ID": [file_id],
-                    "MESSAGE": text,
-                },
-            ):
-                try:
-                    client.call("im.disk.file.commit", params)
-                    return
-                except BitrixAPIError as exc:
-                    errors.append(f"im.disk.file.commit: {exc}")
-    except BitrixAPIError as exc:
-        errors.append(f"get_task chat: {exc}")
-
-    if errors:
-        logger.warning(
-            "post file to task chat failed task=%s file=%s: %s",
-            bitrix_task_id,
-            disk_file_id,
-            "; ".join(errors),
-        )
 
 
 def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) -> str:
@@ -323,20 +246,6 @@ def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) 
 
     # Attach to Files tab is required for "Проекты → задача → подзадача"
     _attach_drive_file_to_task(client, bitrix_task_id, drive_id)
-
-    # Chat is best-effort (does not fail the sync)
-    try:
-        _post_file_to_task_chat(
-            client=client,
-            bitrix_task_id=bitrix_task_id,
-            disk_file_id=drive_id,
-            name=name,
-        )
-    except Exception:
-        logger.exception(
-            "chat post after attach failed task=%s file=%s", bitrix_task_id, drive_id
-        )
-
     return drive_id
 
 

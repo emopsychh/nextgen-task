@@ -1423,54 +1423,68 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
-.deal-hours {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.deal-hours-cell {
+.deal-hours-scale {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.deal-hours-paid {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
+
+.deal-hours-paid strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.deal-hours-remain-row {
+  display: flex;
   align-items: baseline;
-  gap: 0 4px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: #fff;
-  border: 1px solid var(--line);
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.deal-hours-cell.is-remaining {
-  border-color: #c5e4dc;
-  background: #f0faf7;
-}
-
-.deal-hours-label {
-  flex: 1 1 100%;
-  font-size: 0.72rem;
+.deal-hours-remain-label {
+  font-size: 0.78rem;
   font-weight: 650;
   color: var(--ink-muted);
-  margin-bottom: 2px;
 }
 
-.deal-hours-value {
+.deal-hours-remain-value {
   font-family: var(--display);
-  font-size: 1.25rem;
+  font-size: 1.05rem;
   font-weight: 700;
-  letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-  line-height: 1;
-}
-
-.deal-hours-cell.is-remaining .deal-hours-value {
+  letter-spacing: -0.02em;
   color: #0c6b58;
+  text-align: right;
+  line-height: 1.2;
 }
 
-.deal-hours-unit {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--ink-muted);
+.deal-hours-scale.is-over .deal-hours-remain-value {
+  color: #b42318;
+}
+
+.deal-hours-track {
+  height: 8px;
+  border-radius: 999px;
+  background: #e6eeeb;
+  overflow: hidden;
+}
+
+.deal-hours-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1f9e8a 0%, #34c3a5 100%);
+  transition: width 0.45s ease;
+}
+
+.deal-hours-scale.is-over .deal-hours-fill {
+  background: linear-gradient(90deg, #c2410c 0%, #e11d48 100%);
 }
 
 .deal-bind-form {
@@ -1579,10 +1593,6 @@ a {
 
 @media (max-width: 420px) {
   .linked-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .deal-hours {
     grid-template-columns: 1fr;
   }
 }

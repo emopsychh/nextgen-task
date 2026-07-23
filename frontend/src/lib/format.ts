@@ -71,3 +71,40 @@ export function formatTimerClock(totalSeconds: number): string {
   if (h > 0) return `${h}:${mm}:${ss}`;
   return `${mm}:${ss}`;
 }
+
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(Math.trunc(n)) % 100;
+  const n1 = abs % 10;
+  if (abs > 10 && abs < 20) return many;
+  if (n1 === 1) return one;
+  if (n1 >= 2 && n1 <= 4) return few;
+  return many;
+}
+
+/** Decimal package hours → «15 часов и 3 минуты» */
+export function formatPackageHours(value: number | string | null | undefined): string {
+  if (value == null || value === "") return "—";
+  const n = typeof value === "number" ? value : Number(String(value).replace(",", "."));
+  if (!Number.isFinite(n)) return "—";
+  const totalMinutes = Math.max(0, Math.round(n * 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0 && minutes === 0) {
+    return `0 ${pluralRu(0, "минута", "минуты", "минут")}`;
+  }
+  const parts: string[] = [];
+  if (hours > 0) {
+    parts.push(`${hours} ${pluralRu(hours, "час", "часа", "часов")}`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes} ${pluralRu(minutes, "минута", "минуты", "минут")}`);
+  }
+  if (parts.length === 2) return `${parts[0]} и ${parts[1]}`;
+  return parts[0];
+}
+
+export function asPackageHours(value: number | string | null | undefined): number | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(String(value).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
