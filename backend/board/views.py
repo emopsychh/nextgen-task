@@ -309,7 +309,7 @@ class TaskViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         ids = accessible_portal_ids(self.request.user)
         qs = Task.objects.filter(project__portal_id__in=ids).select_related(
-            "project", "project__portal", "created_by"
+            "project", "project__portal", "created_by", "created_by__portal"
         )
         if self.action == "retrieve":
             # Comments/attachments are loaded lazily via the `thread` action,
@@ -320,6 +320,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         portal_id = self.request.query_params.get("portal")
         if portal_id:
             qs = qs.filter(project__portal_id=portal_id)
+        if self.request.query_params.get("open") in ("1", "true", "yes"):
+            qs = qs.exclude(status=Task.Status.DONE)
         if self.action == "list" and not self.request.query_params.get("ordering"):
             qs = qs.order_by(*default_task_board_ordering())
         return qs

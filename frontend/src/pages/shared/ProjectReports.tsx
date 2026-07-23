@@ -218,10 +218,7 @@ export function ProjectReports() {
         <div className="connect-panel stack report-create-panel">
           <div>
             <h2 className="section-title">Новый отчёт</h2>
-            <p className="muted">
-              Выберите один или несколько проектов. Итоги задач подтянутся из карточек
-              завершённых задач.
-            </p>
+            <p className="muted">Выберите один или несколько проектов.</p>
           </div>
           <ul className="report-project-pick">
             {projects.map((p) => (

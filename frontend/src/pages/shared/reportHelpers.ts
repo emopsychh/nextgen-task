@@ -3,8 +3,8 @@ import type { WorkReport, WorkReportStatus } from "../../api/types";
 export type ReportBucket = "all" | "current" | "review" | "paid";
 
 export const STATUS_LABEL_RU: Record<WorkReportStatus, string> = {
-  draft: "Черновик",
-  pending_client: "На рассмотрении",
+  draft: "На рассмотрении руководителя",
+  pending_client: "На рассмотрении клиента",
   disputed: "Оспорен",
   accepted: "Согласован",
   paid: "Оплачен",
@@ -16,13 +16,13 @@ export const EVENT_LABEL: Record<string, string> = {
   accepted: "Клиент согласился",
   disputed: "Клиент оспорил",
   paid: "Отмечен оплаченным",
-  reopened: "Вернут в черновик",
+  reopened: "Вернут на рассмотрение руководителя",
 };
 
 export const REPORT_BUCKETS: { id: ReportBucket; label: string }[] = [
   { id: "all", label: "Все" },
   { id: "current", label: "Актуальные" },
-  { id: "review", label: "На рассмотрении" },
+  { id: "review", label: "У клиента" },
   { id: "paid", label: "Оплаченные" },
 ];
 

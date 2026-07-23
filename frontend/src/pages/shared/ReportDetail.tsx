@@ -235,12 +235,12 @@ export function ReportDetail() {
                   void runAction(
                     "reopen",
                     undefined,
-                    "Снова черновик",
+                    "Снова на рассмотрении",
                     "Можно отправить повторно"
                   )
                 }
               >
-                Вернуть в черновик
+                Вернуть на рассмотрение
               </button>
             ) : null}
             {isAgency && detail.status === "accepted" ? (

@@ -171,6 +171,7 @@ class TaskSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(source="project.name", read_only=True)
     portal_id = serializers.IntegerField(source="project.portal_id", read_only=True)
     created_by_name = serializers.SerializerMethodField()
+    created_by_role = serializers.SerializerMethodField()
     total_tracked_seconds = serializers.SerializerMethodField()
     active_timer = serializers.SerializerMethodField()
     deal_paid_hours = serializers.SerializerMethodField()
@@ -209,6 +210,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "sync_error",
             "created_by",
             "created_by_name",
+            "created_by_role",
             "comments_count",
             "last_comment_id",
             "files_count",
@@ -228,6 +230,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "sync_error",
             "created_by",
             "created_by_name",
+            "created_by_role",
             "total_tracked_seconds",
             "active_timer",
             "deal_paid_hours",
@@ -239,6 +242,11 @@ class TaskSerializer(serializers.ModelSerializer):
     def get_created_by_name(self, obj):
         if obj.created_by:
             return obj.created_by.display_name
+        return None
+
+    def get_created_by_role(self, obj):
+        if obj.created_by_id and obj.created_by and obj.created_by.portal_id:
+            return obj.created_by.portal.role
         return None
 
     def get_last_comment_id(self, obj):
@@ -309,6 +317,8 @@ class TaskListSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(source="project.name", read_only=True)
     portal_id = serializers.IntegerField(source="project.portal_id", read_only=True)
     comments_count = serializers.IntegerField(source="comments.count", read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    created_by_role = serializers.SerializerMethodField()
     total_tracked_seconds = serializers.SerializerMethodField()
     due_date = serializers.DateTimeField(
         required=False,
@@ -339,11 +349,24 @@ class TaskListSerializer(serializers.ModelSerializer):
             "is_important",
             "bitrix_task_id",
             "sync_status",
+            "created_by",
+            "created_by_name",
+            "created_by_role",
             "comments_count",
             "total_tracked_seconds",
             "created_at",
             "updated_at",
         )
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.display_name
+        return None
+
+    def get_created_by_role(self, obj):
+        if obj.created_by_id and obj.created_by and obj.created_by.portal_id:
+            return obj.created_by.portal.role
+        return None
 
     def get_total_tracked_seconds(self, obj):
         from .timeutils import task_tracked_seconds

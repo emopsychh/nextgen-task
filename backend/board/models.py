@@ -173,7 +173,7 @@ class WorkReport(models.Model):
     """Live work report for one project — agency sends, client agrees or disputes."""
 
     class Status(models.TextChoices):
-        DRAFT = "draft", "Draft"
+        DRAFT = "draft", "Manager review"
         PENDING_CLIENT = "pending_client", "Pending client"
         DISPUTED = "disputed", "Disputed"
         ACCEPTED = "accepted", "Accepted"

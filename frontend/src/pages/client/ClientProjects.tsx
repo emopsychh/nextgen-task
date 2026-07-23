@@ -3,42 +3,30 @@ import { Link, useParams } from "react-router-dom";
 import {
   api,
   unwrapList,
-  type ActivityEvent,
-  type ActivityType,
   type DealBinding,
+  type Paginated,
   type Portal,
-  type Project,
+  type Task,
+  type WorkReport,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { DealHoursCard } from "../../components/DealHoursCard";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
+import { formatDueFull } from "../../lib/format";
+import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
+import {
+  reportDetailPath,
+  reportTitle,
+  STATUS_LABEL_RU,
+} from "../shared/reportHelpers";
 
-const TYPE_META: Record<
-  ActivityType,
-  { label: string; tone: string }
-> = {
-  project_created: { label: "Создание", tone: "tone-project" },
-  task_created: { label: "Задача", tone: "tone-task" },
-  task_updated: { label: "Статус", tone: "tone-update" },
-  comment: { label: "Комментарий", tone: "tone-comment" },
-  attachment: { label: "Файл", tone: "tone-file" },
-};
+const RECENT_DONE_MS = 7 * 24 * 60 * 60 * 1000;
 
-function formatWhen(iso: string): string {
-  const d = new Date(iso);
-  const now = new Date();
-  const diff = (now.getTime() - d.getTime()) / 1000;
-  if (diff < 60) return "только что";
-  if (diff < 3600) return `${Math.floor(diff / 60)} мин назад`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} ч назад`;
-  return d.toLocaleString("ru-RU", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function taskDueLabel(task: Task): string | null {
+  if (!task.due_date) return null;
+  return formatDueFull(task.due_date);
 }
 
 export function ClientProjects() {
@@ -49,71 +37,98 @@ export function ClientProjects() {
   const toast = useFlashToast();
 
   const [portalInfo, setPortalInfo] = useState<Portal | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [dealHours, setDealHours] = useState<DealBinding | null>(null);
+  const [openTasks, setOpenTasks] = useState<Task[]>([]);
+  const [recentDone, setRecentDone] = useState<Task[]>([]);
+  const [pendingReports, setPendingReports] = useState<WorkReport[]>([]);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [enteringProjectId, setEnteringProjectId] = useState<number | null>(null);
 
-  const recentProjects = useMemo(() => {
-    const byId = new Map(projects.map((p) => [p.id, p]));
-    const ordered: Project[] = [];
+  const clientTasks = useMemo(
+    () => openTasks.filter((t) => t.created_by_role === "client"),
+    [openTasks]
+  );
+
+  const hotTasks = useMemo(() => {
     const seen = new Set<number>();
-    for (const ev of activity) {
-      if (!ev.project_id || seen.has(ev.project_id)) continue;
-      const p = byId.get(ev.project_id);
-      if (p) {
-        ordered.push(p);
-        seen.add(p.id);
-      }
-      if (ordered.length >= 4) break;
+    const out: Task[] = [];
+    for (const t of openTasks) {
+      const overdue = isTaskOverdue(t.due_date, t.status);
+      const important = Boolean(t.is_important);
+      if (!overdue && !important) continue;
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      out.push(t);
     }
-    for (const p of projects) {
-      if (!seen.has(p.id)) ordered.push(p);
-    }
-    return ordered.slice(0, 4);
-  }, [activity, projects]);
+    return out.slice(0, 12);
+  }, [openTasks]);
 
   const loadGenRef = useRef(0);
   const loadInFlightRef = useRef(false);
 
   async function load() {
     if (!token || !portalId) return;
-    // Collapse overlapping reloads (SSE burst + mount + interval).
     if (loadInFlightRef.current) return;
     const gen = loadGenRef.current;
     loadInFlightRef.current = true;
     try {
-      const [projectData, activityData, portalsData, hoursData] = await Promise.all([
-        api<Project[] | { results: Project[] }>(
-          `/api/projects/?portal=${portalId}`,
+      const [openData, doneData, portalsData, hoursData, reportsData] = await Promise.all([
+        api<Task[] | Paginated<Task>>(
+          `/api/tasks/?portal=${portalId}&open=1`,
           {},
           token
         ),
-        api<ActivityEvent[]>(`/api/activity/?portal=${portalId}`, {}, token),
-        isAgency
-          ? api<Portal[] | { results: Portal[] }>("/api/portals/", {}, token)
-          : Promise.resolve([] as Portal[]),
         !isAgency
-          ? api<DealBinding>("/api/deal-bindings/mine/", {}, token).catch(() => null)
-          : Promise.resolve(null),
+          ? api<Task[] | Paginated<Task>>(
+              `/api/tasks/?portal=${portalId}&status=done&ordering=-updated_at`,
+              {},
+              token
+            )
+          : Promise.resolve([] as Task[]),
+        isAgency
+          ? api<Portal[] | Paginated<Portal>>("/api/portals/", {}, token)
+          : Promise.resolve([] as Portal[]),
+        isAgency
+          ? api<DealBinding[] | Paginated<DealBinding>>(
+              `/api/deal-bindings/?client_portal=${portalId}&is_active=true`,
+              {},
+              token
+            ).catch(() => [] as DealBinding[])
+          : api<DealBinding>("/api/deal-bindings/mine/", {}, token).catch(() => null),
+        !isAgency
+          ? api<WorkReport[] | Paginated<WorkReport>>(
+              `/api/reports/?portal=${portalId}&bucket=review`,
+              {},
+              token
+            )
+          : Promise.resolve([] as WorkReport[]),
       ]);
-      // Drop results if the portal changed while we were fetching.
       if (gen !== loadGenRef.current) return;
-      setProjects(unwrapList(projectData));
-      setActivity(Array.isArray(activityData) ? activityData : []);
-      setDealHours(hoursData);
-      if (isAgency) {
-        const found = unwrapList(portalsData as Portal[] | { results: Portal[] }).find(
+
+      setOpenTasks(unwrapList(openData));
+
+      if (!isAgency) {
+        const cutoff = Date.now() - RECENT_DONE_MS;
+        setRecentDone(
+          unwrapList(doneData as Task[] | Paginated<Task>)
+            .filter((t) => new Date(t.updated_at).getTime() >= cutoff)
+            .slice(0, 6)
+        );
+        setPendingReports(unwrapList(reportsData as WorkReport[] | Paginated<WorkReport>));
+        setDealHours(hoursData as DealBinding | null);
+        setPortalInfo(portal);
+      } else {
+        const bindings = unwrapList(hoursData as DealBinding[] | Paginated<DealBinding>);
+        setDealHours(bindings[0] || null);
+        setRecentDone([]);
+        setPendingReports([]);
+        const found = unwrapList(portalsData as Portal[] | Paginated<Portal>).find(
           (p) => p.id === portalId
         );
         setPortalInfo(found || null);
-      } else {
-        setPortalInfo(portal);
       }
     } finally {
       loadInFlightRef.current = false;
@@ -136,45 +151,17 @@ export function ClientProjects() {
     onEvent: () => reloadRef.current(),
   });
 
-  // Soft realtime for projects + activity (safety net)
   useEffect(() => {
     if (!token || !portalId) return;
-    let cancelled = false;
-    let tickCount = 0;
-    let inFlight = false;
-
-    async function tick(forcePull = false) {
-      if (cancelled || inFlight) return;
+    const id = window.setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      inFlight = true;
-      tickCount += 1;
-      try {
-        const wantPull = forcePull || tickCount % 4 === 0;
-        const qs = wantPull
-          ? `/api/projects/?portal=${portalId}&pull=1`
-          : `/api/projects/?portal=${portalId}`;
-        const [projectData, activityData] = await Promise.all([
-          api<Project[] | { results: Project[] }>(qs, {}, token!),
-          api<ActivityEvent[]>(`/api/activity/?portal=${portalId}`, {}, token!),
-        ]);
-        if (!cancelled) {
-          setProjects(unwrapList(projectData));
-          setActivity(Array.isArray(activityData) ? activityData : []);
-        }
-      } catch {
-        // next tick
-      } finally {
-        inFlight = false;
-      }
-    }
-
-    const id = window.setInterval(() => void tick(false), 5000);
+      reloadRef.current();
+    }, 15000);
     const onVisible = () => {
-      if (document.visibilityState === "visible") void tick(true);
+      if (document.visibilityState === "visible") reloadRef.current();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      cancelled = true;
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -182,12 +169,11 @@ export function ClientProjects() {
 
   async function createProject(e: React.FormEvent) {
     e.preventDefault();
-    // Projects are agency-only — clients never create modules.
     if (!token || !portalId || !isAgency) return;
     setBusy(true);
     setError(null);
     try {
-      const created = await api<Project>(
+      await api(
         "/api/projects/",
         {
           method: "POST",
@@ -198,11 +184,9 @@ export function ClientProjects() {
       setName("");
       setDescription("");
       setShowCreate(false);
-      setEnteringProjectId(created.id);
       toast.show("Он появился в панели слева", "Проект создан");
       await load();
       window.dispatchEvent(new Event("projects-updated"));
-      window.setTimeout(() => setEnteringProjectId(null), 900);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось создать проект");
     } finally {
@@ -210,13 +194,9 @@ export function ClientProjects() {
     }
   }
 
-  function eventHref(ev: ActivityEvent): string | null {
-    if (ev.task_id) return `/tasks/${ev.task_id}`;
-    if (ev.project_id) return `/projects/${ev.project_id}`;
-    return null;
-  }
-
   const titleName = portalInfo?.name || portalInfo?.domain || "Клиент";
+  const clientNeedsAttention = pendingReports.length > 0 || recentDone.length > 0;
+  const agencyNeedsAttention = clientTasks.length > 0 || hotTasks.length > 0;
 
   return (
     <div className="workspace-page">
@@ -224,8 +204,9 @@ export function ClientProjects() {
         <div>
           <h1 className="page-title">{isAgency ? titleName : "Рабочее пространство"}</h1>
           <p className="page-sub">
-            Лента изменений по модулям и задачам
-            {isAgency ? " этого клиента" : ""}
+            {isAgency
+              ? "Часы, задачи клиента и то, что горит по срокам"
+              : "Часы и то, что ждёт вашего ответа"}
           </p>
         </div>
         {isAgency ? (
@@ -244,9 +225,9 @@ export function ClientProjects() {
 
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
-      {!isAgency && dealHours ? (
-        <div className="client-hours-panel">
-          <DealHoursCard binding={dealHours} audience="client" />
+      {dealHours ? (
+        <div className="client-hours-panel" data-tour="tour-deal-hours">
+          <DealHoursCard binding={dealHours} audience={isAgency ? "agency" : "client"} />
         </div>
       ) : null}
 
@@ -281,106 +262,139 @@ export function ClientProjects() {
         </form>
       )}
 
-      <div className="workspace-split">
-        <section className="workspace-col" data-tour="tour-recent-projects">
-          <div className="linked-head">
-            <h2 className="section-title">Недавние проекты</h2>
-            <p className="muted">С активностью или недавно созданные</p>
-          </div>
-          {recentProjects.length === 0 ? (
-            <div className="empty-linked">
+      {!isAgency ? (
+        <div className="workspace-focus" data-tour="tour-waiting-for-you">
+          <section className="workspace-focus-block">
+            <div className="linked-head">
+              <h2 className="section-title">Ждёт вас</h2>
+              <p className="muted">Отчёты на согласовании и недавние результаты</p>
+            </div>
+            {!clientNeedsAttention ? (
+              <div className="empty-linked workspace-empty">
+                <p className="muted">Пока ничего не ждёт — можно работать в проектах слева.</p>
+              </div>
+            ) : (
+              <div className="workspace-attention-list">
+                {pendingReports.map((r) => (
+                  <Link
+                    key={`report-${r.id}`}
+                    to={reportDetailPath(portalId, false, r.id)}
+                    className="workspace-attention-card is-report"
+                  >
+                    <div className="workspace-attention-top">
+                      <span className={`report-status-pill status-${r.status}`}>
+                        {STATUS_LABEL_RU[r.status]}
+                      </span>
+                      <span className="muted">Отчёт</span>
+                    </div>
+                    <strong>{reportTitle(r)}</strong>
+                    <span className="muted">Нужно согласовать или оспорить</span>
+                  </Link>
+                ))}
+                {recentDone.map((t) => (
+                  <Link
+                    key={`done-${t.id}`}
+                    to={`/tasks/${t.id}`}
+                    className="workspace-attention-card is-done"
+                  >
+                    <div className="workspace-attention-top">
+                      <span className="workspace-chip tone-done">Завершена</span>
+                      <span className="muted">{t.project_name}</span>
+                    </div>
+                    <strong>{t.title}</strong>
+                    <span className="muted">Можно открыть и посмотреть итог в чате</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      ) : (
+        <div className="workspace-focus" data-tour="tour-agency-focus">
+          {!agencyNeedsAttention ? (
+            <div className="empty-linked workspace-empty">
               <p className="muted">
-                {isAgency
-                  ? "Создайте первый проект — он появится в панели слева и как задача в Bitrix-проекте компании."
-                  : "Пока нет проектов. Их создаёт агентство — здесь появятся задачи."}
+                Нет клиентских задач и горящих сроков. Проекты — в панели слева.
               </p>
             </div>
           ) : (
-            <div className="recent-projects-stack">
-              {recentProjects.map((p) => {
-                const total = p.tasks_count || 0;
-                const done = p.done_count || 0;
-                const pct = total ? Math.round((done / total) * 100) : 0;
-                return (
-                  <Link
-                    key={p.id}
-                    to={`/projects/${p.id}`}
-                    className={`recent-project-card${enteringProjectId === p.id ? " is-entering" : ""}`}
-                  >
-                    <strong>{p.name}</strong>
-                    <span className="muted">{p.description || "Без описания"}</span>
-                    <div className="row" style={{ marginTop: 12, justifyContent: "space-between" }}>
-                      <span className="muted">
-                        {done}/{total} задач
-                      </span>
-                      <strong>{pct}%</strong>
-                    </div>
-                    <div className="progress">
-                      <span style={{ width: `${pct}%` }} />
-                    </div>
-                  </Link>
-                );
-              })}
+            <div className="workspace-split-focus">
+              <section className="workspace-focus-block">
+                <div className="linked-head">
+                  <h2 className="section-title">От клиента</h2>
+                  <p className="muted">Задачи, которые поставил клиент</p>
+                </div>
+                {clientTasks.length === 0 ? (
+                  <div className="empty-linked workspace-empty">
+                    <p className="muted">Пока нет открытых задач от клиента.</p>
+                  </div>
+                ) : (
+                  <div className="workspace-attention-list">
+                    {clientTasks.slice(0, 12).map((t) => (
+                      <Link
+                        key={t.id}
+                        to={`/tasks/${t.id}`}
+                        className="workspace-attention-card"
+                      >
+                        <div className="workspace-attention-top">
+                          <span className="workspace-chip tone-client">Клиент</span>
+                          <span className="muted">{STATUS_LABEL[t.status]}</span>
+                        </div>
+                        <strong>{t.title}</strong>
+                        <span className="muted">
+                          {t.project_name}
+                          {t.created_by_name ? ` · ${t.created_by_name}` : ""}
+                        </span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="workspace-focus-block">
+                <div className="linked-head">
+                  <h2 className="section-title">Горят</h2>
+                  <p className="muted">Просроченные и важные</p>
+                </div>
+                {hotTasks.length === 0 ? (
+                  <div className="empty-linked workspace-empty">
+                    <p className="muted">Сроков и важных задач нет.</p>
+                  </div>
+                ) : (
+                  <div className="workspace-attention-list">
+                    {hotTasks.map((t) => {
+                      const overdue = isTaskOverdue(t.due_date, t.status);
+                      const due = taskDueLabel(t);
+                      return (
+                        <Link
+                          key={t.id}
+                          to={`/tasks/${t.id}`}
+                          className={`workspace-attention-card${overdue ? " is-overdue" : ""}`}
+                        >
+                          <div className="workspace-attention-top">
+                            {overdue ? (
+                              <span className="workspace-chip tone-overdue">Просрочена</span>
+                            ) : null}
+                            {t.is_important ? (
+                              <span className="workspace-chip tone-important">Важная</span>
+                            ) : null}
+                            <span className="muted">{t.project_name}</span>
+                          </div>
+                          <strong>{t.title}</strong>
+                          <span className="muted">
+                            {STATUS_LABEL[t.status]}
+                            {due ? ` · до ${due}` : ""}
+                          </span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
             </div>
           )}
-        </section>
-
-        <section className="workspace-col activity-section" data-tour="tour-activity-feed">
-          <div className="linked-head">
-            <h2 className="section-title">Лента активности</h2>
-            <p className="muted">Что изменилось: задачи, ответы, статусы</p>
-          </div>
-          <div className="activity-feed">
-            {activity.length === 0 && (
-              <div className="empty-linked">
-                <p className="muted">Пока тихо — активность появится здесь.</p>
-              </div>
-            )}
-            {activity.map((ev) => {
-              const meta = TYPE_META[ev.type];
-              const href = eventHref(ev);
-              const inner = (
-                <div className="activity-card-inner">
-                  <div className="activity-top">
-                    {ev.project_name ? (
-                      <span className="activity-project">{ev.project_name}</span>
-                    ) : (
-                      <span />
-                    )}
-                    <time className="activity-time muted">{formatWhen(ev.at)}</time>
-                  </div>
-                  <div className="activity-headline">
-                    <span className={`activity-badge ${meta.tone}`}>{meta.label}</span>
-                    <strong>{ev.title}</strong>
-                  </div>
-                  {(ev.task_title || ev.subtitle) && (
-                    <div className="activity-meta">
-                      {ev.task_title && (
-                        <span className="activity-task">задача «{ev.task_title}»</span>
-                      )}
-                      {ev.task_title && ev.subtitle ? (
-                        <span className="activity-sep" aria-hidden>
-                          ·
-                        </span>
-                      ) : null}
-                      {ev.subtitle && <span className="activity-detail">{ev.subtitle}</span>}
-                    </div>
-                  )}
-                </div>
-              );
-              return href ? (
-                <Link key={ev.id} to={href} className={`activity-row ${meta.tone}`}>
-                  {inner}
-                </Link>
-              ) : (
-                <div key={ev.id} className={`activity-row ${meta.tone}`}>
-                  {inner}
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

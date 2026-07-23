@@ -207,7 +207,7 @@ def create_report(
 def send_to_client(report: WorkReport, actor: BitrixUser | None) -> WorkReport:
     if report.status not in (WorkReport.Status.DRAFT,):
         raise ValidationError(
-            {"detail": "Отправить клиенту можно только черновик."}
+            {"detail": "Отправить клиенту можно только отчёт на рассмотрении руководителя."}
         )
     report.status = WorkReport.Status.PENDING_CLIENT
     report.sent_at = timezone.now()
@@ -286,7 +286,9 @@ def dispute_report(
 @transaction.atomic
 def reopen_to_draft(report: WorkReport, actor: BitrixUser | None) -> WorkReport:
     if report.status != WorkReport.Status.DISPUTED:
-        raise ValidationError({"detail": "Вернуть в черновик можно только оспоренный отчёт."})
+        raise ValidationError(
+            {"detail": "Вернуть на рассмотрение руководителя можно только оспоренный отчёт."}
+        )
     report.status = WorkReport.Status.DRAFT
     report.save(update_fields=["status", "updated_at"])
     append_event(report, WorkReportEvent.Kind.REOPENED, actor)

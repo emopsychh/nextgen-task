@@ -126,7 +126,7 @@ export function ProjectSidebarNav() {
             />
           </svg>
         </span>
-        Лента
+        Обзор
       </NavLink>
       <NavLink
         to={isAgency ? `/portals/${contextPortalId}/reports` : "/reports"}

@@ -93,6 +93,7 @@ export type Task = {
   sync_error?: string;
   created_by?: number | null;
   created_by_name?: string | null;
+  created_by_role?: "agency" | "client" | "unknown" | null;
   // Lightweight activity signals — the full chat thread is loaded lazily via
   // GET /api/tasks/{id}/thread/ (see ThreadPage), never inlined on the task.
   comments_count?: number;
