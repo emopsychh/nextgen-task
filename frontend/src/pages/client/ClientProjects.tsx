@@ -5,10 +5,12 @@ import {
   unwrapList,
   type ActivityEvent,
   type ActivityType,
+  type DealBinding,
   type Portal,
   type Project,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
+import { DealHoursCard } from "../../components/DealHoursCard";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
@@ -49,6 +51,7 @@ export function ClientProjects() {
   const [portalInfo, setPortalInfo] = useState<Portal | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [dealHours, setDealHours] = useState<DealBinding | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -77,7 +80,7 @@ export function ClientProjects() {
 
   async function load() {
     if (!token || !portalId) return;
-    const [projectData, activityData, portalsData] = await Promise.all([
+    const [projectData, activityData, portalsData, hoursData] = await Promise.all([
       api<Project[] | { results: Project[] }>(
         `/api/projects/?portal=${portalId}`,
         {},
@@ -87,9 +90,13 @@ export function ClientProjects() {
       isAgency
         ? api<Portal[] | { results: Portal[] }>("/api/portals/", {}, token)
         : Promise.resolve([] as Portal[]),
+      !isAgency
+        ? api<DealBinding>("/api/deal-bindings/mine/", {}, token).catch(() => null)
+        : Promise.resolve(null),
     ]);
     setProjects(unwrapList(projectData));
     setActivity(Array.isArray(activityData) ? activityData : []);
+    setDealHours(hoursData);
     if (isAgency) {
       const found = unwrapList(portalsData as Portal[] | { results: Portal[] }).find(
         (p) => p.id === portalId
@@ -221,6 +228,12 @@ export function ClientProjects() {
       {error && <div className="error-banner">{error}</div>}
 
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
+
+      {!isAgency && dealHours ? (
+        <div className="client-hours-panel">
+          <DealHoursCard binding={dealHours} audience="client" />
+        </div>
+      ) : null}
 
       {isAgency && showCreate && (
         <form className="connect-panel create-project-panel stack" onSubmit={createProject}>

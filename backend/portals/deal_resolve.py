@@ -352,17 +352,16 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
     meta = sync_deal_hours_meta(client, deal_id, deal)
 
     # New open deal (or first bind): roll pending credit into remaining
-    switched = not previous or str(previous.deal_id) != deal_id
-    if switched:
-        applied = apply_hours_credit_to_new_deal(
-            link=link,
-            client=client,
-            new_deal_id=deal_id,
-            current_remaining=meta.get("remaining_hours"),
-        )
-        if applied is not None:
-            meta["remaining_hours"] = applied
-            link.refresh_from_db()
+    # Roll pending credit (idempotent) and repair a double-apply if needed
+    applied = apply_hours_credit_to_new_deal(
+        link=link,
+        client=client,
+        new_deal_id=deal_id,
+        current_remaining=meta.get("remaining_hours"),
+    )
+    if applied is not None:
+        meta["remaining_hours"] = applied
+        link.refresh_from_db()
 
     # Cache company + Bitrix workgroup id from company UF
     cache_company_and_group_on_link(client, link, deal)

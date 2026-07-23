@@ -492,6 +492,52 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
         return Response(PortalDealBindingSerializer(binding).data)
 
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="mine",
+        permission_classes=[IsPortalAuthenticated],
+    )
+    def mine(self, request):
+        """Active accompaniment deal hours for the current client portal."""
+        portal = request.user.portal
+        if portal.role != Portal.Role.CLIENT:
+            return Response(
+                {"detail": "Только для клиентского портала"},
+                status=400,
+            )
+        binding = (
+            PortalDealBinding.objects.filter(
+                client_portal=portal,
+                is_active=True,
+            )
+            .select_related("client_portal", "agency_portal")
+            .order_by("-updated_at")
+            .first()
+        )
+        if not binding:
+            return Response({"detail": "Сделка не найдена"}, status=404)
+        # Best-effort refresh via agency token
+        agency = binding.agency_portal
+        if agency and agency.access_token:
+            try:
+                binding = resolve_or_refresh_binding(
+                    agency_portal=agency,
+                    client_portal=portal,
+                ) or binding
+            except BitrixAPIError:
+                try:
+                    from portals.deal_resolve import refresh_binding_from_deal
+
+                    binding = refresh_binding_from_deal(
+                        agency_portal=agency,
+                        client_portal=portal,
+                        binding=binding,
+                    )
+                except BitrixAPIError:
+                    pass
+        return Response(PortalDealBindingSerializer(binding).data)
+
     @action(detail=True, methods=["post"], url_path="refresh-hours")
     def refresh_hours(self, request, pk=None):
         binding = self.get_object()

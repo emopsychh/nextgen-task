@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 
+from django.db import transaction
+
 from portals.bitrix import BitrixAPIError, BitrixClient
 from portals.deal_hours import (
     hours_fields_configured,
     parse_hours,
+    read_deal_hours,
     remaining_update_fields,
 )
 
@@ -88,6 +91,13 @@ def _credit_amount(link) -> Decimal:
     return max(Decimal("0.00"), parsed)
 
 
+def _last_amount(link) -> Decimal:
+    parsed = parse_hours(getattr(link, "hours_credit_last_amount", None))
+    if parsed is None:
+        return Decimal("0.00")
+    return max(Decimal("0.00"), parsed)
+
+
 def capture_hours_credit_if_won(
     *,
     link,
@@ -100,6 +110,7 @@ def capture_hours_credit_if_won(
     If deal is on a SUCCESS stage and still has remaining hours, park them
     on the portal link as credit (once per source deal). Does not change paid.
     """
+    del client  # reserved for future Bitrix writes on capture
     if not hours_fields_configured():
         return False
     if str(stage_semantic or "").upper() != "S":
@@ -113,96 +124,113 @@ def capture_hours_credit_if_won(
     if not deal_id:
         return False
 
-    # Already captured from this deal
-    if (
-        str(link.hours_credit_source_deal_id or "") == deal_id
-        and _credit_amount(link) > 0
-    ):
-        return False
+    from portals.models import PortalLink
 
-    existing = _credit_amount(link)
-    # If credit is from another deal that was never rolled — keep stacking
-    new_credit = existing + rem
-    link.hours_credit = new_credit
-    link.hours_credit_source_deal_id = deal_id
-    link.hours_credit_source_title = (
-        binding.deal_title or f"Сделка #{deal_id}"
-    )[:500]
-    link.save(
-        update_fields=[
-            "hours_credit",
-            "hours_credit_source_deal_id",
-            "hours_credit_source_title",
-        ]
-    )
-    logger.info(
-        "hours credit captured client=%s deal=%s +%s → total=%s",
-        link.client_portal_id,
-        deal_id,
-        rem,
-        new_credit,
-    )
-    return True
+    with transaction.atomic():
+        link = PortalLink.objects.select_for_update().get(pk=link.pk)
+
+        # Already rolled this source into a later deal — never re-capture
+        if str(link.hours_credit_last_source_deal_id or "") == deal_id:
+            return False
+
+        # Pending credit already parked from this deal
+        if (
+            str(link.hours_credit_source_deal_id or "") == deal_id
+            and _credit_amount(link) > 0
+        ):
+            return False
+
+        existing = _credit_amount(link)
+        # Replace empty/pending only; don't silently stack the same package twice
+        if existing > 0 and str(link.hours_credit_source_deal_id or "") not in ("", deal_id):
+            new_credit = existing + rem
+        else:
+            new_credit = rem
+
+        link.hours_credit = new_credit
+        link.hours_credit_source_deal_id = deal_id
+        link.hours_credit_source_title = (
+            binding.deal_title or f"Сделка #{deal_id}"
+        )[:500]
+        link.save(
+            update_fields=[
+                "hours_credit",
+                "hours_credit_source_deal_id",
+                "hours_credit_source_title",
+            ]
+        )
+        logger.info(
+            "hours credit captured client=%s deal=%s → %s",
+            link.client_portal_id,
+            deal_id,
+            new_credit,
+        )
+        return True
 
 
-def apply_hours_credit_to_new_deal(
+def repair_double_applied_remaining(
     *,
     link,
     client: BitrixClient,
-    new_deal_id: str,
-    current_remaining,
+    deal_id: str,
+    paid,
+    remaining,
 ) -> Decimal | None:
     """
-    Add pending credit to the new deal's remaining field and clear the credit.
-    Returns the new remaining value written to Bitrix, or None if nothing applied.
+    If credit was applied twice (remaining ≈ paid + 2×credit), fix to paid+credit.
     """
-    if not hours_fields_configured():
+    deal_id = str(deal_id or "").strip()
+    if not deal_id:
         return None
 
-    credit = _credit_amount(link)
-    if credit <= 0:
+    paid_h = parse_hours(paid)
+    rem_h = parse_hours(remaining)
+    if paid_h is None or rem_h is None or paid_h < 0 or rem_h <= paid_h:
         return None
 
-    new_deal_id = str(new_deal_id or "").strip()
-    if not new_deal_id:
-        return None
+    last = _last_amount(link)
 
-    # Don't apply credit back onto the same deal it came from
-    source_id = str(link.hours_credit_source_deal_id or "").strip()
-    if source_id and source_id == new_deal_id:
-        return None
+    # Infer credit from a won sibling binding still caching pre-zero remaining
+    if last <= 0:
+        from portals.models import PortalDealBinding
 
-    base = parse_hours(current_remaining)
-    if base is None:
-        base = Decimal("0.00")
-    new_remaining = (base + credit).quantize(Decimal("0.01"))
+        won = (
+            PortalDealBinding.objects.filter(
+                agency_portal_id=link.agency_portal_id,
+                client_portal_id=link.client_portal_id,
+                stage_semantic__iexact="S",
+            )
+            .exclude(deal_id=deal_id)
+            .order_by("-updated_at")
+            .first()
+        )
+        if won:
+            guess = parse_hours(won.remaining_hours)
+            if guess and guess > 0:
+                last = guess
+
+    if last <= 0:
+        # Bootstrap when remaining looks like paid + 2×(~paid) transfers
+        if rem_h + Decimal("0.05") >= (paid_h * Decimal("3")):
+            last = ((rem_h - paid_h) / 2).quantize(Decimal("0.01"))
+        else:
+            return None
+
+    expected = (paid_h + last).quantize(Decimal("0.01"))
+    doubled = (paid_h + last + last).quantize(Decimal("0.01"))
+    if rem_h + Decimal("0.15") < doubled:
+        return None
+    if rem_h <= expected + Decimal("0.05"):
+        return None
 
     try:
-        client.update_deal(new_deal_id, remaining_update_fields(new_remaining))
+        client.update_deal(deal_id, remaining_update_fields(expected))
     except BitrixAPIError as exc:
-        logger.info(
-            "apply hours credit failed deal=%s credit=%s: %s",
-            new_deal_id,
-            credit,
-            exc,
-        )
+        logger.info("repair double credit failed deal=%s: %s", deal_id, exc)
         return None
 
-    # Best-effort: zero remaining on the source (won) deal so CRM matches
-    if source_id:
-        try:
-            client.update_deal(source_id, remaining_update_fields(Decimal("0.00")))
-        except BitrixAPIError as exc:
-            logger.info("zero source deal remaining failed deal=%s: %s", source_id, exc)
-        try:
-            client.add_deal_timeline_comment(
-                new_deal_id,
-                f"Перенесено {credit} ч остатка со сделки #{source_id} "
-                f"«{link.hours_credit_source_title or source_id}».",
-            )
-        except BitrixAPIError:
-            pass
-
+    link.hours_credit_applied_to_deal_id = deal_id
+    link.hours_credit_last_amount = last
     link.hours_credit = Decimal("0.00")
     link.hours_credit_source_deal_id = ""
     link.hours_credit_source_title = ""
@@ -211,12 +239,165 @@ def apply_hours_credit_to_new_deal(
             "hours_credit",
             "hours_credit_source_deal_id",
             "hours_credit_source_title",
+            "hours_credit_applied_to_deal_id",
+            "hours_credit_last_amount",
         ]
     )
-    logger.info(
-        "hours credit applied client=%s → deal=%s remaining=%s",
-        link.client_portal_id,
-        new_deal_id,
-        new_remaining,
+
+    logger.warning(
+        "repaired double-applied hours deal=%s %s → %s (paid=%s credit=%s)",
+        deal_id,
+        rem_h,
+        expected,
+        paid_h,
+        last,
     )
-    return new_remaining
+    return expected
+
+
+def apply_hours_credit_to_new_deal(
+    *,
+    link,
+    client: BitrixClient,
+    new_deal_id: str,
+    current_remaining=None,
+) -> Decimal | None:
+    """
+    Add pending credit to the new deal's remaining field and clear the credit.
+    Idempotent: will not add twice to the same deal. May repair a double-apply.
+    """
+    if not hours_fields_configured():
+        return None
+
+    new_deal_id = str(new_deal_id or "").strip()
+    if not new_deal_id:
+        return None
+
+    from portals.models import PortalLink
+
+    with transaction.atomic():
+        link = PortalLink.objects.select_for_update().get(pk=link.pk)
+
+        # Fresh Bitrix snapshot (ignore possibly stale current_remaining)
+        try:
+            deal = client.get_deal(new_deal_id)
+        except BitrixAPIError as exc:
+            logger.info("apply credit get_deal failed %s: %s", new_deal_id, exc)
+            return None
+        hours = read_deal_hours(deal)
+        paid = hours.paid
+        rem = hours.remaining
+        if rem is None:
+            rem = paid if paid is not None else Decimal("0.00")
+
+        # Always attempt repair of a known double-apply pattern
+        fixed = repair_double_applied_remaining(
+            link=link,
+            client=client,
+            deal_id=new_deal_id,
+            paid=paid,
+            remaining=rem,
+        )
+        if fixed is not None:
+            link.refresh_from_db()
+            return fixed
+
+        # Already applied to this deal
+        if str(link.hours_credit_applied_to_deal_id or "") == new_deal_id:
+            if _credit_amount(link) > 0:
+                link.hours_credit = Decimal("0.00")
+                link.hours_credit_source_deal_id = ""
+                link.hours_credit_source_title = ""
+                link.save(
+                    update_fields=[
+                        "hours_credit",
+                        "hours_credit_source_deal_id",
+                        "hours_credit_source_title",
+                    ]
+                )
+            return rem
+
+        credit = _credit_amount(link)
+        if credit <= 0:
+            return None
+
+        source_id = str(link.hours_credit_source_deal_id or "").strip()
+        if source_id and source_id == new_deal_id:
+            return None
+
+        # If CRM remaining already looks like paid+credit, just mark applied
+        if paid is not None:
+            expected = (paid + credit).quantize(Decimal("0.01"))
+            if rem + Decimal("0.05") >= expected:
+                link.hours_credit_applied_to_deal_id = new_deal_id
+                link.hours_credit_last_amount = credit
+                if source_id:
+                    link.hours_credit_last_source_deal_id = source_id
+                link.hours_credit = Decimal("0.00")
+                link.hours_credit_source_deal_id = ""
+                link.hours_credit_source_title = ""
+                link.save(
+                    update_fields=[
+                        "hours_credit",
+                        "hours_credit_source_deal_id",
+                        "hours_credit_source_title",
+                        "hours_credit_applied_to_deal_id",
+                        "hours_credit_last_amount",
+                        "hours_credit_last_source_deal_id",
+                    ]
+                )
+                return rem
+
+        new_remaining = (rem + credit).quantize(Decimal("0.01"))
+        try:
+            client.update_deal(new_deal_id, remaining_update_fields(new_remaining))
+        except BitrixAPIError as exc:
+            logger.info(
+                "apply hours credit failed deal=%s credit=%s: %s",
+                new_deal_id,
+                credit,
+                exc,
+            )
+            return None
+
+        if source_id:
+            try:
+                client.update_deal(source_id, remaining_update_fields(Decimal("0.00")))
+            except BitrixAPIError as exc:
+                logger.info(
+                    "zero source deal remaining failed deal=%s: %s", source_id, exc
+                )
+            try:
+                client.add_deal_timeline_comment(
+                    new_deal_id,
+                    f"Перенесено {credit} ч остатка со сделки #{source_id} "
+                    f"«{link.hours_credit_source_title or source_id}».",
+                )
+            except BitrixAPIError:
+                pass
+
+        link.hours_credit_applied_to_deal_id = new_deal_id
+        link.hours_credit_last_amount = credit
+        link.hours_credit_last_source_deal_id = source_id
+        link.hours_credit = Decimal("0.00")
+        link.hours_credit_source_deal_id = ""
+        link.hours_credit_source_title = ""
+        link.save(
+            update_fields=[
+                "hours_credit",
+                "hours_credit_source_deal_id",
+                "hours_credit_source_title",
+                "hours_credit_applied_to_deal_id",
+                "hours_credit_last_amount",
+                "hours_credit_last_source_deal_id",
+            ]
+        )
+        logger.info(
+            "hours credit applied client=%s → deal=%s remaining=%s (was %s + %s)",
+            link.client_portal_id,
+            new_deal_id,
+            new_remaining,
+            rem,
+            credit,
+        )
+        return new_remaining

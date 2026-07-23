@@ -48,6 +48,12 @@ class PortalLink(models.Model):
     )
     hours_credit_source_deal_id = models.CharField(max_length=64, blank=True)
     hours_credit_source_title = models.CharField(max_length=500, blank=True)
+    # Idempotency / repair after rollover
+    hours_credit_applied_to_deal_id = models.CharField(max_length=64, blank=True)
+    hours_credit_last_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0, blank=True
+    )
+    hours_credit_last_source_deal_id = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

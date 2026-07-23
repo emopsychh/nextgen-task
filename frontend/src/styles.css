@@ -1423,6 +1423,160 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+.deal-hours-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.92) 0%, rgba(232, 245, 241, 0.95) 100%);
+  border: 1px solid #d5e8e1;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.deal-hours-card.is-over {
+  background: linear-gradient(165deg, #fff8f6 0%, #fdeeee 100%);
+  border-color: #f0c9c4;
+}
+
+.deal-hours-card.is-won {
+  background: linear-gradient(165deg, #f6f8f7 0%, #eef2f0 100%);
+  border-color: #d5ddd9;
+}
+
+.deal-hours-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.deal-hours-card-kicker {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+}
+
+.deal-hours-card.is-won .deal-hours-card-kicker {
+  color: #6a7571;
+}
+
+.deal-hours-card-deal {
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 55%;
+}
+
+.deal-hours-card-won {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 650;
+  color: #5a6b63;
+}
+
+.deal-hours-card-stats {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 12px;
+  align-items: end;
+}
+
+.deal-hours-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.deal-hours-stat.is-secondary {
+  text-align: right;
+  align-items: flex-end;
+}
+
+.deal-hours-stat-label {
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--ink-muted);
+}
+
+.deal-hours-stat-value {
+  font-family: var(--display);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.deal-hours-stat-value.is-remain {
+  font-size: 1.2rem;
+  color: #0c6b58;
+}
+
+.deal-hours-card.is-over .deal-hours-stat-value.is-remain {
+  color: #b42318;
+}
+
+.deal-hours-card-track {
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(18, 20, 22, 0.06);
+  overflow: hidden;
+}
+
+.deal-hours-card-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1f9e8a 0%, #3dbea5 100%);
+  transition: width 0.45s ease;
+}
+
+.deal-hours-card.is-over .deal-hours-card-fill {
+  background: linear-gradient(90deg, #c2410c 0%, #e11d48 100%);
+}
+
+.deal-hours-card-credit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed #c5d8d1;
+}
+
+.deal-hours-card-credit-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+}
+
+.deal-hours-card-credit-value {
+  font-family: var(--display);
+  font-size: 1.08rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.deal-hours-card-credit-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--ink-muted);
+}
+
+.client-hours-panel {
+  margin: 0 0 18px;
+}
+
 .deal-hours-scale {
   display: flex;
   flex-direction: column;
