@@ -238,11 +238,11 @@ def _post_time_entries_elapsed(
     *,
     id_attr: str = "bitrix_elapsed_id",
 ) -> None:
-    """Post local time entries into the Bitrix task «Учёт времени».
+    """Post local time into Bitrix «Учёт времени» as ONE rollup record.
 
-    Idempotent: each TimeEntry stores the Bitrix elapsed id in `id_attr`
-    (agency → bitrix_elapsed_id, client → client_bitrix_elapsed_id).
-    Called on completion only. Also ensures ALLOW_TIME_TRACKING is on.
+    One add → one Bitrix activity line at most (and with empty COMMENT_TEXT so
+    the chat is not spammed with «вручную добавил время… Nextgen: …»).
+    Idempotent via `id_attr` on TimeEntry rows.
     """
     from django.db.models import Q
 
@@ -254,34 +254,51 @@ def _post_time_entries_elapsed(
     except BitrixAPIError:
         pass
 
-    entries = (
+    entries = list(
         task.time_entries.filter(ended_at__isnull=False)
         .filter(Q(**{id_attr: ""}) | Q(**{f"{id_attr}__isnull": True}))
         .order_by("id")
     )
+    if not entries:
+        return
+
+    total = 0
+    user_id = ""
     for entry in entries:
         seconds = int(entry.duration_seconds or 0)
         if seconds <= 0 and entry.ended_at and entry.started_at:
             seconds = max(0, int((entry.ended_at - entry.started_at).total_seconds()))
-        if seconds <= 0:
-            continue
-        user_id = ""
-        if entry.author and entry.author.portal_id == portal.id and entry.author.bitrix_id:
+        total += max(0, seconds)
+        if (
+            not user_id
+            and entry.author
+            and entry.author.portal_id == portal.id
+            and entry.author.bitrix_id
+        ):
             user_id = str(entry.author.bitrix_id)
-        try:
-            result = client.add_elapsed_item(
-                bitrix_task_id,
-                seconds,
-                comment=f"Nextgen: {task.title}",
-                user_id=user_id or None,
-            )
-        except BitrixAPIError as exc:
-            logger.info("elapsed add failed task=%s entry=%s: %s", task.id, entry.id, exc)
-            continue
-        eid = _extract_elapsed_id(result)
-        if eid:
-            setattr(entry, id_attr, eid)
+
+    if total <= 0:
+        # Nothing billable — mark as synced so we don't retry forever.
+        for entry in entries:
+            setattr(entry, id_attr, "0")
             entry.save(update_fields=[id_attr, "updated_at"])
+        return
+
+    try:
+        result = client.add_elapsed_item(
+            bitrix_task_id,
+            total,
+            comment="",  # empty → no «Nextgen: …» in Bitrix task chat
+            user_id=user_id or None,
+        )
+    except BitrixAPIError as exc:
+        logger.info("elapsed add failed task=%s: %s", task.id, exc)
+        return
+
+    eid = _extract_elapsed_id(result) or "posted"
+    for entry in entries:
+        setattr(entry, id_attr, eid)
+        entry.save(update_fields=[id_attr, "updated_at"])
 
 
 def _ensure_project_agency_parent(project) -> tuple[str, str]:
@@ -1068,7 +1085,7 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str):
                 result = client.add_elapsed_item(
                     bitrix_id,
                     seconds,
-                    comment=f"Nextgen: {task.title}",
+                    comment="",
                     user_id=user_id or None,
                 )
                 eid = ""

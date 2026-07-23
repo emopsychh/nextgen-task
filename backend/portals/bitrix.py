@@ -241,10 +241,14 @@ class BitrixClient:
         comment: str = "",
         user_id: str | None = None,
     ) -> dict | str | int:
-        """Post a closed time record into Bitrix task elapsed items."""
+        """Post a closed time record into Bitrix task elapsed items.
+
+        Keep COMMENT_TEXT empty by default — a non-empty comment makes Bitrix
+        spam the task chat with «вручную добавил время…».
+        """
         fields: dict = {
             "SECONDS": max(0, int(seconds)),
-            "COMMENT_TEXT": comment or "Nextgen timer",
+            "COMMENT_TEXT": (comment or "").strip(),
         }
         if user_id:
             fields["USER_ID"] = user_id

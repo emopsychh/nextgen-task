@@ -114,6 +114,10 @@ class OutboundStatusPushTests(TestCase):
 
         board_tasks._post_time_entries_elapsed(client, "108", task, self.agency)
         client.add_elapsed_item.assert_called_once()
+        args, kwargs = client.add_elapsed_item.call_args
+        self.assertEqual(args[0], "108")
+        self.assertEqual(args[1], 120)
+        self.assertEqual(kwargs.get("comment"), "")
 
         board_tasks._post_time_entries_elapsed(client, "108", task, self.agency)
         client.add_elapsed_item.assert_called_once()

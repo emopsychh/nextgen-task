@@ -214,3 +214,48 @@ class ApplyInboundStatusTests(TestCase):
         task.refresh_from_db()
         self.assertFalse(changed)
         self.assertEqual(task.status, Task.Status.DONE)
+
+    def test_app_pause_not_undone_by_bitrix_still_in_progress(self):
+        # App pause leaves Bitrix «in progress». Pull must not resume the app
+        # when local time was already tracked.
+        task = make_task(
+            self.project,
+            status=Task.Status.TODO,
+            sync_status=Task.SyncStatus.SYNCED,
+            created_by=self.user,
+        )
+        TimeEntry.objects.create(
+            task=task,
+            author=self.user,
+            started_at=timezone.now() - timedelta(seconds=30),
+            ended_at=timezone.now(),
+            duration_seconds=30,
+        )
+        changed = apply_inbound_status(task, "in_progress", force=True)
+        task.refresh_from_db()
+        self.assertFalse(changed)
+        self.assertEqual(task.status, Task.Status.TODO)
+
+    def test_explicit_bitrix_start_may_resume_app_pause(self):
+        agency = make_portal(role=Portal.Role.AGENCY)
+        make_link(agency, self.portal)
+        make_user(agency, bitrix_id="99")
+        task = make_task(
+            self.project,
+            status=Task.Status.TODO,
+            sync_status=Task.SyncStatus.SYNCED,
+            created_by=self.user,
+        )
+        TimeEntry.objects.create(
+            task=task,
+            author=self.user,
+            started_at=timezone.now() - timedelta(seconds=30),
+            ended_at=timezone.now(),
+            duration_seconds=30,
+        )
+        changed = apply_inbound_status(
+            task, "in_progress", force=True, allow_resume_from_pause=True
+        )
+        task.refresh_from_db()
+        self.assertTrue(changed)
+        self.assertEqual(task.status, Task.Status.IN_PROGRESS)

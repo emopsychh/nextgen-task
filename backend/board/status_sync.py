@@ -462,13 +462,23 @@ def _start_local_timer_from_inbound(task, *, started_at=None) -> None:
 
 
 def apply_inbound_status(
-    task, new_status: str, *, stop_timers: bool = True, force: bool = False
+    task,
+    new_status: str,
+    *,
+    stop_timers: bool = True,
+    force: bool = False,
+    allow_resume_from_pause: bool = False,
 ) -> bool:
     """
     Apply status that originated in Bitrix. Does not push back to Bitrix.
 
     Locked model: callers must only pass in_progress or done — never todo/pause
     (pause from Bitrix is ignored). Done is terminal: inbound cannot reopen it.
+
+    App pause (local todo while Bitrix stays in_progress) must not be undone by
+    a periodic pull that still sees Bitrix «in progress». Only an explicit Bitrix
+    start (webhook transition / system «начал») may resume via
+    allow_resume_from_pause=True.
     """
     from django.utils import timezone
 
@@ -489,6 +499,17 @@ def apply_inbound_status(
         task.status == Task.Status.DONE
         and new_status != Task.Status.DONE
         and task.sync_status != Task.SyncStatus.PENDING
+    ):
+        return False
+    # Protect local app pause from Bitrix still being «in progress».
+    # «todo» also means never-started — only block resume when the app already
+    # tracked time (user had started then paused). First Bitrix start on a
+    # virgin task must still apply.
+    if (
+        task.status == Task.Status.TODO
+        and new_status == Task.Status.IN_PROGRESS
+        and not allow_resume_from_pause
+        and task.time_entries.exists()
     ):
         return False
     if task.status == new_status:
@@ -531,11 +552,12 @@ def apply_inbound_status(
         _start_local_timer_from_inbound(task)
 
     logger.info(
-        "inbound status task=%s %s→%s (force=%s)",
+        "inbound status task=%s %s→%s (force=%s resume_pause=%s)",
         task.id,
         old,
         new_status,
         force,
+        allow_resume_from_pause,
     )
     return True
 
@@ -1000,13 +1022,29 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         ):
             local = after_status
         logger.info(
-            "OnTaskUpdate id=%s mapped=%s (start+done only; pause ignored)",
+            "OnTaskUpdate id=%s mapped=%s before=%s after=%s",
             bitrix_task_id,
             local,
+            before_status,
+            after_status,
         )
         if local in ("in_progress", "done") and task.status != local:
             prev = task.status
-            status_changed = apply_inbound_status(task, local, force=True)
+            # Resume a local app-pause only on an explicit Bitrix start transition
+            # (FIELDS_BEFORE → FIELDS_AFTER). A plain get_task snapshot of
+            # «still in progress» must not undo the pause.
+            explicit_start = (
+                local == "in_progress"
+                and after_status == "in_progress"
+                and before_status is not None
+                and before_status != "in_progress"
+            )
+            status_changed = apply_inbound_status(
+                task,
+                local,
+                force=True,
+                allow_resume_from_pause=explicit_start or local == "done",
+            )
             if status_changed and local == "done" and prev != "done":
                 try:
                     from board.completion import finalize_task_completion

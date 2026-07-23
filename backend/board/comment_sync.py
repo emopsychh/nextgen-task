@@ -114,7 +114,13 @@ def apply_status_from_bitrix_system_comment(task, text: str) -> bool:
         return False
     from board.status_sync import apply_inbound_status
 
-    changed = apply_inbound_status(task, status, force=True)
+    changed = apply_inbound_status(
+        task,
+        status,
+        force=True,
+        # «Начал» in Bitrix is an explicit start — may undo a local app pause.
+        allow_resume_from_pause=(status == "in_progress"),
+    )
     if changed and status == "done":
         try:
             from board.completion import finalize_task_completion
