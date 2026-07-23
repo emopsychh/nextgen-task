@@ -184,7 +184,9 @@ def upload_and_attach(*, client: BitrixClient, bitrix_task_id: str, attachment) 
     and post into the task chat stream.
     Returns Bitrix Drive file id when known.
     """
-    name = attachment.original_name or attachment.file.name.split("/")[-1] or "file"
+    from board.naming import display_attachment_name
+
+    name = display_attachment_name(attachment)
     with attachment.file.open("rb") as fh:
         content = fh.read()
     if not content:
@@ -302,12 +304,14 @@ def pull_attachments_from_bitrix(task) -> int:
                 continue
             if not content:
                 continue
-            att = Attachment(task=task, original_name=name)
+            from board.naming import client_filename
+
+            att = Attachment(task=task, original_name=client_filename(name))
             if is_client:
                 att.bitrix_file_id = fid
             else:
                 att.agency_bitrix_file_id = fid
-            att.file.save(name, ContentFile(content), save=False)
+            att.file.save(client_filename(name), ContentFile(content), save=False)
             att.save()
             created += 1
     return created

@@ -31,9 +31,11 @@ function FileChip({
   return (
     <a
       href={url}
+      download={name}
       target="_blank"
       rel="noreferrer"
       className={`msg-file${compact ? " compact" : ""}`}
+      title={name}
     >
       <span className="msg-file-icon">
         <FileGlyph />
@@ -50,10 +52,12 @@ function AttachmentView({
   attachment,
   compact = false,
   time,
+  cover = false,
 }: {
   attachment: Attachment;
   compact?: boolean;
   time?: string;
+  cover?: boolean;
 }) {
   const url = attachment.url || "#";
   const name = attachment.original_name || "Файл";
@@ -64,9 +68,10 @@ function AttachmentView({
     return (
       <a
         href={url}
+        download={name}
         target="_blank"
         rel="noreferrer"
-        className={`msg-image${compact ? " compact" : ""}`}
+        className={`msg-image${compact ? " compact" : ""}${cover ? " is-cover" : ""}`}
         title={name}
       >
         <img
@@ -81,6 +86,49 @@ function AttachmentView({
   }
 
   return <FileChip url={url} name={name} compact={compact} time={time} />;
+}
+
+function AttachmentGroup({
+  attachments,
+  compact = false,
+}: {
+  attachments: Attachment[];
+  compact?: boolean;
+}) {
+  const images: Attachment[] = [];
+  const files: Attachment[] = [];
+  for (const a of attachments) {
+    if (isImageAttachment(a.original_name, a.url)) images.push(a);
+    else files.push(a);
+  }
+
+  return (
+    <div className="msg-attachments">
+      {images.length > 0 && (
+        <div
+          className={`msg-image-grid${images.length === 1 ? " is-single" : ""}${
+            images.length === 2 ? " is-duo" : ""
+          }${images.length >= 3 ? " is-many" : ""}`}
+        >
+          {images.map((a) => (
+            <AttachmentView
+              key={a.id}
+              attachment={a}
+              compact={compact}
+              cover={images.length > 1}
+            />
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (
+        <div className="msg-files">
+          {files.map((a) => (
+            <AttachmentView key={a.id} attachment={a} compact={compact} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
@@ -133,11 +181,7 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
               </div>
               {c.text ? <p className="comment-text">{c.text}</p> : null}
               {(c.attachments || []).length > 0 && (
-                <div className="msg-files">
-                  {(c.attachments || []).map((a) => (
-                    <AttachmentView key={a.id} attachment={a} compact />
-                  ))}
-                </div>
+                <AttachmentGroup attachments={c.attachments || []} compact />
               )}
               <time className="msg-time">{formatClock(c.created_at)}</time>
             </div>

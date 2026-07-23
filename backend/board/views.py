@@ -14,6 +14,7 @@ from portals.permissions import IsPortalAuthenticated, can_access_client_portal
 
 from .events import append_task_change_events
 from .models import Attachment, Comment, Project, Task, TimeEntry
+from .naming import display_attachment_name
 from .serializers import (
     AttachmentSerializer,
     CommentSerializer,
@@ -164,7 +165,7 @@ class ActivityFeedView(APIView):
         ):
             if not attachment.task_id:
                 continue
-            file_name = attachment.original_name or "Файл"
+            file_name = display_attachment_name(attachment) or "Файл"
             events.append(
                 {
                     "id": f"file-{attachment.id}",
@@ -507,13 +508,19 @@ class AttachmentViewSet(viewsets.ModelViewSet):
         if not can_access_client_portal(self.request.user, task.project.portal):
             raise PermissionDenied("No access")
         uploaded = self.request.FILES.get("file")
-        name = uploaded.name if uploaded else ""
+        from board.naming import client_filename
+
+        name = client_filename(getattr(uploaded, "name", None) if uploaded else None)
         serializer.save(
             task=task,
             uploaded_by=self.request.user.bitrix_user,
             original_name=name,
         )
         attachment = serializer.instance
+        # Belt-and-suspenders: never leave original_name as a storage basename
+        if name and attachment.original_name != name:
+            attachment.original_name = name
+            attachment.save(update_fields=["original_name"])
         publish_task_event(task, kind="attachment")
         from board.tasks import sync_attachment_to_bitrix
 

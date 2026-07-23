@@ -1,6 +1,17 @@
+from pathlib import Path
+from uuid import uuid4
+
 from django.db import models
+from django.utils import timezone
 
 from portals.models import BitrixUser, Portal
+
+
+def attachment_upload_to(instance, filename: str) -> str:
+    """Store on disk under a unique name; keep the real name in original_name."""
+    ext = Path(filename or "").suffix.lower()[:20]
+    stamp = timezone.now().strftime("%Y/%m")
+    return f"attachments/{stamp}/{uuid4().hex}{ext}"
 
 
 class Project(models.Model):
@@ -97,7 +108,7 @@ class Attachment(models.Model):
     comment = models.ForeignKey(
         Comment, on_delete=models.CASCADE, related_name="attachments", null=True, blank=True
     )
-    file = models.FileField(upload_to="attachments/%Y/%m/")
+    file = models.FileField(upload_to=attachment_upload_to)
     original_name = models.CharField(max_length=255, blank=True)
     uploaded_by = models.ForeignKey(
         BitrixUser,

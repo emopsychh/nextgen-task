@@ -16,7 +16,23 @@ import { useFlashToast } from "../../hooks/useFlashToast";
 import { useTaskLiveSync } from "../../hooks/useTaskLiveSync";
 import { dueMeta } from "../../lib/dates";
 import { formatDayLabel, formatDueFull } from "../../lib/format";
+import { isImageFile } from "../../lib/files";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
+
+/** Images first, then documents; drop exact duplicates (same name+size). */
+function normalizePendingFiles(files: File[]): File[] {
+  const seen = new Set<string>();
+  const images: File[] = [];
+  const docs: File[] = [];
+  for (const f of files) {
+    const key = `${f.name}::${f.size}::${f.lastModified}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (isImageFile(f)) images.push(f);
+    else docs.push(f);
+  }
+  return [...images, ...docs];
+}
 
 type TaskPatch = Partial<{
   title: string;
@@ -207,7 +223,7 @@ export function TaskDetail() {
       added: files.map((f) => ({ name: f.name, size: f.size, type: f.type })),
     });
     setPendingFiles((prev) => {
-      const next = [...prev, ...files];
+      const next = normalizePendingFiles([...prev, ...files]);
       console.info("[nextgen-attach] pendingFiles now", next.length);
       return next;
     });
@@ -217,7 +233,7 @@ export function TaskDetail() {
   function onAddFiles(files: File[]) {
     if (!files.length) return;
     console.info("[nextgen-attach] onAddFiles", files.map((f) => f.name));
-    setPendingFiles((prev) => [...prev, ...files]);
+    setPendingFiles((prev) => normalizePendingFiles([...prev, ...files]));
   }
 
   function removePending(index: number) {

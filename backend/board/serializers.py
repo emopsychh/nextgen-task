@@ -5,6 +5,7 @@ from portals.models import Portal
 from portals.permissions import can_access_client_portal
 
 from .models import Attachment, Comment, Project, Task, TimeEntry
+from .naming import display_attachment_name
 
 
 def _clean_task_title(instance: Task) -> str:
@@ -31,6 +32,7 @@ def _clean_task_title(instance: Task) -> str:
 
 class AttachmentSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
+    original_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Attachment
@@ -54,6 +56,8 @@ class AttachmentSerializer(serializers.ModelSerializer):
         path = obj.file.url
         return path if path.startswith("/") else f"/{path}"
 
+    def get_original_name(self, obj):
+        return display_attachment_name(obj)
 
 class CommentSerializer(serializers.ModelSerializer):
     author_display = serializers.SerializerMethodField()
