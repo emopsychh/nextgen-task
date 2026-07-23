@@ -779,12 +779,25 @@ def resolve_inbound_status_from_sources(task) -> tuple[str | None, dict | None, 
             progs,
             key=lambda row: (_bitrix_status_changed_date_only(row[3]), row[0], row[1]),
         )
-        chosen = best_todo
+        todo_ts = _bitrix_status_changed_date_only(best_todo[3])
+        prog_ts = _bitrix_status_changed_date_only(best_prog[3])
+        # Whichever copy changed its STATUS most recently wins. This lets a fresh
+        # "start" on one portal beat a stale "todo" on the other (otherwise the
+        # app would push a pause right back and ping-pong the task). Only when the
+        # two status changes are effectively simultaneous do we keep the old
+        # "pause wins" default, so a real pause is not undone by a stale echo.
+        if prog_ts > todo_ts:
+            chosen = best_prog
+            reason = "start newer"
+        else:
+            chosen = best_todo
+            reason = "pause wins"
         logger.info(
-            "pull split-brain task=%s todo_status_ts=%s prog_status_ts=%s → pause wins (%s)",
+            "pull split-brain task=%s todo_status_ts=%s prog_status_ts=%s → %s (%s)",
             task.id,
-            _bitrix_status_changed_date_only(best_todo[3]),
-            _bitrix_status_changed_date_only(best_prog[3]),
+            todo_ts,
+            prog_ts,
+            reason,
             chosen[2],
         )
         _ts, _rank, status, data, portal, bitrix_id = chosen
