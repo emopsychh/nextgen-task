@@ -15,6 +15,7 @@ import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDueFull } from "../../lib/format";
+import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
 import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
 import {
   reportDetailPath,
@@ -23,10 +24,30 @@ import {
 } from "../shared/reportHelpers";
 
 const RECENT_DONE_MS = 7 * 24 * 60 * 60 * 1000;
+const HOT_DUE_DAYS = 2;
 
 function taskDueLabel(task: Task): string | null {
   if (!task.due_date) return null;
   return formatDueFull(task.due_date);
+}
+
+/** Due today / tomorrow / within N calendar days (not yet overdue). */
+function isDueSoon(dueDate: string | null | undefined, status: Task["status"]): boolean {
+  if (!dueDate || status === "done") return false;
+  if (isTaskOverdue(dueDate, status)) return false;
+  const target = parseDue(dueDate);
+  if (!isValidDate(target)) return false;
+  const today = startOfDay(new Date());
+  const targetDay = startOfDay(target);
+  const days = Math.round((targetDay.getTime() - today.getTime()) / 86400000);
+  return days >= 0 && days <= HOT_DUE_DAYS;
+}
+
+function hotPriority(task: Task): number {
+  if (isTaskOverdue(task.due_date, task.status)) return 0;
+  if (isDueSoon(task.due_date, task.status)) return 1;
+  if (task.is_important) return 2;
+  return 3;
 }
 
 export function ClientProjects() {
@@ -58,12 +79,14 @@ export function ClientProjects() {
     const out: Task[] = [];
     for (const t of openTasks) {
       const overdue = isTaskOverdue(t.due_date, t.status);
+      const soon = isDueSoon(t.due_date, t.status);
       const important = Boolean(t.is_important);
-      if (!overdue && !important) continue;
+      if (!overdue && !soon && !important) continue;
       if (seen.has(t.id)) continue;
       seen.add(t.id);
       out.push(t);
     }
+    out.sort((a, b) => hotPriority(a) - hotPriority(b));
     return out.slice(0, 12);
   }, [openTasks]);
 
@@ -275,65 +298,67 @@ export function ClientProjects() {
 
       {!isAgency ? (
         <div className="workspace-focus" data-tour="tour-waiting-for-you">
-          <section className="workspace-focus-block">
-            <div className="linked-head">
-              <h2 className="section-title">Отчёты на согласовании</h2>
-              <p className="muted">Нужно согласовать или оспорить</p>
-            </div>
-            {pendingReports.length === 0 ? (
-              <div className="empty-linked workspace-empty">
-                <p className="muted">Сейчас нет отчётов, ожидающих вашего ответа.</p>
+          <div className="workspace-split-focus">
+            <section className="workspace-focus-block">
+              <div className="linked-head">
+                <h2 className="section-title">Отчёты на согласовании</h2>
+                <p className="muted">Нужно согласовать или оспорить</p>
               </div>
-            ) : (
-              <div className="workspace-attention-list">
-                {pendingReports.map((r) => (
-                  <Link
-                    key={`report-${r.id}`}
-                    to={reportDetailPath(portalId, false, r.id)}
-                    className="workspace-attention-card is-report"
-                  >
-                    <div className="workspace-attention-top">
-                      <span className={`report-status-pill status-${r.status}`}>
-                        {STATUS_LABEL_RU[r.status]}
-                      </span>
-                      <span className="muted">Отчёт</span>
-                    </div>
-                    <strong>{reportTitle(r)}</strong>
-                    <span className="muted">Открыть и ответить</span>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </section>
+              {pendingReports.length === 0 ? (
+                <div className="empty-linked workspace-empty">
+                  <p className="muted">Сейчас нет отчётов, ожидающих вашего ответа.</p>
+                </div>
+              ) : (
+                <div className="workspace-attention-list">
+                  {pendingReports.map((r) => (
+                    <Link
+                      key={`report-${r.id}`}
+                      to={reportDetailPath(portalId, false, r.id)}
+                      className="workspace-attention-card is-report"
+                    >
+                      <div className="workspace-attention-top">
+                        <span className={`report-status-pill status-${r.status}`}>
+                          {STATUS_LABEL_RU[r.status]}
+                        </span>
+                        <span className="muted">Отчёт</span>
+                      </div>
+                      <strong>{reportTitle(r)}</strong>
+                      <span className="muted">Открыть и ответить</span>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </section>
 
-          <section className="workspace-focus-block">
-            <div className="linked-head">
-              <h2 className="section-title">Недавно завершено</h2>
-              <p className="muted">Можно посмотреть итог в задаче</p>
-            </div>
-            {recentDone.length === 0 ? (
-              <div className="empty-linked workspace-empty">
-                <p className="muted">За последние дни завершённых задач нет.</p>
+            <section className="workspace-focus-block">
+              <div className="linked-head">
+                <h2 className="section-title">Недавно завершено</h2>
+                <p className="muted">Можно посмотреть итог в задаче</p>
               </div>
-            ) : (
-              <div className="workspace-attention-list">
-                {recentDone.map((t) => (
-                  <Link
-                    key={`done-${t.id}`}
-                    to={`/tasks/${t.id}`}
-                    className="workspace-attention-card is-done"
-                  >
-                    <div className="workspace-attention-top">
-                      <span className="workspace-chip tone-done">Завершена</span>
-                      <span className="muted">{t.project_name}</span>
-                    </div>
-                    <strong>{t.title}</strong>
-                    <span className="muted">Открыть задачу</span>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </section>
+              {recentDone.length === 0 ? (
+                <div className="empty-linked workspace-empty">
+                  <p className="muted">За последние дни завершённых задач нет.</p>
+                </div>
+              ) : (
+                <div className="workspace-attention-list">
+                  {recentDone.map((t) => (
+                    <Link
+                      key={`done-${t.id}`}
+                      to={`/tasks/${t.id}`}
+                      className="workspace-attention-card is-done"
+                    >
+                      <div className="workspace-attention-top">
+                        <span className="workspace-chip tone-done">Завершена</span>
+                        <span className="muted">{t.project_name}</span>
+                      </div>
+                      <strong>{t.title}</strong>
+                      <span className="muted">Открыть задачу</span>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
         </div>
       ) : (
         <div className="workspace-focus" data-tour="tour-agency-focus">
@@ -409,10 +434,20 @@ export function ClientProjects() {
                   )}
                 </section>
 
-                <section className="workspace-focus-block">
-                  <div className="linked-head">
-                    <h2 className="section-title">Горят</h2>
-                    <p className="muted">Просроченные и важные</p>
+                <section
+                  className={`workspace-focus-block workspace-hot-panel${
+                    hotTasks.length > 0 ? " is-lit" : ""
+                  }`}
+                >
+                  <div className="workspace-hot-head">
+                    <div className="workspace-hot-title-row">
+                      <span className="workspace-hot-flame" aria-hidden>
+                        <span className="workspace-hot-flame-core" />
+                        <span className="workspace-hot-flame-glow" />
+                      </span>
+                      <h2 className="section-title workspace-hot-title">Горят</h2>
+                    </div>
+                    <p className="muted">Просроченные, срок 1–2 дня и важные</p>
                   </div>
                   {hotTasks.length === 0 ? (
                     <div className="empty-linked workspace-empty">
@@ -422,16 +457,22 @@ export function ClientProjects() {
                     <div className="workspace-attention-list">
                       {hotTasks.map((t) => {
                         const overdue = isTaskOverdue(t.due_date, t.status);
+                        const soon = isDueSoon(t.due_date, t.status);
                         const due = taskDueLabel(t);
                         return (
                           <Link
                             key={t.id}
                             to={`/tasks/${t.id}`}
-                            className={`workspace-attention-card${overdue ? " is-overdue" : ""}`}
+                            className={`workspace-attention-card${
+                              overdue ? " is-overdue" : soon ? " is-soon" : ""
+                            }`}
                           >
                             <div className="workspace-attention-top">
                               {overdue ? (
                                 <span className="workspace-chip tone-overdue">Просрочена</span>
+                              ) : null}
+                              {soon ? (
+                                <span className="workspace-chip tone-soon">Скоро срок</span>
                               ) : null}
                               {t.is_important ? (
                                 <span className="workspace-chip tone-important">Важная</span>

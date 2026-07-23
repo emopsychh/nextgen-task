@@ -109,7 +109,7 @@ export const CLIENT_STEPS: TourStep[] = [
     id: "waiting",
     target: "tour-waiting-for-you",
     title: "Ждёт вас",
-    body: "Сверху отчёты на согласование, ниже — недавно завершённые задачи.",
+    body: "Сверху пакет часов. Ниже два столбца: отчёты на согласование и недавно завершённые задачи.",
     placement: "top",
     route: "home",
   },
