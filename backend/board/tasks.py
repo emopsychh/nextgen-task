@@ -166,60 +166,110 @@ def _stop_bitrix_timer_quiet(client: BitrixClient, bitrix_task_id: str) -> None:
 
 
 def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local: str) -> None:
-    """Bring Bitrix task to the local status using official action methods."""
+    """Push local work-state to Bitrix under the "app is source of truth" model.
+
+    Only two transitions are ever pushed:
+      * in_progress → mark the Bitrix task "in progress" once (start_once), so a
+        manager sees work has begun. Pausing does NOT touch Bitrix.
+      * done → post elapsed time (handled by the caller) and complete the task.
+
+    Pause (todo) is app-only and is intentionally a no-op here: we never send
+    pause/start toggles to Bitrix, which is what used to cause the status
+    ping-pong between the app and the two Bitrix copies.
+    """
     target = _normalize_local(target_local)
+
+    # App-only pause: never push a pause/todo to Bitrix.
+    if target == "todo":
+        return
+
     task_data = client.get_task(bitrix_task_id)
     current = bitrix_status_code(task_data)
     if current is None:
         current = BITRIX_STATUS_PENDING
 
-    if target == "done" and current in (
-        BITRIX_STATUS_COMPLETED,
-        BITRIX_STATUS_SUPPOSEDLY_COMPLETED,
-    ):
-        return
-    if target == "in_progress" and current == BITRIX_STATUS_IN_PROGRESS:
-        return
-    if target == "todo" and current in (BITRIX_STATUS_PENDING, BITRIX_STATUS_DEFERRED):
-        return
-
-    # Leave completed states before moving elsewhere.
-    if current in (
-        BITRIX_STATUS_COMPLETED,
-        BITRIX_STATUS_SUPPOSEDLY_COMPLETED,
-    ) and target != "done":
-        client.renew_task(bitrix_task_id)
-        refreshed = bitrix_status_code(client.get_task(bitrix_task_id))
-        current = refreshed if refreshed is not None else BITRIX_STATUS_PENDING
-
-    if target == "todo":
-        # A running Bitrix «Учёт времени» timer keeps the task "in progress" and
-        # would immediately revert tasks.task.pause. Stop it first so the pause
-        # actually sticks (otherwise the task auto-restarts on the next pull).
+    if target == "done":
+        if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
+            return
+        # Stop any legacy live «Учёт времени» timer so complete() is not reverted.
         _stop_bitrix_timer_quiet(client, bitrix_task_id)
-        if current == BITRIX_STATUS_IN_PROGRESS:
-            client.pause_task(bitrix_task_id)
-        return
-
-    if target == "in_progress":
         if current in (BITRIX_STATUS_PENDING, BITRIX_STATUS_DEFERRED):
-            client.start_task(bitrix_task_id)
-        elif current != BITRIX_STATUS_IN_PROGRESS:
-            # e.g. after renew already pending — start; otherwise no-op
             try:
                 client.start_task(bitrix_task_id)
             except BitrixAPIError:
                 pass
+        client.complete_task(bitrix_task_id)
         return
 
-    # target == done — stop the timer first, same reason as pause.
-    _stop_bitrix_timer_quiet(client, bitrix_task_id)
-    if current in (BITRIX_STATUS_PENDING, BITRIX_STATUS_DEFERRED):
+    # target == in_progress (start_once)
+    if current == BITRIX_STATUS_IN_PROGRESS:
+        return
+    if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
+        # Task was completed in Bitrix but restarted in the app — reopen it.
+        client.renew_task(bitrix_task_id)
+        refreshed = bitrix_status_code(client.get_task(bitrix_task_id))
+        current = refreshed if refreshed is not None else BITRIX_STATUS_PENDING
+    try:
+        client.start_task(bitrix_task_id)
+    except BitrixAPIError:
+        pass
+
+
+def _extract_elapsed_id(result) -> str:
+    if isinstance(result, bool):
+        return ""
+    if isinstance(result, (int, float)):
+        return str(int(result))
+    if isinstance(result, str) and result.isdigit():
+        return result
+    if isinstance(result, dict):
+        for key in ("id", "ID", "result"):
+            val = result.get(key)
+            if isinstance(val, (int, float)):
+                return str(int(val))
+            if isinstance(val, str) and val.isdigit():
+                return val
+    return ""
+
+
+def _post_time_entries_elapsed(client: BitrixClient, bitrix_task_id: str, task, portal) -> None:
+    """Post local time entries into the Bitrix task «Учёт времени».
+
+    Idempotent: each TimeEntry stores its Bitrix elapsed id, so re-syncing a
+    completed task never double-counts time. Called on completion only.
+    """
+    from django.db.models import Q
+
+    from board.models import TimeEntry
+
+    entries = (
+        task.time_entries.filter(ended_at__isnull=False)
+        .filter(Q(bitrix_elapsed_id="") | Q(bitrix_elapsed_id__isnull=True))
+        .order_by("id")
+    )
+    for entry in entries:
+        seconds = int(entry.duration_seconds or 0)
+        if seconds <= 0 and entry.ended_at and entry.started_at:
+            seconds = max(0, int((entry.ended_at - entry.started_at).total_seconds()))
+        if seconds <= 0:
+            continue
+        user_id = ""
+        if entry.author and entry.author.portal_id == portal.id and entry.author.bitrix_id:
+            user_id = str(entry.author.bitrix_id)
         try:
-            client.start_task(bitrix_task_id)
-        except BitrixAPIError:
-            pass
-    client.complete_task(bitrix_task_id)
+            result = client.add_elapsed_item(
+                bitrix_task_id,
+                seconds,
+                comment=f"Nextgen: {task.title}",
+                user_id=user_id or None,
+            )
+        except BitrixAPIError as exc:
+            logger.info("elapsed add failed task=%s entry=%s: %s", task.id, entry.id, exc)
+            continue
+        eid = _extract_elapsed_id(result)
+        if eid:
+            entry.bitrix_elapsed_id = eid
+            entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
 
 
 def _ensure_project_agency_parent(project) -> tuple[str, str]:
@@ -263,6 +313,7 @@ def _sync_one_portal(
     group_id: str | None = None,
     parent_id: str | None = None,
     crm_bindings: list[str] | None = None,
+    post_elapsed_on_done: bool = False,
 ) -> str:
     """Create/update Bitrix task on a portal; return bitrix task id."""
     if not portal.access_token:
@@ -303,8 +354,10 @@ def _sync_one_portal(
         )
         client.update_task(existing_id, fields)
         # Only push status on explicit local→Bitrix sync (PENDING).
-        # Title/deadline cleanup must not call start() and undo a Bitrix pause.
+        # Title/deadline cleanup must not re-drive status.
         if task.sync_status == task.SyncStatus.PENDING:
+            if task.status == "done" and post_elapsed_on_done:
+                _post_time_entries_elapsed(client, existing_id, task, portal)
             try:
                 apply_bitrix_status(client, existing_id, task.status)
             except BitrixAPIError as exc:
@@ -323,6 +376,8 @@ def _sync_one_portal(
     result = client.create_task(fields)
     bitrix_id = _extract_bitrix_id(result)
     if bitrix_id and task.status != "todo":
+        if task.status == "done" and post_elapsed_on_done:
+            _post_time_entries_elapsed(client, bitrix_id, task, portal)
         try:
             apply_bitrix_status(client, bitrix_id, task.status)
         except BitrixAPIError as exc:
@@ -447,6 +502,7 @@ def _sync_task_locked(task) -> dict:
                 group_id=group_id,
                 parent_id=parent_id,
                 crm_bindings=crm_bindings or None,
+                post_elapsed_on_done=True,
             )
             if agency_id and agency_id != task.agency_bitrix_task_id:
                 task.agency_bitrix_task_id = agency_id

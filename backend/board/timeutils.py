@@ -51,8 +51,10 @@ def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: boo
     entry.ended_at = end
     entry.duration_seconds = duration
     entry.save(update_fields=["ended_at", "duration_seconds", "updated_at"])
-    if sync_bitrix:
-        enqueue_timer_bitrix_sync(entry.id, "stop")
+    # No live Bitrix timer sync here: elapsed time is posted to Bitrix «Учёт
+    # времени» only when the task is completed (board.tasks._post_time_entries_elapsed).
+    # `sync_bitrix` is kept for call-site compatibility but no longer pushes a timer.
+    _ = sync_bitrix
     if bill and duration > 0 and getattr(entry, "billed_to_deal_at", None) is None:
         enqueue_time_entry_billing(entry.id)
     return duration

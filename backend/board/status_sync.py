@@ -855,37 +855,13 @@ def pull_task_status_from_bitrix(task) -> bool:
         return False
 
     changed = False
-    status_applied = False
-    if local:
-        prev_status = task.status
-        status_applied = apply_inbound_status(task, local, force=True)
-        changed = status_applied or changed
-        # Keep agency/client Bitrix copies aligned after inbound pause/start.
-        if status_applied and local in ("todo", "in_progress", "done") and local != prev_status:
-            try:
-                mirror_work_status_to_other_bitrix_copies(
-                    task, local, source_portal=portal
-                )
-            except Exception:
-                logger.exception("mirror work status failed task=%s", task.id)
-
-    try:
-        running, timer_payload, spent = fetch_bitrix_timer_state(
-            portal, bitrix_id, data
-        )
-        task.refresh_from_db()
-        changed = (
-            apply_inbound_timer_state(
-                task,
-                running=running,
-                timer_payload=timer_payload,
-                bitrix_total=spent,
-                bitrix_status=local,
-            )
-            or changed
-        )
-    except Exception:
-        logger.exception("inbound timer pull failed task=%s", task.id)
+    # App is the single source of truth for start/pause. From Bitrix we accept
+    # ONLY a terminal completion (cannot oscillate); start/pause toggles are
+    # ignored here to remove the status ping-pong between the app and both
+    # Bitrix copies. Time is posted to Bitrix «Учёт времени» only on completion,
+    # so there is no live-timer reconciliation either.
+    if local == "done" and task.status != "done":
+        changed = apply_inbound_status(task, "done", force=True) or changed
 
     due = parse_bitrix_deadline(data)
     task.refresh_from_db()
@@ -949,88 +925,20 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         status_changed = False
         due_changed = False
         meta_changed = False
-        timer_changed = False
-        # Prefer FIELDS_AFTER status: get_task often lags right after pause/start.
+        # App is the source of truth for start/pause. From Bitrix we accept ONLY
+        # a terminal completion (which cannot oscillate); start/pause toggles in
+        # Bitrix are intentionally ignored to prevent status ping-pong. No mirror
+        # to the other copy and no live-timer reconciliation.
         after_status = local_status_from_bitrix_task(after) if after else None
-        before_status = local_status_from_bitrix_task(before) if before else None
         data_status = local_status_from_bitrix_task(data) if data else None
         local = after_status if after_status is not None else data_status
-        # Explicit transition in the event beats a stale get_task snapshot
-        explicit_transition = (
-            after_status is not None
-            and before_status is not None
-            and after_status != before_status
+        logger.info(
+            "OnTaskUpdate id=%s mapped=%s (accept-done-only)",
+            bitrix_task_id,
+            local,
         )
-        if explicit_transition:
-            local = after_status
-        # Activity chat/comments beat STATUS when user paused work but label lags
-        try:
-            from board.comment_sync import (
-                latest_bitrix_work_activity,
-                resolve_status_with_timer_activity,
-            )
-
-            activity = latest_bitrix_work_activity(
-                portal, str(bitrix_task_id), data or merged
-            )
-            local = resolve_status_with_timer_activity(local, activity)
-            logger.info(
-                "OnTaskUpdate id=%s mapped=%s activity=%s action=%s",
-                bitrix_task_id,
-                local,
-                activity,
-                (data or {}).get("action") or (data or {}).get("ACTION") or {},
-            )
-        except Exception:
-            logger.exception(
-                "timer activity comment scan failed id=%s", bitrix_task_id
-            )
-        if local:
-            # force=True: Bitrix start/pause/complete must update the app even during PENDING sync
-            status_changed = apply_inbound_status(task, local, force=True)
-
-        # Agency vs client copies can diverge (prod: agency still 3, client already 2).
-        # Do not let pause-wins reconcile undo an explicit start/pause from this event —
-        # mirror the event instead so the other copy catches up.
-        try:
-            if not explicit_transition:
-                recon, _, recon_portal, _ = resolve_inbound_status_from_sources(task)
-                if recon and recon != local:
-                    if apply_inbound_status(task, recon, force=True):
-                        status_changed = True
-                        local = recon
-                        if recon_portal is not None:
-                            portal = recon_portal
-            if status_changed and local in ("todo", "in_progress", "done"):
-                try:
-                    mirror_work_status_to_other_bitrix_copies(
-                        task, local, source_portal=portal
-                    )
-                except Exception:
-                    logger.exception(
-                        "OnTaskUpdate mirror status failed id=%s", bitrix_task_id
-                    )
-        except Exception:
-            logger.exception(
-                "OnTaskUpdate multi-source reconcile failed id=%s", bitrix_task_id
-            )
-
-        try:
-            running, timer_payload, spent = fetch_bitrix_timer_state(
-                portal, str(bitrix_task_id), data or merged
-            )
-            task.refresh_from_db()
-            timer_changed = apply_inbound_timer_state(
-                task,
-                running=running,
-                timer_payload=timer_payload,
-                bitrix_total=spent,
-                bitrix_status=local,
-            )
-        except Exception:
-            logger.exception(
-                "inbound timer OnTaskUpdate failed id=%s", bitrix_task_id
-            )
+        if local == "done" and task.status != "done":
+            status_changed = apply_inbound_status(task, "done", force=True)
 
         # Title / description from Bitrix (strip legacy portal prefixes)
         from board.titles import strip_portal_title_prefix
@@ -1090,10 +998,8 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
                 status_changed
                 or due_changed
                 or meta_changed
-                or timer_changed
                 or importance_changed
             ),
-            "timer_changed": timer_changed,
         }
 
     # Unknown task id — may be a new parent task (app Project) or subtask on agency

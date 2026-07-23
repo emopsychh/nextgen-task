@@ -31,7 +31,7 @@ from .serializers import (
     serialize_thread_items,
 )
 from .tasks import sync_comment_to_bitrix, sync_project_to_bitrix, sync_task_to_bitrix
-from .timeutils import enqueue_timer_bitrix_sync, stop_time_entry
+from .timeutils import stop_time_entry
 from .realtime import publish_portal_event, publish_task_event
 
 logger = logging.getLogger(__name__)
@@ -423,9 +423,9 @@ class TaskViewSet(viewsets.ModelViewSet):
                         author=author,
                         started_at=timezone.now(),
                     )
-                    entry = task.time_entries.filter(ended_at__isnull=True).order_by("-started_at").first()
-                    if entry:
-                        enqueue_timer_bitrix_sync(entry.id, "start")
+                    # Time is tracked locally and posted to Bitrix «Учёт времени»
+                    # only on completion — no live Bitrix timer (avoids status
+                    # ping-pong). Status in_progress is pushed once by the sync.
 
         append_task_change_events(
             task=task,
@@ -465,9 +465,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             author=author,
             started_at=timezone.now(),
         )
-        entry = task.time_entries.filter(ended_at__isnull=True).order_by("-started_at").first()
-        if entry:
-            enqueue_timer_bitrix_sync(entry.id, "start")
+        # No live Bitrix timer — elapsed time is posted on completion.
         task.refresh_from_db()
         return Response(TaskSerializer(task, context={"request": request}).data)
 

@@ -36,22 +36,23 @@ class OutboundStatusPushTests(TestCase):
         self.project = make_project(self.portal)
 
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
-    def test_pause_calls_bitrix_pause(self):
-        # App paused an in-progress task → Bitrix should be paused.
+    def test_pause_is_noop_in_bitrix(self):
+        # App-is-source-of-truth model: pausing in the app must NOT touch Bitrix
+        # status (no pause_task, no timer calls) — this is what killed the
+        # status ping-pong. The task still syncs cleanly (fields/deadline).
         task = make_task(
             self.project,
             created_by=self.user,
-            status=Task.Status.TODO,  # local already paused
+            status=Task.Status.TODO,  # local paused
             sync_status=Task.SyncStatus.PENDING,
             bitrix_task_id="106",
         )
-        client = _mock_client(bitrix_status="3")  # Bitrix still in progress
+        client = _mock_client(bitrix_status="3")
         with patch.object(board_tasks, "BitrixClient", return_value=client):
             res = board_tasks.sync_task_to_bitrix(task.id)
         self.assertTrue(res["ok"])
-        client.pause_task.assert_called_once()
-        # Timer must be stopped too, or the pause won't stick in Bitrix.
-        client.pause_task_timer.assert_called()
+        client.pause_task.assert_not_called()
+        client.pause_task_timer.assert_not_called()
         task.refresh_from_db()
         self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
 
@@ -70,6 +71,42 @@ class OutboundStatusPushTests(TestCase):
         self.assertTrue(res["ok"])
         client.complete_task.assert_called_once()
         client.pause_task_timer.assert_called()
+
+    def test_post_elapsed_is_idempotent(self):
+        # On completion we post local time into Bitrix «Учёт времени» exactly once
+        # per entry (guarded by bitrix_elapsed_id), so re-syncs never double-count.
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from board.models import TimeEntry
+
+        task = make_task(
+            self.project,
+            created_by=self.user,
+            status=Task.Status.DONE,
+            bitrix_task_id="106",
+        )
+        start = timezone.now() - timedelta(seconds=120)
+        TimeEntry.objects.create(
+            task=task,
+            author=self.user,
+            started_at=start,
+            ended_at=start + timedelta(seconds=120),
+            duration_seconds=120,
+        )
+        client = MagicMock()
+        client.add_elapsed_item.return_value = "555"
+
+        board_tasks._post_time_entries_elapsed(client, "106", task, self.portal)
+        client.add_elapsed_item.assert_called_once()
+        args, kwargs = client.add_elapsed_item.call_args
+        self.assertEqual(args[0], "106")
+        self.assertEqual(args[1], 120)
+
+        # Second run must NOT post again (idempotent).
+        board_tasks._post_time_entries_elapsed(client, "106", task, self.portal)
+        client.add_elapsed_item.assert_called_once()
 
     def test_agency_responsible_is_agency_oauth_user_not_client_author(self):
         # Regression: agency subtask must be owned by the agency OAuth user, so
