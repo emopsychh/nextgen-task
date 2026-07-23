@@ -115,7 +115,10 @@ class BitrixInstallView(APIView):
                 or request.data.get("domain")
                 or request.POST.get("DOMAIN"),
                 "expires_in": request.data.get("AUTH_EXPIRES") or request.POST.get("AUTH_EXPIRES") or 3600,
-                "application_token": request.data.get("APP_SID") or request.POST.get("APP_SID") or "",
+                # Never use APP_SID here — it is not application_token and breaks event auth.
+                "application_token": request.data.get("application_token")
+                or request.POST.get("application_token")
+                or "",
             }
             if flat["access_token"] and flat["member_id"]:
                 auth = flat
@@ -580,14 +583,30 @@ class BitrixEventView(APIView):
             or request.data.get("application_token")
             or request.POST.get("application_token")
             or ""
-        )
-        expected_token = (portal.application_token or settings.BITRIX_APPLICATION_TOKEN or "").strip()
-        if expected_token:
-            if not app_token or app_token != expected_token:
+        ).strip()
+        portal_tok = (portal.application_token or "").strip()
+        settings_tok = (settings.BITRIX_APPLICATION_TOKEN or "").strip()
+        accepted = {t for t in (portal_tok, settings_tok) if t}
+        if accepted:
+            if not app_token or app_token not in accepted:
+                logger.warning(
+                    "Bitrix event forbidden portal=%s domain=%s has_token=%s",
+                    portal.id,
+                    portal.domain,
+                    bool(app_token),
+                )
                 return Response({"ok": False, "reason": "forbidden"}, status=403)
+            # Heal portal row if placement install stored APP_SID instead of app token
+            if app_token and app_token != portal_tok and (
+                not portal_tok or app_token == settings_tok
+            ):
+                portal.application_token = app_token
+                portal.save(update_fields=["application_token", "updated_at"])
         elif not settings.DEBUG:
-            # Production should always verify; misconfigured install = refuse events
             return Response({"ok": False, "reason": "app_token_not_configured"}, status=403)
+        elif app_token:
+            portal.application_token = app_token
+            portal.save(update_fields=["application_token", "updated_at"])
 
         # Refresh tokens from event auth when provided
         access = (auth or {}).get("access_token") or (auth or {}).get("AUTH_ID")

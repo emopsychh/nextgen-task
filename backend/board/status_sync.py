@@ -38,9 +38,26 @@ def ensure_task_event_bindings(portal) -> bool:
             if not isinstance(row, dict):
                 continue
             ev = str(row.get("event") or row.get("EVENT") or "").upper().replace("_", "")
-            h = str(row.get("handler") or row.get("HANDLER") or "")
-            if h.rstrip("/") == handler.rstrip("/") and ev in wanted:
+            h = str(row.get("handler") or row.get("HANDLER") or "").rstrip("/")
+            if ev not in wanted:
+                continue
+            if h == handler.rstrip("/"):
                 bound.add(ev)
+                continue
+            # Stale handler (old PUBLIC_APP_URL) — drop and rebind below
+            if h:
+                try:
+                    client.call(
+                        "event.unbind",
+                        {
+                            "event": row.get("event") or row.get("EVENT") or ev,
+                            "handler": row.get("handler") or row.get("HANDLER") or h,
+                        },
+                    )
+                except BitrixAPIError as exc:
+                    logger.info(
+                        "event.unbind stale %s for %s: %s", ev, portal.domain, exc
+                    )
         ok = True
         for event_name, key in (
             ("OnTaskUpdate", "ONTASKUPDATE"),
@@ -51,6 +68,7 @@ def ensure_task_event_bindings(portal) -> bool:
                 continue
             try:
                 client.call("event.bind", {"event": event_name, "handler": handler})
+                bound.add(key)
             except BitrixAPIError as exc:
                 logger.info("event.bind %s for %s: %s", event_name, portal.domain, exc)
                 ok = False
@@ -185,6 +203,42 @@ def deadlines_equal(a, b) -> bool:
     return norm(a) == norm(b)
 
 
+def _start_local_timer_from_inbound(task) -> None:
+    """Mirror Bitrix start into a local running entry without echoing to Bitrix."""
+    from django.utils import timezone
+
+    from board.models import TimeEntry
+    from portals.models import BitrixUser, PortalLink
+
+    if task.time_entries.filter(ended_at__isnull=True).exists():
+        return
+    author = None
+    last = task.time_entries.order_by("-started_at").first()
+    if last and last.author_id:
+        author = last.author
+    if author is None and task.created_by_id:
+        from portals.models import Portal
+
+        # Prefer agency users for timers
+        if task.created_by.portal.role == Portal.Role.AGENCY:
+            author = task.created_by
+    if author is None:
+        agency_ids = list(
+            PortalLink.objects.filter(client_portal=task.project.portal).values_list(
+                "agency_portal_id", flat=True
+            )
+        )
+        if agency_ids:
+            author = (
+                BitrixUser.objects.filter(portal_id__in=agency_ids)
+                .order_by("id")
+                .first()
+            )
+    if author is None:
+        return
+    TimeEntry.objects.create(task=task, author=author, started_at=timezone.now())
+
+
 def apply_inbound_status(
     task, new_status: str, *, stop_timers: bool = True, force: bool = False
 ) -> bool:
@@ -206,8 +260,8 @@ def apply_inbound_status(
     if task.status == new_status:
         return False
     # Avoid clobbering an in-flight local→Bitrix push.
-    # force=True (webhooks): still skip for a short window so we don't regress
-    # in_progress → todo from a stale Bitrix echo before start() lands.
+    # force=True (webhooks / pull): still skip for a short window so we don't
+    # regress in_progress → todo from a stale Bitrix echo before start() lands.
     if task.sync_status == Task.SyncStatus.PENDING:
         if not force:
             return False
@@ -229,7 +283,16 @@ def apply_inbound_status(
         for running in task.time_entries.filter(ended_at__isnull=True):
             # Do not echo pauseTimer back to Bitrix — status already came from there.
             stop_time_entry(running, sync_bitrix=False)
+    elif stop_timers and new_status == Task.Status.IN_PROGRESS:
+        _start_local_timer_from_inbound(task)
 
+    logger.info(
+        "inbound status task=%s %s→%s (force=%s)",
+        task.id,
+        old,
+        new_status,
+        force,
+    )
     return True
 
 
@@ -333,7 +396,9 @@ def pull_task_status_from_bitrix(task) -> bool:
     changed = False
     local = local_status_from_bitrix_task(data)
     if local:
-        changed = apply_inbound_status(task, local) or changed
+        # Same as webhooks: Bitrix is source of truth on pull; short PENDING
+        # window still protects against stale echo right after local→Bitrix push.
+        changed = apply_inbound_status(task, local, force=True) or changed
     due = parse_bitrix_deadline(data)
     task.refresh_from_db()
     changed = apply_inbound_deadline(task, due, allow_while_pending=True) or changed

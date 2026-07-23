@@ -306,7 +306,8 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
-        # Optional Bitrix pull (open task). Live poll should omit ?pull=1.
+        # Soft pull from Bitrix (status/deadline/comments). Live sync uses ?pull=1
+        # every ~12s; force=True inside pull so PENDING outbound does not block.
         if request.query_params.get("pull") in ("1", "true", "yes"):
             try:
                 from board.comment_sync import pull_comments_from_bitrix

@@ -180,19 +180,25 @@ def upsert_portal_from_auth(auth: dict, domain: str | None = None) -> Portal:
 
     role = resolve_portal_role(member_id, portal_domain)
 
+    app_tok = (
+        str(auth.get("application_token") or auth.get("applicationToken") or "").strip()
+        or (settings.BITRIX_APPLICATION_TOKEN or "").strip()
+    )
+    defaults = {
+        "domain": portal_domain,
+        "role": role,
+        "access_token": auth.get("access_token", ""),
+        "refresh_token": auth.get("refresh_token", ""),
+        "expires_at": timezone.now()
+        + timedelta(seconds=int(auth.get("expires_in", 3600))),
+        "is_active": True,
+    }
+    if app_tok:
+        defaults["application_token"] = app_tok
+
     portal, _ = Portal.objects.update_or_create(
         member_id=member_id,
-        defaults={
-            "domain": portal_domain,
-            "role": role,
-            "access_token": auth.get("access_token", ""),
-            "refresh_token": auth.get("refresh_token", ""),
-            "application_token": auth.get("application_token", "")
-            or settings.BITRIX_APPLICATION_TOKEN,
-            "expires_at": timezone.now()
-            + timedelta(seconds=int(auth.get("expires_in", 3600))),
-            "is_active": True,
-        },
+        defaults=defaults,
     )
     # Prefer Bitrix domain as display name when empty
     if not portal.name:
