@@ -42,6 +42,12 @@ class PortalLink(models.Model):
     # Agency CRM company + Bitrix workgroup (from company UF «ID проекта»)
     bitrix_company_id = models.CharField(max_length=64, blank=True)
     bitrix_group_id = models.CharField(max_length=64, blank=True)
+    # Unused package hours after a won accompaniment deal — rolled into the next deal
+    hours_credit = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0, blank=True
+    )
+    hours_credit_source_deal_id = models.CharField(max_length=64, blank=True)
+    hours_credit_source_title = models.CharField(max_length=500, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -94,6 +100,12 @@ class PortalDealBinding(models.Model):
     deal_id = models.CharField(max_length=64)
     deal_title = models.CharField(max_length=500, blank=True)
     category_id = models.CharField(max_length=64, blank=True)
+    stage_id = models.CharField(max_length=64, blank=True)
+    stage_semantic = models.CharField(
+        max_length=8,
+        blank=True,
+        help_text="Bitrix stage SEMANTICS: S=success, F=failure, empty=process",
+    )
     paid_hours = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     remaining_hours = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     is_active = models.BooleanField(default=True)

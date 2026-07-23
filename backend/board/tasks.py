@@ -51,6 +51,49 @@ def _resolve_responsible_id(client: BitrixClient, task) -> str:
     return str(local.bitrix_id) if local else ""
 
 
+def _agency_portal_for_client(client_portal):
+    from portals.models import PortalLink
+
+    link = (
+        PortalLink.objects.filter(client_portal=client_portal)
+        .select_related("agency_portal")
+        .first()
+    )
+    return link.agency_portal if link else None
+
+
+def _crm_deal_uf_bindings(client_portal) -> list[str]:
+    """
+    Bitrix task field UF_CRM_TASK values for the client's active accompaniment deal.
+    Format: D_<dealId> (deal), C_ / CO_ / L_ for other CRM types.
+    """
+    from portals.models import PortalDealBinding, PortalLink
+
+    link = (
+        PortalLink.objects.filter(client_portal=client_portal)
+        .select_related("agency_portal")
+        .first()
+    )
+    if not link or not link.agency_portal_id:
+        return []
+    binding = (
+        PortalDealBinding.objects.filter(
+            agency_portal_id=link.agency_portal_id,
+            client_portal_id=client_portal.id,
+            is_active=True,
+        )
+        .exclude(deal_id="")
+        .order_by("-updated_at")
+        .first()
+    )
+    if not binding or not binding.deal_id:
+        return []
+    deal_id = str(binding.deal_id).strip()
+    if not deal_id:
+        return []
+    return [f"D_{deal_id}"]
+
+
 def _task_fields(
     task,
     *,
@@ -58,6 +101,7 @@ def _task_fields(
     group_id: str | None = None,
     parent_id: str | None = None,
     include_deadline: bool = True,
+    crm_bindings: list[str] | None = None,
 ) -> dict:
     from board.status_sync import format_bitrix_deadline
 
@@ -76,6 +120,8 @@ def _task_fields(
         fields["PARENT_ID"] = parent_id
     # Enable Bitrix «Учёт времени» so startTimer/pauseTimer work in the UI
     fields["ALLOW_TIME_TRACKING"] = "Y"
+    if crm_bindings:
+        fields["UF_CRM_TASK"] = list(crm_bindings)
     return fields
 
 
@@ -146,17 +192,6 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
     client.complete_task(bitrix_task_id)
 
 
-def _agency_portal_for_client(client_portal):
-    from portals.models import PortalLink
-
-    link = (
-        PortalLink.objects.filter(client_portal=client_portal)
-        .select_related("agency_portal")
-        .first()
-    )
-    return link.agency_portal if link else None
-
-
 def _ensure_project_agency_parent(project) -> tuple[str, str]:
     """
     Ensure the app Project has an agency Bitrix parent task in the company GROUP.
@@ -197,6 +232,7 @@ def _sync_one_portal(
     existing_id: str,
     group_id: str | None = None,
     parent_id: str | None = None,
+    crm_bindings: list[str] | None = None,
 ) -> str:
     """Create/update Bitrix task on a portal; return bitrix task id."""
     if not portal.access_token:
@@ -224,6 +260,7 @@ def _sync_one_portal(
             group_id=group_id,
             parent_id=parent_id,
             include_deadline=push_deadline,
+            crm_bindings=crm_bindings,
         )
         fields["TITLE"] = title
         client.update_task(existing_id, fields)
@@ -242,6 +279,7 @@ def _sync_one_portal(
         group_id=group_id,
         parent_id=parent_id,
         include_deadline=True,
+        crm_bindings=crm_bindings,
     )
     fields["TITLE"] = title
     result = client.create_task(fields)
@@ -305,6 +343,9 @@ def _do_sync_project_to_bitrix(project_id: int) -> dict:
         "GROUP_ID": group_id,
         "ALLOW_TIME_TRACKING": "Y",
     }
+    crm_bindings = _crm_deal_uf_bindings(client_portal)
+    if crm_bindings:
+        fields["UF_CRM_TASK"] = crm_bindings
     if project.bitrix_task_id:
         client.update_task(project.bitrix_task_id, fields)
         bitrix_id = project.bitrix_task_id
@@ -361,17 +402,19 @@ def sync_task_to_bitrix(self, task_id: int):
     except Exception as exc:
         errors.append(f"клиент: {exc}")
 
-    # 2) Agency portal — subtask in company project
+    # 2) Agency portal — subtask in company project (+ CRM deal binding)
     agency = _agency_portal_for_client(client_portal)
     if agency and agency.id != client_portal.id:
         try:
             parent_id, group_id = _ensure_project_agency_parent(task.project)
+            crm_bindings = _crm_deal_uf_bindings(client_portal)
             agency_id = _sync_one_portal(
                 task,
                 agency,
                 existing_id=task.agency_bitrix_task_id or "",
                 group_id=group_id,
                 parent_id=parent_id,
+                crm_bindings=crm_bindings or None,
             )
             if agency_id and agency_id != task.agency_bitrix_task_id:
                 task.agency_bitrix_task_id = agency_id
@@ -609,6 +652,7 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
                 existing_id="",
                 group_id=group_id,
                 parent_id=parent_id,
+                crm_bindings=_crm_deal_uf_bindings(task.project.portal) or None,
             )
             if bx:
                 task.agency_bitrix_task_id = bx
@@ -834,6 +878,7 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str):
                     existing_id=task.agency_bitrix_task_id or "",
                     group_id=group_id,
                     parent_id=parent_id,
+                    crm_bindings=_crm_deal_uf_bindings(task.project.portal) or None,
                 )
                 if bx and bx != task.agency_bitrix_task_id:
                     task.agency_bitrix_task_id = bx

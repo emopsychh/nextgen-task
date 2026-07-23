@@ -13,6 +13,11 @@ from portals.deal_hours import (
     read_deal_hours,
     remaining_update_fields,
 )
+from portals.deal_hours_credit import (
+    apply_hours_credit_to_new_deal,
+    capture_hours_credit_if_won,
+    read_deal_stage_fields,
+)
 
 _HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", re.I)
 
@@ -145,17 +150,24 @@ def find_open_deal_for_portal(client: BitrixClient, client_portal) -> dict | Non
 
 
 def sync_deal_hours_meta(client: BitrixClient, deal_id: str, deal: dict | None = None) -> dict:
-    """Title/category/hours; seed remaining from paid when remaining is empty."""
+    """Title/category/stage/hours; seed remaining from paid when remaining is empty."""
     meta = {
         "deal_title": "",
         "category_id": "",
+        "stage_id": "",
+        "stage_semantic": "",
         "paid_hours": None,
         "remaining_hours": None,
     }
     if deal is None:
         deal = client.get_deal(deal_id)
     meta["deal_title"] = str(deal.get("TITLE") or deal.get("title") or "")
-    meta["category_id"] = str(deal.get("CATEGORY_ID") or deal.get("categoryId") or "")
+    stage_id, category_id, semantic = read_deal_stage_fields(client, deal)
+    meta["category_id"] = category_id or str(
+        deal.get("CATEGORY_ID") or deal.get("categoryId") or ""
+    )
+    meta["stage_id"] = stage_id
+    meta["stage_semantic"] = semantic
 
     if hours_fields_configured():
         hours = read_deal_hours(deal)
@@ -167,6 +179,67 @@ def sync_deal_hours_meta(client: BitrixClient, deal_id: str, deal: dict | None =
         meta["paid_hours"] = paid
         meta["remaining_hours"] = remaining
     return meta
+
+
+def _apply_meta_to_binding(binding, meta: dict) -> list[str]:
+    update_fields: list[str] = []
+    if meta.get("deal_title"):
+        binding.deal_title = meta["deal_title"]
+        update_fields.append("deal_title")
+    if meta.get("category_id") is not None:
+        binding.category_id = meta["category_id"] or binding.category_id
+        update_fields.append("category_id")
+    if "stage_id" in meta:
+        binding.stage_id = meta.get("stage_id") or ""
+        update_fields.append("stage_id")
+    if "stage_semantic" in meta:
+        binding.stage_semantic = meta.get("stage_semantic") or ""
+        update_fields.append("stage_semantic")
+    if meta.get("paid_hours") is not None:
+        binding.paid_hours = meta["paid_hours"]
+        update_fields.append("paid_hours")
+    if meta.get("remaining_hours") is not None:
+        binding.remaining_hours = meta["remaining_hours"]
+        update_fields.append("remaining_hours")
+    return update_fields
+
+
+def refresh_binding_from_deal(
+    *,
+    agency_portal,
+    client_portal,
+    binding,
+    client: BitrixClient | None = None,
+):
+    """
+    Refresh hours/stage for an existing binding and capture credit when won.
+    Does not switch to another deal.
+    """
+    from portals.models import PortalLink
+
+    if client is None:
+        client = BitrixClient(agency_portal)
+    meta = sync_deal_hours_meta(client, binding.deal_id)
+    update_fields = _apply_meta_to_binding(binding, meta)
+    if update_fields:
+        update_fields.append("updated_at")
+        binding.save(update_fields=list(set(update_fields)))
+
+    link = PortalLink.objects.filter(
+        agency_portal=agency_portal,
+        client_portal=client_portal,
+    ).first()
+    if link:
+        capture_hours_credit_if_won(
+            link=link,
+            binding=binding,
+            client=client,
+            remaining_hours=meta.get("remaining_hours"),
+            stage_semantic=meta.get("stage_semantic") or "",
+        )
+        # Re-read credit-related remaining if capture left CRM unchanged
+        binding.refresh_from_db()
+    return binding
 
 
 def refresh_deal_hours_for_portal(client_portal) -> bool:
@@ -191,19 +264,17 @@ def refresh_deal_hours_for_portal(client_portal) -> bool:
     )
     if not binding or not binding.deal_id:
         return False
-    client = BitrixClient(link.agency_portal)
-    meta = sync_deal_hours_meta(client, binding.deal_id)
-    update_fields = ["updated_at"]
-    if meta.get("deal_title"):
-        binding.deal_title = meta["deal_title"]
-        update_fields.append("deal_title")
-    if meta.get("paid_hours") is not None:
-        binding.paid_hours = meta["paid_hours"]
-        update_fields.append("paid_hours")
-    if meta.get("remaining_hours") is not None:
-        binding.remaining_hours = meta["remaining_hours"]
-        update_fields.append("remaining_hours")
-    binding.save(update_fields=list(set(update_fields)))
+    try:
+        resolve_or_refresh_binding(
+            agency_portal=link.agency_portal,
+            client_portal=client_portal,
+        )
+    except BitrixAPIError:
+        refresh_binding_from_deal(
+            agency_portal=link.agency_portal,
+            client_portal=client_portal,
+            binding=binding,
+        )
     return True
 
 
@@ -211,6 +282,7 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
     """
     Ensure an active PortalDealBinding exists for the client.
     Finds the open accompaniment deal by UF portal-link field → client portal domain.
+    When a new open deal appears, rolls pending hours credit into its remaining.
     `company_id` is ignored (kept for call-site compatibility).
     """
     del company_id  # no longer used
@@ -233,8 +305,26 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
         raise BitrixAPIError("Agency portal has no Bitrix token")
 
     client = BitrixClient(agency_portal)
+    previous = (
+        PortalDealBinding.objects.filter(
+            agency_portal=agency_portal,
+            client_portal=client_portal,
+            is_active=True,
+        )
+        .order_by("-updated_at")
+        .first()
+    )
+
     deal = find_open_deal_for_portal(client, client_portal)
     if not deal:
+        # No open deal — refresh current binding (may be won) and capture credit
+        if previous and previous.deal_id:
+            return refresh_binding_from_deal(
+                agency_portal=agency_portal,
+                client_portal=client_portal,
+                binding=previous,
+                client=client,
+            )
         host = normalize_portal_host(client_portal.domain or "")
         raise BitrixAPIError(
             f"Не найдена открытая сделка с ссылкой на портал «{host}»"
@@ -246,7 +336,33 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
     if not deal_id:
         raise BitrixAPIError("Bitrix вернул сделку без ID")
 
+    # Before switching away from a won deal, capture any leftover hours
+    if previous and previous.deal_id and str(previous.deal_id) != deal_id:
+        try:
+            refresh_binding_from_deal(
+                agency_portal=agency_portal,
+                client_portal=client_portal,
+                binding=previous,
+                client=client,
+            )
+            link.refresh_from_db()
+        except BitrixAPIError:
+            pass
+
     meta = sync_deal_hours_meta(client, deal_id, deal)
+
+    # New open deal (or first bind): roll pending credit into remaining
+    switched = not previous or str(previous.deal_id) != deal_id
+    if switched:
+        applied = apply_hours_credit_to_new_deal(
+            link=link,
+            client=client,
+            new_deal_id=deal_id,
+            current_remaining=meta.get("remaining_hours"),
+        )
+        if applied is not None:
+            meta["remaining_hours"] = applied
+            link.refresh_from_db()
 
     # Cache company + Bitrix workgroup id from company UF
     cache_company_and_group_on_link(client, link, deal)
@@ -264,6 +380,8 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
         defaults={
             "deal_title": meta["deal_title"],
             "category_id": meta["category_id"],
+            "stage_id": meta.get("stage_id") or "",
+            "stage_semantic": meta.get("stage_semantic") or "",
             "paid_hours": meta["paid_hours"],
             "remaining_hours": meta["remaining_hours"],
             "is_active": True,
@@ -273,6 +391,8 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
         binding.is_active = True
         binding.deal_title = meta["deal_title"] or binding.deal_title
         binding.category_id = meta["category_id"] or binding.category_id
+        binding.stage_id = meta.get("stage_id") or binding.stage_id
+        binding.stage_semantic = meta.get("stage_semantic") or binding.stage_semantic
         binding.paid_hours = meta["paid_hours"]
         binding.remaining_hours = meta["remaining_hours"]
         binding.save(
@@ -280,11 +400,20 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
                 "is_active",
                 "deal_title",
                 "category_id",
+                "stage_id",
+                "stage_semantic",
                 "paid_hours",
                 "remaining_hours",
                 "updated_at",
             ]
         )
+    else:
+        # Ensure stage fields are persisted even when update_or_create hit defaults path
+        fields = _apply_meta_to_binding(binding, meta)
+        if fields:
+            fields.append("updated_at")
+            binding.save(update_fields=list(set(fields)))
+
     return binding
 
 

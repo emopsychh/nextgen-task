@@ -25,34 +25,40 @@ function initials(portal: Portal): string {
 function DealHoursBlock({ binding }: { binding: DealBinding }) {
   const paid = asPackageHours(binding.paid_hours);
   const remaining = asPackageHours(binding.remaining_hours);
-  if (paid == null && remaining == null) return null;
+  const credit = asPackageHours(binding.hours_credit);
+  const won = Boolean(binding.is_won);
+  if (paid == null && remaining == null && !(credit != null && credit > 0)) return null;
 
   const packageSize = paid != null && paid > 0 ? paid : null;
   const remainPct =
     packageSize != null && remaining != null
       ? Math.max(0, Math.min(100, (remaining / packageSize) * 100))
       : null;
-  const over = remaining != null && remaining <= 0;
+  const over = remaining != null && remaining <= 0 && !won;
 
   return (
     <div
-      className={`deal-hours-scale${over ? " is-over" : ""}`}
+      className={`deal-hours-scale${over ? " is-over" : ""}${won ? " is-won" : ""}`}
       aria-label="Часы по сделке сопровождения"
     >
-      {paid != null ? (
+      {won ? (
+        <p className="deal-hours-won-label">Сделка завершена успешно</p>
+      ) : null}
+
+      {paid != null && !won ? (
         <p className="deal-hours-paid">
           Оплачено <strong>{formatPackageHours(paid)}</strong>
         </p>
       ) : null}
 
-      {remaining != null ? (
+      {remaining != null && !won ? (
         <div className="deal-hours-remain-row">
           <span className="deal-hours-remain-label">Осталось</span>
           <strong className="deal-hours-remain-value">{formatPackageHours(remaining)}</strong>
         </div>
       ) : null}
 
-      {remainPct != null ? (
+      {remainPct != null && !won ? (
         <div
           className="deal-hours-track"
           role="progressbar"
@@ -67,6 +73,19 @@ function DealHoursBlock({ binding }: { binding: DealBinding }) {
               width: `${Math.max(remainPct, remaining != null && remaining > 0 ? 1.5 : 0)}%`,
             }}
           />
+        </div>
+      ) : null}
+
+      {credit != null && credit > 0 ? (
+        <div className="deal-hours-credit">
+          <span className="deal-hours-credit-kicker">Неиспользованный остаток</span>
+          <strong className="deal-hours-credit-value">{formatPackageHours(credit)}</strong>
+          <p className="deal-hours-credit-hint">
+            {binding.hours_credit_source_title
+              ? `После «${binding.hours_credit_source_title}». `
+              : ""}
+            Перейдут на следующую сделку сопровождения этого клиента.
+          </p>
         </div>
       ) : null}
     </div>

@@ -61,6 +61,10 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
         write_only=True,
     )
     bitrix_company_id = serializers.SerializerMethodField()
+    is_won = serializers.SerializerMethodField()
+    hours_credit = serializers.SerializerMethodField()
+    hours_credit_source_deal_id = serializers.SerializerMethodField()
+    hours_credit_source_title = serializers.SerializerMethodField()
 
     class Meta:
         model = PortalDealBinding
@@ -72,8 +76,14 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
             "deal_id",
             "deal_title",
             "category_id",
+            "stage_id",
+            "stage_semantic",
+            "is_won",
             "paid_hours",
             "remaining_hours",
+            "hours_credit",
+            "hours_credit_source_deal_id",
+            "hours_credit_source_title",
             "bitrix_company_id",
             "is_active",
             "created_at",
@@ -86,19 +96,53 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
             "deal_id",
             "deal_title",
             "category_id",
+            "stage_id",
+            "stage_semantic",
+            "is_won",
             "paid_hours",
             "remaining_hours",
+            "hours_credit",
+            "hours_credit_source_deal_id",
+            "hours_credit_source_title",
             "bitrix_company_id",
             "created_at",
             "updated_at",
         )
 
+    def _link(self, obj):
+        cache = self.context.setdefault("_portal_link_by_pair", {})
+        key = (obj.agency_portal_id, obj.client_portal_id)
+        if key not in cache:
+            cache[key] = PortalLink.objects.filter(
+                agency_portal_id=obj.agency_portal_id,
+                client_portal_id=obj.client_portal_id,
+            ).first()
+        return cache[key]
+
     def get_bitrix_company_id(self, obj):
-        link = PortalLink.objects.filter(
-            agency_portal_id=obj.agency_portal_id,
-            client_portal_id=obj.client_portal_id,
-        ).first()
+        link = self._link(obj)
         return link.bitrix_company_id if link else ""
+
+    def get_is_won(self, obj):
+        return str(obj.stage_semantic or "").upper() == "S"
+
+    def get_hours_credit(self, obj):
+        link = self._link(obj)
+        if not link or link.hours_credit is None:
+            return None
+        try:
+            val = float(link.hours_credit)
+        except (TypeError, ValueError):
+            return None
+        return val if val > 0 else 0.0
+
+    def get_hours_credit_source_deal_id(self, obj):
+        link = self._link(obj)
+        return (link.hours_credit_source_deal_id if link else "") or ""
+
+    def get_hours_credit_source_title(self, obj):
+        link = self._link(obj)
+        return (link.hours_credit_source_title if link else "") or ""
 
 
 class BitrixUserSerializer(serializers.ModelSerializer):

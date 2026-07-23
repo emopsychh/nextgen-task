@@ -123,8 +123,14 @@ export type DealBinding = {
   deal_id: string;
   deal_title: string;
   category_id: string;
+  stage_id?: string;
+  stage_semantic?: string;
+  is_won?: boolean;
   paid_hours: string | number | null;
   remaining_hours: string | number | null;
+  hours_credit?: string | number | null;
+  hours_credit_source_deal_id?: string;
+  hours_credit_source_title?: string;
   bitrix_company_id?: string;
   is_active: boolean;
   created_at: string;

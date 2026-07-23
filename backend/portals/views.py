@@ -504,21 +504,14 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                 client_portal=binding.client_portal,
             )
         except BitrixAPIError:
-            # Keep existing binding; just refresh hours from current deal_id
+            # Keep existing binding; refresh hours/stage and capture won-deal credit
             try:
-                meta = sync_deal_hours_meta(BitrixClient(request.user.portal), binding.deal_id)
-                binding.deal_title = meta["deal_title"] or binding.deal_title
-                binding.category_id = meta["category_id"] or binding.category_id
-                binding.paid_hours = meta["paid_hours"]
-                binding.remaining_hours = meta["remaining_hours"]
-                binding.save(
-                    update_fields=[
-                        "deal_title",
-                        "category_id",
-                        "paid_hours",
-                        "remaining_hours",
-                        "updated_at",
-                    ]
+                from portals.deal_resolve import refresh_binding_from_deal
+
+                binding = refresh_binding_from_deal(
+                    agency_portal=request.user.portal,
+                    client_portal=binding.client_portal,
+                    binding=binding,
                 )
             except BitrixAPIError as exc:
                 return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
