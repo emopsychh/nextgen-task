@@ -252,3 +252,42 @@ class WorkReportDisputeItem(models.Model):
 
     def __str__(self):
         return f"Dispute report={self.report_id} task={self.task_id}"
+
+
+class WorkReportLine(models.Model):
+    """Per-task narrative on a work report (editable in draft)."""
+
+    report = models.ForeignKey(WorkReport, on_delete=models.CASCADE, related_name="lines")
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="work_report_lines")
+    work_done = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+        unique_together = [("report", "task")]
+
+    def __str__(self):
+        return f"WorkReportLine report={self.report_id} task={self.task_id}"
+
+
+class WorkReportLineAttachment(models.Model):
+    line = models.ForeignKey(
+        WorkReportLine, on_delete=models.CASCADE, related_name="attachments"
+    )
+    file = models.FileField(upload_to=attachment_upload_to)
+    original_name = models.CharField(max_length=255, blank=True)
+    uploaded_by = models.ForeignKey(
+        BitrixUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="work_report_attachments",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return self.original_name or self.file.name

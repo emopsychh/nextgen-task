@@ -152,9 +152,12 @@ export type WorkReportStatus =
 
 export type WorkReportTaskRow = {
   id: number;
+  line_id?: number | null;
   title: string;
   status: TaskStatus;
   tracked_seconds: number;
+  work_done?: string;
+  attachments?: Attachment[];
 };
 
 export type WorkReportEvent = {

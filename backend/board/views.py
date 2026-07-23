@@ -19,7 +19,16 @@ from portals.models import Portal, PortalLink
 from portals.permissions import IsPortalAuthenticated, can_access_client_portal
 
 from .events import append_task_change_events
-from .models import Attachment, Comment, Project, Task, TimeEntry, WorkReport
+from .models import (
+    Attachment,
+    Comment,
+    Project,
+    Task,
+    TimeEntry,
+    WorkReport,
+    WorkReportLine,
+    WorkReportLineAttachment,
+)
 from .naming import display_attachment_name
 from .serializers import (
     ATTACHMENT_SIGN_SALT,
@@ -728,7 +737,7 @@ class WorkReportViewSet(viewsets.ModelViewSet):
     """Project work reports: agency creates/sends; client accepts or disputes."""
 
     permission_classes = [IsPortalAuthenticated]
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
         from django.db.models import Count
@@ -863,3 +872,136 @@ class WorkReportViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("No access to this portal")
         report = mark_paid(report, self._actor())
         return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="lines")
+    def update_line(self, request, pk=None):
+        """Upsert work_done text for a task line (agency, draft only)."""
+        from board.reports import require_agency, upsert_line_work_done
+
+        require_agency(request.user)
+        report = self.get_object()
+        if not can_access_client_portal(request.user, report.project.portal):
+            raise PermissionDenied("No access to this portal")
+        task_id = request.data.get("task_id")
+        if not task_id:
+            return Response({"detail": "task_id required"}, status=400)
+        try:
+            task_id = int(task_id)
+        except (TypeError, ValueError):
+            return Response({"detail": "task_id invalid"}, status=400)
+        work_done = request.data.get("work_done", "")
+        upsert_line_work_done(report, task_id, work_done)
+        report = self.get_queryset().get(pk=report.pk)
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"lines/(?P<task_id>[0-9]+)/attachments",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def upload_line_attachment(self, request, pk=None, task_id=None):
+        from board.naming import client_filename
+        from board.reports import (
+            ensure_report_lines,
+            require_agency,
+            require_draft_editable,
+        )
+
+        require_agency(request.user)
+        report = self.get_object()
+        if not can_access_client_portal(request.user, report.project.portal):
+            raise PermissionDenied("No access to this portal")
+        require_draft_editable(report)
+        try:
+            tid = int(task_id)
+        except (TypeError, ValueError):
+            return Response({"detail": "task_id invalid"}, status=400)
+        if not Task.objects.filter(project_id=report.project_id, pk=tid).exists():
+            return Response({"detail": "Задача не принадлежит проекту"}, status=400)
+        uploaded = request.FILES.get("file")
+        if not uploaded:
+            return Response({"detail": "file required"}, status=400)
+        ensure_report_lines(report)
+        line, _ = WorkReportLine.objects.get_or_create(report=report, task_id=tid)
+        name = client_filename(getattr(uploaded, "name", None))
+        WorkReportLineAttachment.objects.create(
+            line=line,
+            file=uploaded,
+            original_name=name,
+            uploaded_by=self._actor(),
+        )
+        from board.reports import publish_report_event, refresh_report
+
+        publish_report_event(report, "report_line_updated")
+        report = refresh_report(report)
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(
+        detail=True,
+        methods=["delete"],
+        url_path=r"line-attachments/(?P<att_id>[0-9]+)",
+    )
+    def delete_line_attachment(self, request, pk=None, att_id=None):
+        from board.reports import (
+            publish_report_event,
+            refresh_report,
+            require_agency,
+            require_draft_editable,
+        )
+
+        require_agency(request.user)
+        report = self.get_object()
+        if not can_access_client_portal(request.user, report.project.portal):
+            raise PermissionDenied("No access to this portal")
+        require_draft_editable(report)
+        att = WorkReportLineAttachment.objects.filter(
+            pk=att_id, line__report=report
+        ).first()
+        if not att:
+            raise Http404("Файл не найден")
+        att.file.delete(save=False)
+        att.delete()
+        publish_report_event(report, "report_line_updated")
+        report = refresh_report(report)
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"line-attachments/(?P<att_id>[0-9]+)/download",
+        permission_classes=[permissions.AllowAny],
+        authentication_classes=[],
+    )
+    def download_line_attachment(self, request, att_id=None):
+        from board.reports import REPORT_LINE_ATTACH_SALT
+
+        token = request.query_params.get("t", "")
+        try:
+            signed_id = signing.loads(
+                token,
+                salt=REPORT_LINE_ATTACH_SALT,
+                max_age=settings.ATTACHMENT_URL_TTL,
+            )
+        except signing.BadSignature:
+            raise PermissionDenied("Ссылка недействительна или устарела")
+        if str(signed_id) != str(att_id):
+            raise PermissionDenied("Ссылка недействительна")
+
+        attachment = WorkReportLineAttachment.objects.filter(pk=att_id).first()
+        if not attachment or not attachment.file:
+            raise Http404("Файл не найден")
+
+        filename = attachment.original_name or Path(attachment.file.name).name
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        disposition = f"inline; filename*=UTF-8''{quote(filename)}"
+
+        if settings.MEDIA_USE_X_ACCEL:
+            resp = HttpResponse(content_type=content_type)
+            resp["X-Accel-Redirect"] = settings.MEDIA_X_ACCEL_PREFIX + attachment.file.name
+            resp["Content-Disposition"] = disposition
+            return resp
+
+        resp = FileResponse(attachment.file.open("rb"), content_type=content_type)
+        resp["Content-Disposition"] = disposition
+        return resp

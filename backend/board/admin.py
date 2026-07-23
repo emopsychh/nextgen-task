@@ -9,6 +9,8 @@ from .models import (
     WorkReport,
     WorkReportDisputeItem,
     WorkReportEvent,
+    WorkReportLine,
+    WorkReportLineAttachment,
 )
 
 
@@ -40,6 +42,12 @@ class WorkReportDisputeInline(admin.TabularInline):
     model = WorkReportDisputeItem
     extra = 0
     readonly_fields = ("task", "note", "created_at")
+
+
+class WorkReportLineInline(admin.TabularInline):
+    model = WorkReportLine
+    extra = 0
+    readonly_fields = ("task", "work_done", "updated_at")
 
 
 @admin.register(Project)
@@ -88,4 +96,9 @@ class WorkReportAdmin(admin.ModelAdmin):
     list_display = ("id", "project", "status", "created_by", "sent_at", "accepted_at", "paid_at")
     list_filter = ("status",)
     search_fields = ("project__name",)
-    inlines = [WorkReportEventInline, WorkReportDisputeInline]
+    inlines = [WorkReportLineInline, WorkReportEventInline, WorkReportDisputeInline]
+
+
+@admin.register(WorkReportLineAttachment)
+class WorkReportLineAttachmentAdmin(admin.ModelAdmin):
+    list_display = ("original_name", "line", "created_at")

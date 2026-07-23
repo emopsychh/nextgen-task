@@ -490,9 +490,9 @@ class WorkReportSerializer(serializers.ModelSerializer):
         return ""
 
     def get_tasks(self, obj):
-        from board.reports import live_task_rows
+        from board.reports import report_task_rows
 
-        return live_task_rows(obj.project_id)
+        return report_task_rows(obj)
 
     def get_total_tracked_seconds(self, obj):
         from board.reports import live_total_seconds

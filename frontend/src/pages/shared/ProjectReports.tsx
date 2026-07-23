@@ -1,19 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
+  API_BASE,
   api,
   unwrapList,
   type Paginated,
   type Project,
   type WorkReport,
   type WorkReportStatus,
+  type WorkReportTaskRow,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime, formatDuration, formatPackageHours } from "../../lib/format";
-import { STATUS_LABEL } from "../../lib/status";
+import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 
 const STATUS_LABEL_RU: Record<WorkReportStatus, string> = {
   draft: "Черновик",
@@ -31,6 +33,201 @@ const EVENT_LABEL: Record<string, string> = {
   paid: "Отмечен оплаченным",
   reopened: "Вернут в черновик",
 };
+
+function ReportTaskCard({
+  task,
+  editable,
+  token,
+  reportId,
+  onUpdated,
+  onError,
+}: {
+  task: WorkReportTaskRow;
+  editable: boolean;
+  token: string;
+  reportId: number;
+  onUpdated: (report: WorkReport) => void;
+  onError: (msg: string) => void;
+}) {
+  const [workDone, setWorkDone] = useState(task.work_done || "");
+  const [expanded, setExpanded] = useState(
+    Boolean(task.work_done) || (task.attachments && task.attachments.length > 0) || editable
+  );
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const saveTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    setWorkDone(task.work_done || "");
+  }, [task.work_done, task.id]);
+
+  function scheduleSave(next: string) {
+    if (!editable) return;
+    if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      void persist(next);
+    }, 600);
+  }
+
+  async function persist(text: string) {
+    setSaving(true);
+    try {
+      const updated = await api<WorkReport>(
+        `/api/reports/${reportId}/lines/`,
+        {
+          method: "POST",
+          body: JSON.stringify({ task_id: task.id, work_done: text }),
+        },
+        token
+      );
+      onUpdated(updated);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Не удалось сохранить");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function uploadFile(file: File) {
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const updated = await api<WorkReport>(
+        `/api/reports/${reportId}/lines/${task.id}/attachments/`,
+        { method: "POST", body: form },
+        token
+      );
+      onUpdated(updated);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Не удалось загрузить файл");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function removeAttachment(attId: number) {
+    try {
+      const updated = await api<WorkReport>(
+        `/api/reports/${reportId}/line-attachments/${attId}/`,
+        { method: "DELETE" },
+        token
+      );
+      onUpdated(updated);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Не удалось удалить файл");
+    }
+  }
+
+  const attachments = task.attachments || [];
+
+  return (
+    <article className={`report-task-card${expanded ? " is-open" : ""}`}>
+      <button
+        type="button"
+        className="report-task-card-head"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <div className="report-task-card-title">
+          <Link to={`/tasks/${task.id}`} onClick={(e) => e.stopPropagation()}>
+            {task.title}
+          </Link>
+          <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
+            {STATUS_LABEL[task.status]}
+          </span>
+        </div>
+        <div className="report-task-card-meta">
+          <span>{formatDuration(task.tracked_seconds)}</span>
+          {attachments.length > 0 ? (
+            <span className="report-task-files-count">{attachments.length} файл.</span>
+          ) : null}
+          <span className="report-task-chevron" aria-hidden>
+            {expanded ? "▾" : "▸"}
+          </span>
+        </div>
+      </button>
+
+      {expanded ? (
+        <div className="report-task-card-body">
+          {editable ? (
+            <div className="field">
+              <label>Что сделано</label>
+              <textarea
+                rows={3}
+                value={workDone}
+                placeholder="Кратко опишите результат по этой задаче…"
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setWorkDone(next);
+                  scheduleSave(next);
+                }}
+                onBlur={() => {
+                  if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
+                  if (workDone !== (task.work_done || "")) void persist(workDone);
+                }}
+              />
+              <p className="report-save-hint muted">
+                {saving ? "Сохраняем…" : "Сохраняется автоматически"}
+              </p>
+            </div>
+          ) : workDone ? (
+            <p className="report-work-done">{workDone}</p>
+          ) : (
+            <p className="muted">Описание работ не добавлено</p>
+          )}
+
+          {(attachments.length > 0 || editable) && (
+            <div className="report-task-attachments">
+              {attachments.map((att) => (
+                <div key={att.id} className="report-attach-row">
+                  {att.url ? (
+                    <a href={`${API_BASE}${att.url}`} target="_blank" rel="noreferrer">
+                      {att.original_name || "Файл"}
+                    </a>
+                  ) : (
+                    <span>{att.original_name || "Файл"}</span>
+                  )}
+                  {editable ? (
+                    <button
+                      type="button"
+                      className="btn-link-danger"
+                      onClick={() => void removeAttachment(att.id)}
+                    >
+                      Удалить
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              {editable ? (
+                <div className="report-attach-actions">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    hidden
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void uploadFile(f);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={uploading}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    {uploading ? "Загрузка…" : "Прикрепить файл"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </article>
+  );
+}
 
 export function ProjectReports() {
   const { projectId } = useParams();
@@ -116,6 +313,8 @@ export function ProjectReports() {
       ? "Все задачи выполнены — можно отправить отчёт."
       : null;
 
+  const linesEditable = Boolean(isAgency && detail?.status === "draft" && token);
+
   async function createReport() {
     if (!token || !projectId) return;
     setBusy(true);
@@ -126,9 +325,10 @@ export function ProjectReports() {
         { method: "POST", body: JSON.stringify({ project: Number(projectId) }) },
         token
       );
-      toast.show("Черновик готов к отправке", "Отчёт создан");
+      toast.show("Добавьте описания работ и отправьте клиенту", "Отчёт создан");
       await loadList();
       setSelectedId(created.id);
+      setDetail(created);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось создать отчёт");
     } finally {
@@ -201,7 +401,7 @@ export function ProjectReports() {
           </p>
           <h1 className="page-title">Отчёты</h1>
           <p className="page-sub">
-            Выполненные работы по модулю — согласование с клиентом
+            Что сделано по задачам модуля — на согласование клиенту
           </p>
         </div>
         <div className="report-header-actions">
@@ -291,7 +491,7 @@ export function ProjectReports() {
                           "reopen",
                           undefined,
                           "Снова черновик",
-                          "Можно править задачи и отправить ещё раз"
+                          "Можно править описания и отправить ещё раз"
                         )
                       }
                     >
@@ -341,6 +541,12 @@ export function ProjectReports() {
                   {formatPackageHours(detail.deal_hours.remaining_hours)} из{" "}
                   {formatPackageHours(detail.deal_hours.paid_hours)}
                 </div>
+              ) : null}
+
+              {isAgency && detail.status === "draft" ? (
+                <p className="report-edit-hint">
+                  Раскройте задачу, опишите что сделано и при необходимости приложите файлы.
+                </p>
               ) : null}
 
               {detail.status === "disputed" && detail.client_comment ? (
@@ -400,27 +606,21 @@ export function ProjectReports() {
                 </div>
               ) : null}
 
-              <div className="report-tasks-table-wrap">
-                <table className="report-tasks-table">
-                  <thead>
-                    <tr>
-                      <th>Задача</th>
-                      <th>Статус</th>
-                      <th>Время</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(detail.tasks || []).map((t) => (
-                      <tr key={t.id}>
-                        <td>
-                          <Link to={`/tasks/${t.id}`}>{t.title}</Link>
-                        </td>
-                        <td>{STATUS_LABEL[t.status]}</td>
-                        <td>{formatDuration(t.tracked_seconds)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="report-task-cards">
+                {(detail.tasks || []).map((t) => (
+                  <ReportTaskCard
+                    key={t.id}
+                    task={t}
+                    editable={linesEditable}
+                    token={token!}
+                    reportId={detail.id}
+                    onUpdated={(report) => {
+                      setDetail(report);
+                      void loadList();
+                    }}
+                    onError={setError}
+                  />
+                ))}
               </div>
 
               {detail.events && detail.events.length > 0 ? (

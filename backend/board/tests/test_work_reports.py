@@ -154,3 +154,53 @@ class WorkReportApiTests(TestCase):
         ids = [row["id"] for row in res.data["results"]]
         self.assertIn(r2.id, ids)
         self.assertNotIn(r1.id, ids)
+
+    def test_line_work_done_and_attachment(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from board.models import WorkReportLine
+
+        create = self.agency_client.post(
+            "/api/reports/", {"project": self.project.id}, format="json"
+        )
+        self.assertEqual(create.status_code, 201, create.content)
+        report_id = create.data["id"]
+        row = create.data["tasks"][0]
+        self.assertEqual(row["id"], self.task.id)
+        self.assertIn("work_done", row)
+        self.assertEqual(WorkReportLine.objects.filter(report_id=report_id).count(), 1)
+
+        upd = self.agency_client.post(
+            f"/api/reports/{report_id}/lines/",
+            {"task_id": self.task.id, "work_done": "Сверстали и проверили"},
+            format="json",
+        )
+        self.assertEqual(upd.status_code, 200, upd.content)
+        self.assertEqual(upd.data["tasks"][0]["work_done"], "Сверстали и проверили")
+
+        # Client cannot edit lines
+        bad = self.client_client.post(
+            f"/api/reports/{report_id}/lines/",
+            {"task_id": self.task.id, "work_done": "хак"},
+            format="json",
+        )
+        self.assertEqual(bad.status_code, 403)
+
+        upload = self.agency_client.post(
+            f"/api/reports/{report_id}/lines/{self.task.id}/attachments/",
+            {"file": SimpleUploadedFile("note.txt", b"hello", content_type="text/plain")},
+            format="multipart",
+        )
+        self.assertEqual(upload.status_code, 200, upload.content)
+        atts = upload.data["tasks"][0]["attachments"]
+        self.assertEqual(len(atts), 1)
+        self.assertTrue(atts[0]["url"])
+
+        # Locked after send
+        self.agency_client.post(f"/api/reports/{report_id}/send/", {}, format="json")
+        locked = self.agency_client.post(
+            f"/api/reports/{report_id}/lines/",
+            {"task_id": self.task.id, "work_done": "поздно"},
+            format="json",
+        )
+        self.assertEqual(locked.status_code, 400)

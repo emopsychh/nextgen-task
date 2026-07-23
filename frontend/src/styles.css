@@ -4577,3 +4577,171 @@ a.task-card.is-done:hover,
   }
 }
 
+.report-edit-hint {
+  margin: 0 0 16px;
+  color: var(--ink-muted);
+  font-size: 0.92rem;
+}
+
+.report-task-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.report-task-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg) 55%, var(--bg-elevated));
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.report-task-card.is-open {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  box-shadow: 0 8px 24px rgba(20, 40, 30, 0.04);
+}
+
+.report-task-card-head {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  appearance: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+.report-task-card-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.report-task-card-title a {
+  font-weight: 650;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.report-task-card-title a:hover {
+  color: var(--accent);
+}
+
+.report-task-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink-muted);
+  font-size: 0.88rem;
+  flex-shrink: 0;
+}
+
+.report-task-files-count {
+  font-size: 0.8rem;
+}
+
+.report-task-chevron {
+  width: 1em;
+  text-align: center;
+}
+
+.report-task-card-body {
+  padding: 0 16px 16px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  padding-top: 14px;
+}
+
+.report-work-done {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.report-save-hint {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+}
+
+.report-task-attachments {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.report-attach-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+
+.report-attach-row a {
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 560;
+}
+
+.report-attach-row a:hover {
+  color: var(--accent);
+}
+
+.btn-link-danger {
+  appearance: none;
+  border: none;
+  background: none;
+  color: #b42318;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0;
+}
+
+.btn-sm {
+  padding: 8px 14px;
+  font-size: 0.85rem;
+}
+
+.report-attach-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 650;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.status-pill.status-todo {
+  background: #e8eef5;
+  color: #334;
+}
+
+.status-pill.status-progress {
+  background: color-mix(in srgb, var(--accent) 18%, #fff);
+  color: #145;
+}
+
+.status-pill.status-done {
+  background: #d9efe4;
+  color: #1a5;
+}
+
