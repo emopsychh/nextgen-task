@@ -23,8 +23,12 @@ type Props = {
   onCommitTitle: () => void;
   onCommitDescription: () => void;
   onSetStatus: (status: TaskStatus) => void;
+  onRequestComplete: () => void;
   onSetDueDate: (iso: string) => void;
   onToggleImportant: () => void;
+  draftOutcome?: string;
+  onDraftOutcome?: (value: string) => void;
+  onCommitOutcome?: () => void;
 };
 
 export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSummaryCard(
@@ -44,8 +48,12 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
     onCommitTitle,
     onCommitDescription,
     onSetStatus,
+    onRequestComplete,
     onSetDueDate,
     onToggleImportant,
+    draftOutcome = "",
+    onDraftOutcome,
+    onCommitOutcome,
   },
   ref
 ) {
@@ -126,6 +134,28 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
         <p className="task-summary-desc is-empty">Описание пока не добавлено</p>
       )}
 
+      {task.status === "done" ? (
+        <div className="task-outcome-block">
+          <div className="task-outcome-label">Итог работы</div>
+          {canManage && onDraftOutcome && onCommitOutcome ? (
+            <textarea
+              className={`task-summary-desc-input${!draftOutcome.trim() ? " is-empty" : ""}`}
+              value={draftOutcome}
+              onChange={(e) => onDraftOutcome(e.target.value)}
+              onBlur={() => onCommitOutcome()}
+              rows={3}
+              placeholder="Что сделано по задаче…"
+              disabled={saveBusy}
+              aria-label="Итог работы"
+            />
+          ) : task.outcome?.trim() ? (
+            <p className="task-summary-desc">{task.outcome}</p>
+          ) : (
+            <p className="task-summary-desc is-empty">Итог пока не указан</p>
+          )}
+        </div>
+      ) : null}
+
       <div className="task-summary-status-block">
         <div className="task-status-group">
           <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
@@ -154,7 +184,7 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
                   type="button"
                   className="btn btn-ghost"
                   disabled={saveBusy}
-                  onClick={() => onSetStatus("done")}
+                  onClick={onRequestComplete}
                 >
                   Завершить
                 </button>
@@ -166,7 +196,7 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
                   type="button"
                   className="btn btn-accent"
                   disabled={saveBusy}
-                  onClick={() => onSetStatus("done")}
+                  onClick={onRequestComplete}
                 >
                   Завершить
                 </button>

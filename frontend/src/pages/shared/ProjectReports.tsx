@@ -1,25 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  API_BASE,
   api,
   unwrapList,
   type Paginated,
   type Project,
   type WorkReport,
   type WorkReportStatus,
-  type WorkReportTaskRow,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime, formatDuration, formatPackageHours } from "../../lib/format";
-import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
+import { STATUS_LABEL } from "../../lib/status";
+
+type Bucket = "current" | "review" | "paid";
 
 const STATUS_LABEL_RU: Record<WorkReportStatus, string> = {
   draft: "Черновик",
-  pending_client: "На согласовании у клиента",
+  pending_client: "На рассмотрении",
   disputed: "Оспорен",
   accepted: "Согласован",
   paid: "Оплачен",
@@ -34,248 +34,124 @@ const EVENT_LABEL: Record<string, string> = {
   reopened: "Вернут в черновик",
 };
 
-function ReportTaskCard({
-  task,
-  editable,
-  token,
-  reportId,
-  onUpdated,
-  onError,
-}: {
-  task: WorkReportTaskRow;
-  editable: boolean;
-  token: string;
-  reportId: number;
-  onUpdated: (report: WorkReport) => void;
-  onError: (msg: string) => void;
-}) {
-  const [workDone, setWorkDone] = useState(task.work_done || "");
-  const [expanded, setExpanded] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const saveTimer = useRef<number | null>(null);
-
-  useEffect(() => {
-    setWorkDone(task.work_done || "");
-  }, [task.work_done, task.id]);
-
-  function scheduleSave(next: string) {
-    if (!editable) return;
-    if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      void persist(next);
-    }, 600);
-  }
-
-  async function persist(text: string) {
-    setSaving(true);
-    try {
-      const updated = await api<WorkReport>(
-        `/api/reports/${reportId}/lines/`,
-        {
-          method: "POST",
-          body: JSON.stringify({ task_id: task.id, work_done: text }),
-        },
-        token
-      );
-      onUpdated(updated);
-    } catch (e) {
-      onError(e instanceof Error ? e.message : "Не удалось сохранить");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function uploadFile(file: File) {
-    setUploading(true);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const updated = await api<WorkReport>(
-        `/api/reports/${reportId}/lines/${task.id}/attachments/`,
-        { method: "POST", body: form },
-        token
-      );
-      onUpdated(updated);
-    } catch (e) {
-      onError(e instanceof Error ? e.message : "Не удалось загрузить файл");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  }
-
-  async function removeAttachment(attId: number) {
-    try {
-      const updated = await api<WorkReport>(
-        `/api/reports/${reportId}/line-attachments/${attId}/`,
-        { method: "DELETE" },
-        token
-      );
-      onUpdated(updated);
-    } catch (e) {
-      onError(e instanceof Error ? e.message : "Не удалось удалить файл");
-    }
-  }
-
-  const attachments = task.attachments || [];
-
-  return (
-    <article className={`report-task-card${expanded ? " is-open" : ""}`}>
-      <button
-        type="button"
-        className="report-task-card-head"
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <div className="report-task-card-title">
-          <Link to={`/tasks/${task.id}`} onClick={(e) => e.stopPropagation()}>
-            {task.title}
-          </Link>
-          <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
-            {STATUS_LABEL[task.status]}
-          </span>
-        </div>
-        <div className="report-task-card-meta">
-          <span>{formatDuration(task.tracked_seconds)}</span>
-          {attachments.length > 0 ? (
-            <span className="report-task-files-count">{attachments.length} файл.</span>
-          ) : null}
-          <span className="report-task-chevron" aria-hidden>
-            {expanded ? "▾" : "▸"}
-          </span>
-        </div>
-      </button>
-
-      {expanded ? (
-        <div className="report-task-card-body">
-          {editable ? (
-            <div className="field">
-              <label>Что сделано</label>
-              <textarea
-                rows={3}
-                value={workDone}
-                placeholder="Кратко опишите результат по этой задаче…"
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setWorkDone(next);
-                  scheduleSave(next);
-                }}
-                onBlur={() => {
-                  if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
-                  if (workDone !== (task.work_done || "")) void persist(workDone);
-                }}
-              />
-              <p className="report-save-hint muted">
-                {saving ? "Сохраняем…" : "Сохраняется автоматически"}
-              </p>
-            </div>
-          ) : workDone ? (
-            <p className="report-work-done">{workDone}</p>
-          ) : (
-            <p className="muted">Описание работ не добавлено</p>
-          )}
-
-          {(attachments.length > 0 || editable) && (
-            <div className="report-task-attachments">
-              {attachments.map((att) => (
-                <div key={att.id} className="report-attach-row">
-                  {att.url ? (
-                    <a href={`${API_BASE}${att.url}`} target="_blank" rel="noreferrer">
-                      {att.original_name || "Файл"}
-                    </a>
-                  ) : (
-                    <span>{att.original_name || "Файл"}</span>
-                  )}
-                  {editable ? (
-                    <button
-                      type="button"
-                      className="btn-link-danger"
-                      onClick={() => void removeAttachment(att.id)}
-                    >
-                      Удалить
-                    </button>
-                  ) : null}
-                </div>
-              ))}
-              {editable ? (
-                <div className="report-attach-actions">
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    hidden
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void uploadFile(f);
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    disabled={uploading}
-                    onClick={() => fileRef.current?.click()}
-                  >
-                    {uploading ? "Загрузка…" : "Прикрепить файл"}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          )}
-        </div>
-      ) : null}
-    </article>
-  );
-}
+const BUCKETS: { id: Bucket; label: string }[] = [
+  { id: "current", label: "Актуальные" },
+  { id: "review", label: "На рассмотрении" },
+  { id: "paid", label: "Оплаченные" },
+];
 
 export function ProjectReports() {
-  const { projectId } = useParams();
+  const { portalId: routePortalId, reportId: routeReportId, projectId: routeProjectId } =
+    useParams();
   const { token, portal } = useAuth();
   const isAgency = portal?.role === "agency";
+  const navigate = useNavigate();
   const toast = useFlashToast();
 
-  const [project, setProject] = useState<Project | null>(null);
+  const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
+
+  const portalId = useMemo(() => {
+    if (routePortalId) return Number(routePortalId);
+    if (resolvedPortalId) return resolvedPortalId;
+    if (!isAgency && portal?.id) return portal.id;
+    return null;
+  }, [routePortalId, resolvedPortalId, isAgency, portal?.id]);
+
+  useEffect(() => {
+    if (!token || !routeProjectId || routePortalId) return;
+    let cancelled = false;
+    void api<Project>(`/api/projects/${routeProjectId}/`, {}, token)
+      .then((p) => {
+        if (!cancelled) setResolvedPortalId(p.portal);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, routeProjectId, routePortalId]);
+
+  const [bucket, setBucket] = useState<Bucket>("current");
   const [reports, setReports] = useState<WorkReport[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedId, setSelectedId] = useState<number | null>(
+    routeReportId ? Number(routeReportId) : null
+  );
   const [detail, setDetail] = useState<WorkReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [pickedProjects, setPickedProjects] = useState<Set<number>>(new Set());
+  const [expandedProjects, setExpandedProjects] = useState<Set<number>>(new Set());
   const [disputeComment, setDisputeComment] = useState("");
   const [selectedTasks, setSelectedTasks] = useState<Set<number>>(new Set());
   const [showDispute, setShowDispute] = useState(false);
+  const [counts, setCounts] = useState<Record<Bucket, number>>({
+    current: 0,
+    review: 0,
+    paid: 0,
+  });
+
+  const loadCounts = useCallback(async () => {
+    if (!token || !portalId) return;
+    const next: Record<Bucket, number> = { current: 0, review: 0, paid: 0 };
+    await Promise.all(
+      (["current", "review", "paid"] as Bucket[]).map(async (b) => {
+        const data = await api<WorkReport[] | Paginated<WorkReport>>(
+          `/api/reports/?portal=${portalId}&bucket=${b}`,
+          {},
+          token
+        );
+        next[b] = unwrapList(data).length;
+      })
+    );
+    setCounts(next);
+  }, [token, portalId]);
 
   const loadList = useCallback(async () => {
-    if (!token || !projectId) return;
-    const [projectData, reportData] = await Promise.all([
-      api<Project>(`/api/projects/${projectId}/`, {}, token),
-      api<WorkReport[] | Paginated<WorkReport>>(
-        `/api/reports/?project=${projectId}`,
-        {},
-        token
-      ),
-    ]);
-    setProject(projectData);
-    const list = unwrapList(reportData);
+    if (!token || !portalId) return;
+    const data = await api<WorkReport[] | Paginated<WorkReport>>(
+      `/api/reports/?portal=${portalId}&bucket=${bucket}`,
+      {},
+      token
+    );
+    const list = unwrapList(data);
     setReports(list);
     setSelectedId((prev) => {
+      if (routeReportId) {
+        const id = Number(routeReportId);
+        if (list.some((r) => r.id === id)) return id;
+      }
       if (prev && list.some((r) => r.id === prev)) return prev;
-      const active = list.find((r) => r.is_active);
-      return active?.id ?? list[0]?.id ?? null;
+      return list[0]?.id ?? null;
     });
-  }, [token, projectId]);
+    void loadCounts();
+  }, [token, portalId, bucket, routeReportId, loadCounts]);
+
+  const loadProjects = useCallback(async () => {
+    if (!token || !portalId) return;
+    const data = await api<Project[] | Paginated<Project>>(
+      `/api/projects/?portal=${portalId}`,
+      {},
+      token
+    );
+    setProjects(unwrapList(data));
+  }, [token, portalId]);
 
   const loadDetail = useCallback(
     async (id: number) => {
       if (!token) return;
       const data = await api<WorkReport>(`/api/reports/${id}/`, {}, token);
       setDetail(data);
+      setExpandedProjects(new Set());
     },
     [token]
   );
 
   useEffect(() => {
-    if (!token || !projectId) return;
+    if (!token || !portalId) return;
     void loadList().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
-  }, [token, projectId, loadList]);
+    void loadProjects().catch(() => undefined);
+  }, [token, portalId, loadList, loadProjects]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -289,8 +165,8 @@ export function ProjectReports() {
 
   usePortalLiveSync({
     token,
-    portalId: project?.portal ?? null,
-    enabled: !!project,
+    portalId,
+    enabled: !!portalId,
     onEvent: (payload) => {
       if (payload?.kind?.startsWith("report_") || !payload?.kind) {
         void loadList().catch(() => undefined);
@@ -299,34 +175,32 @@ export function ProjectReports() {
     },
   });
 
-  const activeReport = useMemo(
-    () => reports.find((r) => r.is_active) ?? null,
-    [reports]
-  );
-
-  const hint =
-    project &&
-    project.tasks_count > 0 &&
-    project.done_count >= project.tasks_count
-      ? "Все задачи выполнены — можно отправить отчёт."
-      : null;
-
-  const linesEditable = Boolean(isAgency && detail?.status === "draft" && token);
-
   async function createReport() {
-    if (!token || !projectId) return;
+    if (!token || !portalId || pickedProjects.size === 0) return;
     setBusy(true);
     setError(null);
     try {
       const created = await api<WorkReport>(
         "/api/reports/",
-        { method: "POST", body: JSON.stringify({ project: Number(projectId) }) },
+        {
+          method: "POST",
+          body: JSON.stringify({
+            portal: portalId,
+            project_ids: Array.from(pickedProjects),
+          }),
+        },
         token
       );
-      toast.show("Добавьте описания работ и отправьте клиенту", "Отчёт создан");
+      toast.show("Итоги задач подтянутся автоматически", "Отчёт создан");
+      setShowCreate(false);
+      setPickedProjects(new Set());
+      setBucket("current");
       await loadList();
       setSelectedId(created.id);
       setDetail(created);
+      if (isAgency && portalId) {
+        navigate(`/portals/${portalId}/reports/${created.id}`, { replace: true });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось создать отчёт");
     } finally {
@@ -365,6 +239,24 @@ export function ProjectReports() {
     }
   }
 
+  function toggleProjectPick(id: number) {
+    setPickedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleExpand(id: number) {
+    setExpandedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   function toggleTask(id: number) {
     setSelectedTasks((prev) => {
       const next = new Set(prev);
@@ -390,44 +282,117 @@ export function ProjectReports() {
     );
   }
 
+  const allDisputeTasks =
+    detail?.projects_detail?.flatMap((p) =>
+      p.tasks.map((t) => ({ ...t, projectName: p.name }))
+    ) || [];
+
+  if (!portalId) {
+    return (
+      <div className="tasks-page">
+        <p className="muted">Выберите клиента, чтобы открыть отчёты.</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="tasks-page report-page">
+    <div className="tasks-page report-hub">
       <div className="page-header">
         <div>
-          <p className="muted" style={{ margin: "0 0 6px" }}>
-            <Link to={`/projects/${projectId}`}>← {project?.name || "Проект"}</Link>
-          </p>
           <h1 className="page-title">Отчёты</h1>
           <p className="page-sub">
-            Что сделано по задачам модуля — на согласование клиенту
+            Согласование выполненных работ по проектам клиента
           </p>
         </div>
-        <div className="report-header-actions">
-          {isAgency && !activeReport ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => void createReport()}
-            >
-              Новый отчёт
-            </button>
-          ) : null}
-        </div>
+        {isAgency ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy}
+            onClick={() => {
+              setShowCreate(true);
+              void loadProjects();
+            }}
+          >
+            Создать отчёт
+          </button>
+        ) : null}
       </div>
 
       {error && <div className="error-banner">{error}</div>}
-      {hint && isAgency && !activeReport ? (
-        <div className="report-hint">{hint}</div>
-      ) : null}
-
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
+
+      <div className="task-filters report-filter-row">
+        {BUCKETS.map((b) => (
+          <button
+            key={b.id}
+            type="button"
+            className={`task-filter-chip${bucket === b.id ? " active" : ""}`}
+            onClick={() => setBucket(b.id)}
+          >
+            {b.label}
+            <span className="task-filter-count">{counts[b.id]}</span>
+          </button>
+        ))}
+      </div>
+
+      {showCreate && isAgency ? (
+        <div className="connect-panel stack report-create-panel">
+          <div>
+            <h2 className="section-title">Новый отчёт</h2>
+            <p className="muted">
+              Выберите один или несколько проектов. Итоги задач подтянутся из карточек
+              завершённых задач.
+            </p>
+          </div>
+          <ul className="report-project-pick">
+            {projects.map((p) => (
+              <li key={p.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={pickedProjects.has(p.id)}
+                    onChange={() => toggleProjectPick(p.id)}
+                  />
+                  <span>{p.name}</span>
+                  <span className="muted">
+                    {p.done_count}/{p.tasks_count} задач
+                  </span>
+                </label>
+              </li>
+            ))}
+            {projects.length === 0 ? (
+              <li className="muted">Пока нет проектов у этого клиента</li>
+            ) : null}
+          </ul>
+          <div className="report-create-actions">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setShowCreate(false);
+                setPickedProjects(new Set());
+              }}
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              className="btn btn-accent"
+              disabled={busy || pickedProjects.size === 0}
+              onClick={() => void createReport()}
+            >
+              Создать
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="report-layout">
         <aside className="report-list-panel">
-          <h2 className="section-title">История</h2>
+          <h2 className="section-title">Список</h2>
           {reports.length === 0 ? (
-            <p className="muted">Пока нет отчётов по этому проекту.</p>
+            <p className="muted">В этой вкладке пока пусто.</p>
           ) : (
             <ul className="report-list">
               {reports.map((r) => (
@@ -435,10 +400,19 @@ export function ProjectReports() {
                   <button
                     type="button"
                     className={`report-list-item${selectedId === r.id ? " is-active" : ""}`}
-                    onClick={() => setSelectedId(r.id)}
+                    onClick={() => {
+                      setSelectedId(r.id);
+                      if (isAgency && portalId) {
+                        navigate(`/portals/${portalId}/reports/${r.id}`, { replace: true });
+                      }
+                    }}
                   >
                     <span className={`report-status-pill status-${r.status}`}>
                       {STATUS_LABEL_RU[r.status]}
+                    </span>
+                    <span className="report-list-meta">
+                      {(r.project_names || []).slice(0, 2).join(", ") || "Проекты"}
+                      {(r.projects_count || 0) > 2 ? ` +${(r.projects_count || 0) - 2}` : ""}
                     </span>
                     <span className="report-list-meta">
                       {formatDuration(r.total_tracked_seconds)} ·{" "}
@@ -458,7 +432,9 @@ export function ProjectReports() {
             <>
               <div className="report-detail-head">
                 <div>
-                  <h2 className="section-title">{detail.project_name}</h2>
+                  <h2 className="section-title">
+                    {(detail.project_names || []).join(" · ") || "Отчёт"}
+                  </h2>
                   <p className="muted">
                     <span className={`report-status-pill status-${detail.status}`}>
                       {STATUS_LABEL_RU[detail.status]}
@@ -489,7 +465,7 @@ export function ProjectReports() {
                           "reopen",
                           undefined,
                           "Снова черновик",
-                          "Можно править описания и отправить ещё раз"
+                          "Можно отправить повторно"
                         )
                       }
                     >
@@ -541,12 +517,6 @@ export function ProjectReports() {
                 </div>
               ) : null}
 
-              {isAgency && detail.status === "draft" ? (
-                <p className="report-edit-hint">
-                  Раскройте задачу, опишите что сделано и при необходимости приложите файлы.
-                </p>
-              ) : null}
-
               {detail.status === "disputed" && detail.client_comment ? (
                 <div className="report-dispute-banner">
                   <strong>Комментарий клиента:</strong> {detail.client_comment}
@@ -563,7 +533,7 @@ export function ProjectReports() {
                 </div>
               ) : null}
 
-              {showDispute && detail.tasks ? (
+              {showDispute ? (
                 <div className="connect-panel stack report-dispute-form">
                   <h3 className="section-title">Оспорить отчёт</h3>
                   <p className="muted">Выберите задачи с вопросами и опишите претензию.</p>
@@ -574,11 +544,10 @@ export function ProjectReports() {
                       value={disputeComment}
                       onChange={(e) => setDisputeComment(e.target.value)}
                       placeholder="Что не так?"
-                      required
                     />
                   </div>
                   <ul className="report-task-checkboxes">
-                    {detail.tasks.map((t) => (
+                    {allDisputeTasks.map((t) => (
                       <li key={t.id}>
                         <label>
                           <input
@@ -586,7 +555,10 @@ export function ProjectReports() {
                             checked={selectedTasks.has(t.id)}
                             onChange={() => toggleTask(t.id)}
                           />
-                          <span>{t.title}</span>
+                          <span>
+                            {t.title}
+                            <span className="muted"> · {t.projectName}</span>
+                          </span>
                           <span className="muted">{formatDuration(t.tracked_seconds)}</span>
                         </label>
                       </li>
@@ -604,21 +576,55 @@ export function ProjectReports() {
                 </div>
               ) : null}
 
-              <div className="report-task-cards">
-                {(detail.tasks || []).map((t) => (
-                  <ReportTaskCard
-                    key={t.id}
-                    task={t}
-                    editable={linesEditable}
-                    token={token!}
-                    reportId={detail.id}
-                    onUpdated={(report) => {
-                      setDetail(report);
-                      void loadList();
-                    }}
-                    onError={setError}
-                  />
-                ))}
+              <div className="report-project-blocks">
+                {(detail.projects_detail || []).map((block) => {
+                  const open = expandedProjects.has(block.id);
+                  return (
+                    <article
+                      key={block.id}
+                      className={`report-project-block${open ? " is-open" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        className="report-project-block-head"
+                        onClick={() => toggleExpand(block.id)}
+                      >
+                        <span className="report-project-block-title">{block.name}</span>
+                        <span className="report-project-block-meta">
+                          {block.tasks.length} задач ·{" "}
+                          {formatDuration(block.total_tracked_seconds)}
+                          <span className="report-task-chevron">{open ? "▾" : "▸"}</span>
+                        </span>
+                      </button>
+                      {open ? (
+                        <div className="report-project-block-body">
+                          {block.tasks.map((t) => (
+                            <div key={t.id} className="report-outcome-row">
+                              <div className="report-outcome-row-head">
+                                <Link to={`/tasks/${t.id}`}>{t.title}</Link>
+                                <span className="muted">
+                                  {STATUS_LABEL[t.status]} ·{" "}
+                                  {formatDuration(t.tracked_seconds)}
+                                </span>
+                              </div>
+                              {t.outcome?.trim() ? (
+                                <p className="report-outcome-text">{t.outcome}</p>
+                              ) : (
+                                <p className="muted report-outcome-empty">
+                                  Итог не указан
+                                  {t.status !== "done" ? " (задача ещё не завершена)" : ""}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                          {block.tasks.length === 0 ? (
+                            <p className="muted">В проекте пока нет задач</p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
               </div>
 
               {detail.events && detail.events.length > 0 ? (

@@ -199,6 +199,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "portal_id",
             "title",
             "description",
+            "outcome",
             "due_date",
             "status",
             "is_important",
@@ -430,10 +431,12 @@ class WorkReportDisputeItemSerializer(serializers.ModelSerializer):
 
 
 class WorkReportSerializer(serializers.ModelSerializer):
-    project_name = serializers.CharField(source="project.name", read_only=True)
-    portal_id = serializers.IntegerField(source="project.portal_id", read_only=True)
+    portal_id = serializers.SerializerMethodField()
+    portal_name = serializers.SerializerMethodField()
+    project_ids = serializers.SerializerMethodField()
+    project_names = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
-    tasks = serializers.SerializerMethodField()
+    projects_detail = serializers.SerializerMethodField()
     total_tracked_seconds = serializers.SerializerMethodField()
     deal_hours = serializers.SerializerMethodField()
     events = WorkReportEventSerializer(many=True, read_only=True)
@@ -444,9 +447,11 @@ class WorkReportSerializer(serializers.ModelSerializer):
         model = WorkReport
         fields = (
             "id",
-            "project",
-            "project_name",
             "portal_id",
+            "portal_name",
+            "project",
+            "project_ids",
+            "project_names",
             "status",
             "created_by",
             "created_by_name",
@@ -457,31 +462,37 @@ class WorkReportSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "is_active",
-            "tasks",
+            "projects_detail",
             "total_tracked_seconds",
             "deal_hours",
             "events",
             "dispute_items",
         )
-        read_only_fields = (
-            "id",
-            "status",
-            "created_by",
-            "created_by_name",
-            "client_comment",
-            "sent_at",
-            "accepted_at",
-            "paid_at",
-            "created_at",
-            "updated_at",
-            "is_active",
-            "tasks",
-            "total_tracked_seconds",
-            "deal_hours",
-            "events",
-            "dispute_items",
-            "project_name",
-            "portal_id",
+        read_only_fields = fields
+
+    def get_portal_id(self, obj):
+        from board.reports import report_portal_id
+
+        return report_portal_id(obj)
+
+    def get_portal_name(self, obj):
+        if obj.portal_id:
+            return obj.portal.name or obj.portal.domain
+        if obj.project_id:
+            return obj.project.portal.name or obj.project.portal.domain
+        return ""
+
+    def get_project_ids(self, obj):
+        from board.reports import report_project_ids
+
+        return report_project_ids(obj)
+
+    def get_project_names(self, obj):
+        ids = self.get_project_ids(obj)
+        if not ids:
+            return []
+        return list(
+            Project.objects.filter(id__in=ids).order_by("name").values_list("name", flat=True)
         )
 
     def get_created_by_name(self, obj):
@@ -489,37 +500,44 @@ class WorkReportSerializer(serializers.ModelSerializer):
             return obj.created_by.display_name
         return ""
 
-    def get_tasks(self, obj):
-        from board.reports import report_task_rows
+    def get_projects_detail(self, obj):
+        from board.reports import report_projects_payload
 
-        return report_task_rows(obj)
+        return report_projects_payload(obj)
 
     def get_total_tracked_seconds(self, obj):
-        from board.reports import live_total_seconds
+        from board.reports import live_total_seconds_for_projects, report_project_ids
 
-        return live_total_seconds(obj.project_id)
+        return live_total_seconds_for_projects(report_project_ids(obj))
 
     def get_deal_hours(self, obj):
-        from board.reports import deal_hours_for_portal
+        from board.reports import deal_hours_for_portal, report_portal_id
 
-        return deal_hours_for_portal(obj.project.portal_id)
+        pid = report_portal_id(obj)
+        return deal_hours_for_portal(pid) if pid else None
 
 
 class WorkReportListSerializer(serializers.ModelSerializer):
-    project_name = serializers.CharField(source="project.name", read_only=True)
-    portal_id = serializers.IntegerField(source="project.portal_id", read_only=True)
+    portal_id = serializers.SerializerMethodField()
+    portal_name = serializers.SerializerMethodField()
+    project_ids = serializers.SerializerMethodField()
+    project_names = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
     total_tracked_seconds = serializers.SerializerMethodField()
     is_active = serializers.BooleanField(read_only=True)
     dispute_count = serializers.SerializerMethodField()
+    projects_count = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkReport
         fields = (
             "id",
-            "project",
-            "project_name",
             "portal_id",
+            "portal_name",
+            "project",
+            "project_ids",
+            "project_names",
+            "projects_count",
             "status",
             "created_by",
             "created_by_name",
@@ -535,15 +553,43 @@ class WorkReportListSerializer(serializers.ModelSerializer):
         )
         read_only_fields = fields
 
+    def get_portal_id(self, obj):
+        from board.reports import report_portal_id
+
+        return report_portal_id(obj)
+
+    def get_portal_name(self, obj):
+        if obj.portal_id:
+            return obj.portal.name or obj.portal.domain
+        if obj.project_id:
+            return obj.project.portal.name or obj.project.portal.domain
+        return ""
+
+    def get_project_ids(self, obj):
+        from board.reports import report_project_ids
+
+        return report_project_ids(obj)
+
+    def get_project_names(self, obj):
+        ids = self.get_project_ids(obj)
+        if not ids:
+            return []
+        return list(
+            Project.objects.filter(id__in=ids).order_by("name").values_list("name", flat=True)
+        )
+
+    def get_projects_count(self, obj):
+        return len(self.get_project_ids(obj))
+
     def get_created_by_name(self, obj):
         if obj.created_by:
             return obj.created_by.display_name
         return ""
 
     def get_total_tracked_seconds(self, obj):
-        from board.reports import live_total_seconds
+        from board.reports import live_total_seconds_for_projects, report_project_ids
 
-        return live_total_seconds(obj.project_id)
+        return live_total_seconds_for_projects(report_project_ids(obj))
 
     def get_dispute_count(self, obj):
         if hasattr(obj, "_dispute_count"):

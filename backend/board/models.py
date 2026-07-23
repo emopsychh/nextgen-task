@@ -51,6 +51,8 @@ class Task(models.Model):
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.TODO)
     # Bitrix «Важная задача» → PRIORITY high (2). Two-way synced.
     is_important = models.BooleanField(default=False)
+    # Outcome filled when completing the task; shown in work reports.
+    outcome = models.TextField(blank=True)
     bitrix_task_id = models.CharField(max_length=64, blank=True, db_index=True)
     agency_bitrix_task_id = models.CharField(max_length=64, blank=True, db_index=True)
     sync_status = models.CharField(
@@ -179,7 +181,23 @@ class WorkReport(models.Model):
 
     ACTIVE_STATUSES = (Status.DRAFT, Status.PENDING_CLIENT, Status.DISPUTED)
 
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="work_reports")
+    # Client portal this report belongs to (may cover several projects).
+    portal = models.ForeignKey(
+        Portal,
+        on_delete=models.CASCADE,
+        related_name="work_reports",
+        null=True,
+        blank=True,
+    )
+    projects = models.ManyToManyField(Project, related_name="work_reports_m2m", blank=True)
+    # Legacy single-project link — kept briefly for migration; prefer `projects`.
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="work_reports",
+        null=True,
+        blank=True,
+    )
     status = models.CharField(
         max_length=32, choices=Status.choices, default=Status.DRAFT, db_index=True
     )
@@ -201,7 +219,7 @@ class WorkReport(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"WorkReport#{self.pk} project={self.project_id} {self.status}"
+        return f"WorkReport#{self.pk} portal={self.portal_id} {self.status}"
 
     @property
     def is_active(self) -> bool:

@@ -17,6 +17,7 @@ function fingerprint(task: Task): string {
     task.status,
     task.title,
     task.description || "",
+    task.outcome || "",
     task.due_date || "",
     task.comments_count ?? 0,
     task.last_comment_id ?? 0,
@@ -37,7 +38,11 @@ type Options = {
   enabled?: boolean;
   draftTitle: string;
   draftDescription: string;
-  onUpdate: (task: Task, drafts: { title?: string; description?: string }) => void;
+  draftOutcome: string;
+  onUpdate: (
+    task: Task,
+    drafts: { title?: string; description?: string; outcome?: string }
+  ) => void;
 };
 
 /**
@@ -51,11 +56,18 @@ export function useTaskLiveSync({
   enabled = true,
   draftTitle,
   draftDescription,
+  draftOutcome,
   onUpdate,
 }: Options) {
   const onUpdateRef = useRef(onUpdate);
-  const draftRef = useRef({ title: draftTitle, description: draftDescription });
-  const serverRef = useRef<{ title: string; description: string } | null>(null);
+  const draftRef = useRef({
+    title: draftTitle,
+    description: draftDescription,
+    outcome: draftOutcome,
+  });
+  const serverRef = useRef<{ title: string; description: string; outcome: string } | null>(
+    null
+  );
   const fpRef = useRef<string>("");
   const pullNowRef = useRef(false);
   // Ignore in-flight polls that raced a local PATCH (e.g. Complete → done
@@ -63,13 +75,18 @@ export function useTaskLiveSync({
   const updatedAtRef = useRef<string>("");
 
   onUpdateRef.current = onUpdate;
-  draftRef.current = { title: draftTitle, description: draftDescription };
+  draftRef.current = {
+    title: draftTitle,
+    description: draftDescription,
+    outcome: draftOutcome,
+  };
 
   useEffect(() => {
     if (!task) return;
     serverRef.current = {
       title: task.title,
       description: task.description || "",
+      outcome: task.outcome || "",
     };
     fpRef.current = fingerprint(task);
     if (task.updated_at && (!updatedAtRef.current || task.updated_at >= updatedAtRef.current)) {
@@ -122,7 +139,7 @@ export function useTaskLiveSync({
         const fp = fingerprint(data);
         if (fp === fpRef.current) return;
 
-        const drafts: { title?: string; description?: string } = {};
+        const drafts: { title?: string; description?: string; outcome?: string } = {};
         const prevServer = serverRef.current;
         const local = draftRef.current;
         if (prevServer && local.title === prevServer.title) {
@@ -130,6 +147,9 @@ export function useTaskLiveSync({
         }
         if (prevServer && local.description === prevServer.description) {
           drafts.description = data.description || "";
+        }
+        if (prevServer && local.outcome === prevServer.outcome) {
+          drafts.outcome = data.outcome || "";
         }
         if (data.updated_at) updatedAtRef.current = data.updated_at;
         onUpdateRef.current(data, drafts);

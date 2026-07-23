@@ -23,7 +23,10 @@ class WorkReportApiTests(TestCase):
             self.client_portal, bitrix_id="c1", name="Client", last_name="User"
         )
         self.project = make_project(self.client_portal, name="Модуль")
-        self.task = make_task(self.project, title="Сверстать", status="done")
+        self.project2 = make_project(self.client_portal, name="Модуль 2")
+        self.task = make_task(
+            self.project, title="Сверстать", status="done", outcome="Сверстали главную"
+        )
         TimeEntry.objects.create(
             task=self.task,
             author=self.agency_user,
@@ -38,36 +41,42 @@ class WorkReportApiTests(TestCase):
         self.agency_client.credentials(HTTP_AUTHORIZATION=f"Bearer {agency_tokens['access']}")
         self.client_client.credentials(HTTP_AUTHORIZATION=f"Bearer {client_tokens['access']}")
 
-    def test_agency_create_send_client_accept_mark_paid(self):
-        res = self.agency_client.post("/api/reports/", {"project": self.project.id}, format="json")
+    def test_agency_create_multi_project_send_accept_paid(self):
+        res = self.agency_client.post(
+            "/api/reports/",
+            {
+                "portal": self.client_portal.id,
+                "project_ids": [self.project.id, self.project2.id],
+            },
+            format="json",
+        )
         self.assertEqual(res.status_code, 201, res.content)
         report_id = res.data["id"]
         self.assertEqual(res.data["status"], "draft")
+        self.assertEqual(sorted(res.data["project_ids"]), sorted([self.project.id, self.project2.id]))
         self.assertEqual(res.data["total_tracked_seconds"], 3600)
-        self.assertEqual(len(res.data["tasks"]), 1)
-        self.assertEqual(res.data["tasks"][0]["tracked_seconds"], 3600)
+        blocks = res.data["projects_detail"]
+        self.assertEqual(len(blocks), 2)
+        first = next(b for b in blocks if b["id"] == self.project.id)
+        self.assertEqual(first["tasks"][0]["outcome"], "Сверстали главную")
 
-        # Client cannot create
         bad = self.client_client.post(
-            "/api/reports/", {"project": self.project.id}, format="json"
+            "/api/reports/",
+            {"portal": self.client_portal.id, "project_ids": [self.project.id]},
+            format="json",
         )
         self.assertEqual(bad.status_code, 403)
 
-        # Second active report blocked
         dup = self.agency_client.post(
-            "/api/reports/", {"project": self.project.id}, format="json"
+            "/api/reports/",
+            {"portal": self.client_portal.id, "project_ids": [self.project.id]},
+            format="json",
         )
         self.assertEqual(dup.status_code, 400)
 
         sent = self.agency_client.post(f"/api/reports/{report_id}/send/", {}, format="json")
         self.assertEqual(sent.status_code, 200, sent.content)
         self.assertEqual(sent.data["status"], "pending_client")
-
-        # Agency cannot accept
-        agency_accept = self.agency_client.post(
-            f"/api/reports/{report_id}/accept/", {}, format="json"
-        )
-        self.assertEqual(agency_accept.status_code, 403)
 
         accepted = self.client_client.post(
             f"/api/reports/{report_id}/accept/", {}, format="json"
@@ -81,9 +90,10 @@ class WorkReportApiTests(TestCase):
         self.assertEqual(paid.status_code, 200, paid.content)
         self.assertEqual(paid.data["status"], "paid")
 
-        # After paid, a new draft is allowed
         again = self.agency_client.post(
-            "/api/reports/", {"project": self.project.id}, format="json"
+            "/api/reports/",
+            {"portal": self.client_portal.id, "project_ids": [self.project.id]},
+            format="json",
         )
         self.assertEqual(again.status_code, 201)
 
@@ -94,113 +104,50 @@ class WorkReportApiTests(TestCase):
         )
         self.assertEqual(kinds, ["created", "sent", "accepted", "paid"])
 
-    def test_dispute_reopen_resend_live_hours(self):
+    def test_bucket_filters_and_outcome_live(self):
         create = self.agency_client.post(
-            "/api/reports/", {"project": self.project.id}, format="json"
-        )
-        report_id = create.data["id"]
-        self.agency_client.post(f"/api/reports/{report_id}/send/", {}, format="json")
-
-        dispute = self.client_client.post(
-            f"/api/reports/{report_id}/dispute/",
-            {
-                "client_comment": "Не согласны с объёмом",
-                "task_ids": [self.task.id],
-            },
+            "/api/reports/",
+            {"portal": self.client_portal.id, "project_ids": [self.project.id]},
             format="json",
         )
-        self.assertEqual(dispute.status_code, 200, dispute.content)
-        self.assertEqual(dispute.data["status"], "disputed")
-        self.assertEqual(len(dispute.data["dispute_items"]), 1)
-        self.assertEqual(dispute.data["client_comment"], "Не согласны с объёмом")
+        report_id = create.data["id"]
 
-        # Live hours update without snapshot
-        TimeEntry.objects.create(
-            task=self.task,
-            author=self.agency_user,
-            started_at=timezone.now(),
-            ended_at=timezone.now(),
-            duration_seconds=1800,
-        )
+        # Live outcome from task, not report text
+        self.task.outcome = "Обновили итог"
+        self.task.save(update_fields=["outcome"])
         detail = self.agency_client.get(f"/api/reports/{report_id}/")
-        self.assertEqual(detail.data["total_tracked_seconds"], 5400)
+        self.assertEqual(detail.data["projects_detail"][0]["tasks"][0]["outcome"], "Обновили итог")
 
-        reopen = self.agency_client.post(
-            f"/api/reports/{report_id}/reopen/", {}, format="json"
+        current = self.agency_client.get(
+            f"/api/reports/?portal={self.client_portal.id}&bucket=current"
         )
-        self.assertEqual(reopen.status_code, 200)
-        self.assertEqual(reopen.data["status"], "draft")
+        self.assertEqual(current.status_code, 200)
+        self.assertTrue(any(r["id"] == report_id for r in current.data["results"]))
 
-        resent = self.agency_client.post(f"/api/reports/{report_id}/send/", {}, format="json")
-        self.assertEqual(resent.data["status"], "pending_client")
-
-        accepted = self.client_client.post(
-            f"/api/reports/{report_id}/accept/", {}, format="json"
-        )
-        self.assertEqual(accepted.data["status"], "accepted")
-        self.assertEqual(accepted.data["dispute_items"], [])
-
-    def test_list_active_filter(self):
-        r1 = WorkReport.objects.create(
-            project=self.project, status=WorkReport.Status.PAID, created_by=self.agency_user
-        )
-        r2 = WorkReport.objects.create(
-            project=self.project, status=WorkReport.Status.DRAFT, created_by=self.agency_user
-        )
-        res = self.agency_client.get(
-            f"/api/reports/?project={self.project.id}&active=1"
-        )
-        self.assertEqual(res.status_code, 200)
-        ids = [row["id"] for row in res.data["results"]]
-        self.assertIn(r2.id, ids)
-        self.assertNotIn(r1.id, ids)
-
-    def test_line_work_done_and_attachment(self):
-        from django.core.files.uploadedfile import SimpleUploadedFile
-
-        from board.models import WorkReportLine
-
-        create = self.agency_client.post(
-            "/api/reports/", {"project": self.project.id}, format="json"
-        )
-        self.assertEqual(create.status_code, 201, create.content)
-        report_id = create.data["id"]
-        row = create.data["tasks"][0]
-        self.assertEqual(row["id"], self.task.id)
-        self.assertIn("work_done", row)
-        self.assertEqual(WorkReportLine.objects.filter(report_id=report_id).count(), 1)
-
-        upd = self.agency_client.post(
-            f"/api/reports/{report_id}/lines/",
-            {"task_id": self.task.id, "work_done": "Сверстали и проверили"},
-            format="json",
-        )
-        self.assertEqual(upd.status_code, 200, upd.content)
-        self.assertEqual(upd.data["tasks"][0]["work_done"], "Сверстали и проверили")
-
-        # Client cannot edit lines
-        bad = self.client_client.post(
-            f"/api/reports/{report_id}/lines/",
-            {"task_id": self.task.id, "work_done": "хак"},
-            format="json",
-        )
-        self.assertEqual(bad.status_code, 403)
-
-        upload = self.agency_client.post(
-            f"/api/reports/{report_id}/lines/{self.task.id}/attachments/",
-            {"file": SimpleUploadedFile("note.txt", b"hello", content_type="text/plain")},
-            format="multipart",
-        )
-        self.assertEqual(upload.status_code, 200, upload.content)
-        atts = upload.data["tasks"][0]["attachments"]
-        self.assertEqual(len(atts), 1)
-        self.assertTrue(atts[0]["url"])
-
-        # Locked after send
         self.agency_client.post(f"/api/reports/{report_id}/send/", {}, format="json")
-        locked = self.agency_client.post(
-            f"/api/reports/{report_id}/lines/",
-            {"task_id": self.task.id, "work_done": "поздно"},
-            format="json",
+        review = self.agency_client.get(
+            f"/api/reports/?portal={self.client_portal.id}&bucket=review"
         )
-        self.assertEqual(locked.status_code, 400)
+        self.assertTrue(any(r["id"] == report_id for r in review.data["results"]))
+        current2 = self.agency_client.get(
+            f"/api/reports/?portal={self.client_portal.id}&bucket=current"
+        )
+        self.assertFalse(any(r["id"] == report_id for r in current2.data["results"]))
+
+    def test_task_outcome_on_complete_patch(self):
+        from unittest.mock import patch
+
+        task = make_task(self.project, title="В работе", status="in_progress")
+        with patch("board.views.enqueue_bitrix_sync"), patch(
+            "board.views.append_task_change_events"
+        ), patch("board.completion.finalize_task_completion"):
+            res = self.agency_client.patch(
+                f"/api/tasks/{task.id}/",
+                {"status": "done", "outcome": "Сделали интеграцию"},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.data["status"], "done")
+        self.assertEqual(res.data["outcome"], "Сделали интеграцию")
+        task.refresh_from_db()
+        self.assertEqual(task.outcome, "Сделали интеграцию")

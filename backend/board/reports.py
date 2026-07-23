@@ -9,28 +9,25 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from portals.models import BitrixUser, PortalDealBinding
 
-from .models import (
-    Task,
-    TimeEntry,
-    WorkReport,
-    WorkReportDisputeItem,
-    WorkReportEvent,
-    WorkReportLine,
-)
+from .models import Project, Task, TimeEntry, WorkReport, WorkReportDisputeItem, WorkReportEvent
 from .realtime import publish_portal_event
 
 ACTIVE = WorkReport.ACTIVE_STATUSES
-REPORT_LINE_ATTACH_SALT = "board.report_line_attachment.download.v1"
+
+# List filters for the reports hub UI.
+BUCKET_STATUSES = {
+    "current": (
+        WorkReport.Status.DRAFT,
+        WorkReport.Status.DISPUTED,
+        WorkReport.Status.ACCEPTED,
+    ),
+    "review": (WorkReport.Status.PENDING_CLIENT,),
+    "paid": (WorkReport.Status.PAID,),
+}
 
 
-def sign_report_line_attachment_id(att_id: int) -> str:
-    from django.core import signing
-
-    return signing.dumps(int(att_id), salt=REPORT_LINE_ATTACH_SALT)
-
-
-def project_has_active_report(project_id: int, *, exclude_id: int | None = None) -> bool:
-    qs = WorkReport.objects.filter(project_id=project_id, status__in=ACTIVE)
+def portal_has_active_report(portal_id: int, *, exclude_id: int | None = None) -> bool:
+    qs = WorkReport.objects.filter(portal_id=portal_id, status__in=ACTIVE)
     if exclude_id:
         qs = qs.exclude(pk=exclude_id)
     return qs.exists()
@@ -50,97 +47,11 @@ def append_event(
     )
 
 
-def ensure_report_lines(report: WorkReport) -> None:
-    """Create missing line rows for every project task (idempotent)."""
-    task_ids = list(
-        Task.objects.filter(project_id=report.project_id).values_list("id", flat=True)
-    )
-    if not task_ids:
-        return
-    existing = set(
-        WorkReportLine.objects.filter(report=report).values_list("task_id", flat=True)
-    )
-    missing = [tid for tid in task_ids if tid not in existing]
-    if missing:
-        WorkReportLine.objects.bulk_create(
-            [WorkReportLine(report=report, task_id=tid) for tid in missing]
-        )
-
-
-def report_task_rows(report: WorkReport) -> list[dict]:
-    """Live tasks merged with report lines + attachments."""
-    ensure_report_lines(report)
-    seconds_by_task = {
-        row["task_id"]: int(row["total"] or 0)
-        for row in TimeEntry.objects.filter(task__project_id=report.project_id)
-        .values("task_id")
-        .annotate(total=Sum("duration_seconds"))
-    }
-    lines = {
-        line.task_id: line
-        for line in WorkReportLine.objects.filter(report=report).prefetch_related(
-            "attachments"
-        )
-    }
-    rows = []
-    for task in Task.objects.filter(project_id=report.project_id).order_by(
-        "created_at", "id"
-    ):
-        line = lines.get(task.id)
-        attachments = []
-        if line:
-            for att in line.attachments.all():
-                attachments.append(
-                    {
-                        "id": att.id,
-                        "url": (
-                            f"/api/reports/line-attachments/{att.id}/download/"
-                            f"?t={sign_report_line_attachment_id(att.id)}"
-                            if att.file
-                            else None
-                        ),
-                        "original_name": att.original_name or "",
-                        "created_at": att.created_at.isoformat(),
-                    }
-                )
-        rows.append(
-            {
-                "id": task.id,
-                "line_id": line.id if line else None,
-                "title": task.title,
-                "status": task.status,
-                "tracked_seconds": seconds_by_task.get(task.id, 0),
-                "work_done": line.work_done if line else "",
-                "attachments": attachments,
-            }
-        )
-    return rows
-
-
-def live_task_rows(project_id: int) -> list[dict]:
-    """Current tasks + tracked seconds for a project (no snapshot)."""
-    seconds_by_task = {
-        row["task_id"]: int(row["total"] or 0)
-        for row in TimeEntry.objects.filter(task__project_id=project_id)
-        .values("task_id")
-        .annotate(total=Sum("duration_seconds"))
-    }
-    rows = []
-    for task in Task.objects.filter(project_id=project_id).order_by("created_at", "id"):
-        rows.append(
-            {
-                "id": task.id,
-                "title": task.title,
-                "status": task.status,
-                "tracked_seconds": seconds_by_task.get(task.id, 0),
-            }
-        )
-    return rows
-
-
-def live_total_seconds(project_id: int) -> int:
+def live_total_seconds_for_projects(project_ids: list[int]) -> int:
+    if not project_ids:
+        return 0
     total = (
-        TimeEntry.objects.filter(task__project_id=project_id).aggregate(
+        TimeEntry.objects.filter(task__project_id__in=project_ids).aggregate(
             total=Sum("duration_seconds")
         )["total"]
         or 0
@@ -170,22 +81,81 @@ def deal_hours_for_portal(portal_id: int) -> dict | None:
     }
 
 
+def report_portal_id(report: WorkReport) -> int | None:
+    if report.portal_id:
+        return report.portal_id
+    if report.project_id:
+        return report.project.portal_id
+    return None
+
+
+def report_project_ids(report: WorkReport) -> list[int]:
+    ids = list(report.projects.values_list("id", flat=True))
+    if ids:
+        return ids
+    if report.project_id:
+        return [report.project_id]
+    return []
+
+
+def report_projects_payload(report: WorkReport) -> list[dict]:
+    """Projects → tasks with live hours + task.outcome (no per-report text)."""
+    project_ids = report_project_ids(report)
+    if not project_ids:
+        return []
+
+    seconds_by_task = {
+        row["task_id"]: int(row["total"] or 0)
+        for row in TimeEntry.objects.filter(task__project_id__in=project_ids)
+        .values("task_id")
+        .annotate(total=Sum("duration_seconds"))
+    }
+
+    blocks = []
+    for project in Project.objects.filter(id__in=project_ids).order_by("name", "id"):
+        tasks = []
+        total = 0
+        for task in Task.objects.filter(project=project).order_by("created_at", "id"):
+            secs = seconds_by_task.get(task.id, 0)
+            total += secs
+            tasks.append(
+                {
+                    "id": task.id,
+                    "title": task.title,
+                    "status": task.status,
+                    "tracked_seconds": secs,
+                    "outcome": task.outcome or "",
+                }
+            )
+        blocks.append(
+            {
+                "id": project.id,
+                "name": project.name,
+                "total_tracked_seconds": total,
+                "tasks": tasks,
+            }
+        )
+    return blocks
+
+
 def refresh_report(report: WorkReport) -> WorkReport:
     return (
-        WorkReport.objects.select_related("project", "project__portal", "created_by")
+        WorkReport.objects.select_related("portal", "project", "project__portal", "created_by")
         .prefetch_related(
+            "projects",
             "events__actor",
             "dispute_items__task",
-            "lines__attachments",
-            "lines__task",
         )
         .get(pk=report.pk)
     )
 
 
 def publish_report_event(report: WorkReport, kind: str) -> None:
+    portal_id = report_portal_id(report)
+    if not portal_id:
+        return
     publish_portal_event(
-        report.project.portal_id,
+        portal_id,
         {
             "kind": kind,
             "report_id": report.id,
@@ -195,43 +165,43 @@ def publish_report_event(report: WorkReport, kind: str) -> None:
     )
 
 
-def require_draft_editable(report: WorkReport) -> None:
-    if report.status != WorkReport.Status.DRAFT:
-        raise ValidationError(
-            {"detail": "Редактировать описание и файлы можно только в черновике."}
-        )
-
-
 @transaction.atomic
-def upsert_line_work_done(
-    report: WorkReport, task_id: int, work_done: str
-) -> WorkReportLine:
-    require_draft_editable(report)
-    if not Task.objects.filter(project_id=report.project_id, pk=task_id).exists():
-        raise ValidationError({"task_id": "Задача не принадлежит этому проекту."})
-    ensure_report_lines(report)
-    line, _ = WorkReportLine.objects.get_or_create(report=report, task_id=task_id)
-    line.work_done = (work_done or "").strip()
-    line.save(update_fields=["work_done", "updated_at"])
-    publish_report_event(report, "report_line_updated")
-    return line
-
-
-@transaction.atomic
-def create_report(project, actor: BitrixUser | None) -> WorkReport:
-    if project_has_active_report(project.id):
+def create_report(
+    portal,
+    project_ids: list[int],
+    actor: BitrixUser | None,
+) -> WorkReport:
+    if portal_has_active_report(portal.id):
         raise ValidationError(
-            {"detail": "У проекта уже есть активный отчёт. Закройте или завершите его."}
+            {"detail": "У клиента уже есть активный отчёт. Закройте или завершите его."}
         )
+    if not project_ids:
+        raise ValidationError({"project_ids": "Выберите хотя бы один проект."})
+
+    projects = list(
+        Project.objects.filter(portal=portal, id__in=project_ids).order_by("id")
+    )
+    found = {p.id for p in projects}
+    missing = [pid for pid in project_ids if pid not in found]
+    if missing:
+        raise ValidationError({"project_ids": "Проекты не принадлежат этому клиенту."})
+
     report = WorkReport.objects.create(
-        project=project,
+        portal=portal,
+        project=projects[0],
         status=WorkReport.Status.DRAFT,
         created_by=actor,
     )
-    ensure_report_lines(report)
-    append_event(report, WorkReportEvent.Kind.CREATED, actor)
+    report.projects.set(projects)
+    append_event(
+        report,
+        WorkReportEvent.Kind.CREATED,
+        actor,
+        payload={"project_ids": [p.id for p in projects]},
+    )
     publish_report_event(report, "report_created")
     return refresh_report(report)
+
 
 @transaction.atomic
 def send_to_client(report: WorkReport, actor: BitrixUser | None) -> WorkReport:
@@ -278,14 +248,15 @@ def dispute_report(
     if not task_ids:
         raise ValidationError({"task_ids": "Выберите хотя бы одну задачу."})
 
+    project_ids = report_project_ids(report)
     project_task_ids = set(
-        Task.objects.filter(project_id=report.project_id, id__in=task_ids).values_list(
+        Task.objects.filter(project_id__in=project_ids, id__in=task_ids).values_list(
             "id", flat=True
         )
     )
     missing = [tid for tid in task_ids if tid not in project_task_ids]
     if missing:
-        raise ValidationError({"task_ids": "Задачи не принадлежат этому проекту."})
+        raise ValidationError({"task_ids": "Задачи не принадлежат проектам отчёта."})
 
     notes_by_task = notes_by_task or {}
     WorkReportDisputeItem.objects.filter(report=report).delete()
@@ -333,6 +304,7 @@ def mark_paid(report: WorkReport, actor: BitrixUser | None) -> WorkReport:
     append_event(report, WorkReportEvent.Kind.PAID, actor)
     publish_report_event(report, "report_paid")
     return refresh_report(report)
+
 
 def require_agency(user) -> None:
     if not getattr(user, "is_agency", False):

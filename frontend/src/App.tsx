@@ -81,6 +81,8 @@ export default function App() {
       <Route element={<AppLayout />}>
         <Route index element={isAgency ? <AgencyHome /> : <ClientProjects />} />
         <Route path="portals/:portalId/projects" element={<ClientProjects />} />
+        <Route path="portals/:portalId/reports/:reportId?" element={<ProjectReports />} />
+        <Route path="reports/:reportId?" element={<ProjectReports />} />
         <Route path="projects/:projectId" element={<ProjectTasks />} />
         <Route path="projects/:projectId/reports" element={<ProjectReports />} />
         <Route path="tasks/:taskId" element={<TaskDetail />} />

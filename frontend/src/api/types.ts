@@ -83,6 +83,7 @@ export type Task = {
   portal_id: number;
   title: string;
   description: string;
+  outcome?: string;
   due_date: string | null;
   status: TaskStatus;
   is_important?: boolean;
@@ -152,12 +153,17 @@ export type WorkReportStatus =
 
 export type WorkReportTaskRow = {
   id: number;
-  line_id?: number | null;
   title: string;
   status: TaskStatus;
   tracked_seconds: number;
-  work_done?: string;
-  attachments?: Attachment[];
+  outcome?: string;
+};
+
+export type WorkReportProjectBlock = {
+  id: number;
+  name: string;
+  total_tracked_seconds: number;
+  tasks: WorkReportTaskRow[];
 };
 
 export type WorkReportEvent = {
@@ -186,9 +192,12 @@ export type WorkReportDealHours = {
 
 export type WorkReport = {
   id: number;
-  project: number;
-  project_name: string;
   portal_id: number;
+  portal_name?: string;
+  project?: number | null;
+  project_ids?: number[];
+  project_names?: string[];
+  projects_count?: number;
   status: WorkReportStatus;
   created_by: number | null;
   created_by_name: string;
@@ -199,7 +208,7 @@ export type WorkReport = {
   created_at: string;
   updated_at: string;
   is_active: boolean;
-  tasks?: WorkReportTaskRow[];
+  projects_detail?: WorkReportProjectBlock[];
   total_tracked_seconds: number;
   deal_hours?: WorkReportDealHours;
   events?: WorkReportEvent[];

@@ -10,6 +10,7 @@ import {
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
+import { TaskCompleteModal } from "../../components/TaskCompleteModal";
 import { TaskGlyph } from "../../components/icons";
 import { TaskComposer } from "../../components/task/TaskComposer";
 import { TaskSummaryCard } from "../../components/task/TaskSummaryCard";
@@ -39,6 +40,7 @@ function normalizePendingFiles(files: File[]): File[] {
 type TaskPatch = Partial<{
   title: string;
   description: string;
+  outcome: string;
   status: TaskStatus;
   due_date: string | null;
   is_important: boolean;
@@ -73,6 +75,8 @@ export function TaskDetail() {
   const [saveBusy, setSaveBusy] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftDescription, setDraftDescription] = useState("");
+  const [draftOutcome, setDraftOutcome] = useState("");
+  const [completeOpen, setCompleteOpen] = useState(false);
   const [compactTask, setCompactTask] = useState(false);
 
   const canEditDueDate =
@@ -92,6 +96,7 @@ export function TaskDetail() {
     setTask(data);
     setDraftTitle(data.title);
     setDraftDescription(data.description || "");
+    setDraftOutcome(data.outcome || "");
   }
 
   // --- Chat thread: loaded lazily & paginated (never inlined on the task) ---
@@ -254,10 +259,12 @@ export function TaskDetail() {
     portalId: task?.portal_id ?? portal?.id ?? null,
     draftTitle,
     draftDescription,
+    draftOutcome,
     onUpdate: (data, drafts) => {
       setTask(data);
       if (drafts.title !== undefined) setDraftTitle(drafts.title);
       if (drafts.description !== undefined) setDraftDescription(drafts.description);
+      if (drafts.outcome !== undefined) setDraftOutcome(drafts.outcome);
       void reconcileThread(data);
     },
   });
@@ -356,8 +363,19 @@ export function TaskDetail() {
     await patchTask({ description }, "Описание обновлено");
   }
 
+  async function commitOutcome() {
+    if (!task || !canManage) return;
+    const outcome = draftOutcome;
+    if (outcome === (task.outcome || "")) return;
+    await patchTask({ outcome }, "Итог обновлён");
+  }
+
   async function setStatus(status: TaskStatus) {
     if (!token || !task || !canChangeStatus || task.status === status) return;
+    if (status === "done") {
+      setCompleteOpen(true);
+      return;
+    }
     // Optimistic UI so a slow in-flight ?pull=1 cannot flash the old status
     // back over Complete/Pause before the PATCH response arrives.
     const prev = task;
@@ -374,10 +392,41 @@ export function TaskDetail() {
       setTask(updated);
       setDraftTitle(updated.title);
       setDraftDescription(updated.description || "");
+      setDraftOutcome(updated.outcome || "");
       window.dispatchEvent(new Event("projects-updated"));
     } catch (err) {
       setTask(prev);
       setError(err instanceof Error ? err.message : "Не удалось сохранить");
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
+  async function completeWithOutcome(outcome: string) {
+    if (!token || !task || !canChangeStatus) return;
+    const prev = task;
+    const optimisticAt = new Date().toISOString();
+    setTask({ ...task, status: "done", outcome, updated_at: optimisticAt });
+    setDraftOutcome(outcome);
+    setSaveBusy(true);
+    setError(null);
+    try {
+      const updated = await api<Task>(
+        `/api/tasks/${task.id}/`,
+        { method: "PATCH", body: JSON.stringify({ status: "done", outcome }) },
+        token
+      );
+      setTask(updated);
+      setDraftTitle(updated.title);
+      setDraftDescription(updated.description || "");
+      setDraftOutcome(updated.outcome || "");
+      setCompleteOpen(false);
+      window.dispatchEvent(new Event("projects-updated"));
+      toast.show("Итог сохранён в задаче и попадёт в отчёт", "Задача завершена");
+    } catch (err) {
+      setTask(prev);
+      setDraftOutcome(prev.outcome || "");
+      setError(err instanceof Error ? err.message : "Не удалось завершить");
     } finally {
       setSaveBusy(false);
     }
@@ -557,6 +606,15 @@ export function TaskDetail() {
 
       <FlashToast message={toast.message} leaving={toast.leaving} />
 
+      <TaskCompleteModal
+        open={completeOpen}
+        taskTitle={task.title}
+        initialOutcome={task.outcome || ""}
+        busy={saveBusy}
+        onCancel={() => !saveBusy && setCompleteOpen(false)}
+        onConfirm={(outcome) => void completeWithOutcome(outcome)}
+      />
+
       <section className="messenger">
         <button
           type="button"
@@ -605,8 +663,12 @@ export function TaskDetail() {
             onCommitTitle={() => void commitTitle()}
             onCommitDescription={() => void commitDescription()}
             onSetStatus={(s) => void setStatus(s)}
+            onRequestComplete={() => setCompleteOpen(true)}
             onSetDueDate={(iso) => void setDueDate(iso)}
             onToggleImportant={() => void toggleImportant()}
+            draftOutcome={draftOutcome}
+            onDraftOutcome={setDraftOutcome}
+            onCommitOutcome={() => void commitOutcome()}
           />
 
           {hasMore ? (
