@@ -4654,10 +4654,8 @@ a.task-card.is-done:hover,
   text-align: center;
 }
 
-.report-task-card-body {
-  padding: 0 16px 16px;
-  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-  padding-top: 14px;
+.report-task-card-body textarea {
+  resize: none;
 }
 
 .report-work-done {

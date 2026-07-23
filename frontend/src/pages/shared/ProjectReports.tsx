@@ -50,9 +50,7 @@ function ReportTaskCard({
   onError: (msg: string) => void;
 }) {
   const [workDone, setWorkDone] = useState(task.work_done || "");
-  const [expanded, setExpanded] = useState(
-    Boolean(task.work_done) || (task.attachments && task.attachments.length > 0) || editable
-  );
+  const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
