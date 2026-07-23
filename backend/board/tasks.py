@@ -150,6 +150,21 @@ def _normalize_local(status: str) -> str:
     return status if status in ("todo", "in_progress", "done") else "todo"
 
 
+def _stop_bitrix_timer_quiet(client: BitrixClient, bitrix_task_id: str) -> None:
+    """Best-effort stop of the Bitrix «Учёт времени» timer.
+
+    Pausing/completing a task whose day-plan timer is still running does not
+    stick in Bitrix — the live timer keeps the task "in progress". Stop it as
+    part of the status transition so pause/complete are not reverted.
+    """
+    try:
+        client.pause_task_timer(bitrix_task_id)
+    except BitrixAPIError as exc:
+        logger.info("pauseTimer during status change failed task=%s: %s", bitrix_task_id, exc)
+    except Exception as exc:  # never block a status change on timer noise
+        logger.info("pauseTimer during status change error task=%s: %s", bitrix_task_id, exc)
+
+
 def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local: str) -> None:
     """Bring Bitrix task to the local status using official action methods."""
     target = _normalize_local(target_local)
@@ -178,6 +193,10 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         current = refreshed if refreshed is not None else BITRIX_STATUS_PENDING
 
     if target == "todo":
+        # A running Bitrix «Учёт времени» timer keeps the task "in progress" and
+        # would immediately revert tasks.task.pause. Stop it first so the pause
+        # actually sticks (otherwise the task auto-restarts on the next pull).
+        _stop_bitrix_timer_quiet(client, bitrix_task_id)
         if current == BITRIX_STATUS_IN_PROGRESS:
             client.pause_task(bitrix_task_id)
         return
@@ -193,7 +212,8 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
                 pass
         return
 
-    # target == done
+    # target == done — stop the timer first, same reason as pause.
+    _stop_bitrix_timer_quiet(client, bitrix_task_id)
     if current in (BITRIX_STATUS_PENDING, BITRIX_STATUS_DEFERRED):
         try:
             client.start_task(bitrix_task_id)

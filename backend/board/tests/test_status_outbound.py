@@ -50,6 +50,8 @@ class OutboundStatusPushTests(TestCase):
             res = board_tasks.sync_task_to_bitrix(task.id)
         self.assertTrue(res["ok"])
         client.pause_task.assert_called_once()
+        # Timer must be stopped too, or the pause won't stick in Bitrix.
+        client.pause_task_timer.assert_called()
         task.refresh_from_db()
         self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
 
@@ -67,6 +69,7 @@ class OutboundStatusPushTests(TestCase):
             res = board_tasks.sync_task_to_bitrix(task.id)
         self.assertTrue(res["ok"])
         client.complete_task.assert_called_once()
+        client.pause_task_timer.assert_called()
 
     def test_agency_responsible_is_agency_oauth_user_not_client_author(self):
         # Regression: agency subtask must be owned by the agency OAuth user, so
