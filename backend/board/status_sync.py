@@ -611,56 +611,137 @@ def apply_inbound_deadline(task, new_due, *, allow_while_pending: bool = True) -
     return True
 
 
+def _bitrix_status_changed_ts(task_data: dict) -> float:
+    """Best-effort timestamp for when Bitrix status last changed."""
+    from django.utils.dateparse import parse_datetime
+
+    if not isinstance(task_data, dict):
+        return 0.0
+    for key in (
+        "statusChangedDate",
+        "STATUS_CHANGED_DATE",
+        "changedDate",
+        "CHANGED_DATE",
+        "changed",
+        "CHANGED",
+        "activityDate",
+        "ACTIVITY_DATE",
+    ):
+        raw = task_data.get(key)
+        if raw in (None, "", False):
+            continue
+        text = str(raw).strip().replace(" ", "T", 1)
+        dt = parse_datetime(text)
+        if dt is not None:
+            return dt.timestamp()
+    return 0.0
+
+
+def _status_rank(status: str | None) -> int:
+    # Higher = more "terminal"/paused preference when timestamps tie
+    if status == "done":
+        return 3
+    if status == "todo":
+        return 2
+    if status == "in_progress":
+        return 1
+    return 0
+
+
+def resolve_inbound_status_from_sources(task) -> tuple[str | None, dict | None, object | None, str | None]:
+    """
+    Load agency + client Bitrix copies and pick the inbound status.
+
+    Prefer the copy with the newest status-change timestamp. On a tie, prefer
+    todo/done over in_progress — pause must not lose to a stale agency «3».
+    Returns (status, task_data, portal, bitrix_id).
+    """
+    from board.comment_sync import (
+        latest_bitrix_work_activity,
+        resolve_status_with_timer_activity,
+    )
+
+    sources = resolve_all_bitrix_task_sources(task)
+    candidates: list[tuple[float, int, str, dict, object, str]] = []
+    for portal, bitrix_id in sources:
+        try:
+            data = BitrixClient(portal).get_task(bitrix_id) or {}
+        except BitrixAPIError as exc:
+            logger.info(
+                "pull status task=%s portal=%s id=%s: %s",
+                task.id,
+                portal.id,
+                bitrix_id,
+                exc,
+            )
+            continue
+        if not data:
+            continue
+        mapped = local_status_from_bitrix_task(data)
+        try:
+            activity = latest_bitrix_work_activity(portal, bitrix_id, data)
+        except Exception:
+            logger.exception(
+                "activity scan failed task=%s portal=%s", task.id, portal.id
+            )
+            activity = None
+        resolved = resolve_status_with_timer_activity(mapped, activity)
+        if not resolved:
+            continue
+        ts = _bitrix_status_changed_ts(data)
+        candidates.append(
+            (ts, _status_rank(resolved), resolved, data, portal, str(bitrix_id))
+        )
+        logger.info(
+            "pull candidate task=%s %s#%s mapped=%s activity=%s resolved=%s ts=%s",
+            task.id,
+            portal.role,
+            bitrix_id,
+            mapped,
+            activity,
+            resolved,
+            ts,
+        )
+
+    if not candidates:
+        return None, None, None, None
+
+    # Split-brain agency vs client: compare by status-change time.
+    # Example from prod: agency#96 still STATUS=3, client#25 already STATUS=2 after pause.
+    todos = [c for c in candidates if c[2] == "todo"]
+    progs = [c for c in candidates if c[2] == "in_progress"]
+    if todos and progs:
+        best_todo = max(todos, key=lambda row: (row[0], row[1]))
+        best_prog = max(progs, key=lambda row: (row[0], row[1]))
+        chosen = best_todo if best_todo[0] >= best_prog[0] else best_prog
+        logger.info(
+            "pull split-brain task=%s todo_ts=%s prog_ts=%s → %s",
+            task.id,
+            best_todo[0],
+            best_prog[0],
+            chosen[2],
+        )
+        _ts, _rank, status, data, portal, bitrix_id = chosen
+        return status, data, portal, bitrix_id
+
+    # Newest change first; then pause/done beats in_progress
+    candidates.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    _ts, _rank, status, data, portal, bitrix_id = candidates[0]
+    return status, data, portal, bitrix_id
+
+
 def pull_task_status_from_bitrix(task) -> bool:
     """
-    Fetch Bitrix status + deadline + title/description (agency copy preferred).
+    Fetch Bitrix status + deadline + title/description from agency+client copies.
     """
     from board.titles import strip_portal_title_prefix
 
-    sources = resolve_all_bitrix_task_sources(task)
-    if not sources:
-        return False
-
-    data = None
-    for portal, bitrix_id in sources:
-        try:
-            data = BitrixClient(portal).get_task(bitrix_id)
-        except BitrixAPIError as exc:
-            logger.info("pull status task=%s portal=%s: %s", task.id, portal.id, exc)
-            continue
-        if data:
-            break
-
-    if not data:
+    local, data, portal, bitrix_id = resolve_inbound_status_from_sources(task)
+    if not data or not portal or not bitrix_id:
         return False
 
     changed = False
-    local = local_status_from_bitrix_task(data)
-    # Timer/work pause in Bitrix: STATUS label may stay «Выполняется», while
-    # chat says «остановил работу» and/or action.start=true.
-    portal, bitrix_id = sources[0]
-    try:
-        from board.comment_sync import (
-            latest_bitrix_work_activity,
-            resolve_status_with_timer_activity,
-        )
-
-        activity = latest_bitrix_work_activity(portal, bitrix_id, data)
-        local = resolve_status_with_timer_activity(local, activity)
-        logger.info(
-            "pull status task=%s mapped=%s activity=%s raw_status=%s action=%s",
-            task.id,
-            local,
-            activity,
-            data.get("status") or data.get("STATUS") or data.get("realStatus"),
-            (data.get("action") or data.get("ACTION") or {}),
-        )
-    except Exception:
-        logger.exception("timer activity comment scan failed task=%s", task.id)
-
     if local:
-        # Same as webhooks: Bitrix is source of truth on pull; short PENDING
-        # window still protects against stale echo right after local→Bitrix push.
         changed = apply_inbound_status(task, local, force=True) or changed
 
     try:
@@ -776,6 +857,18 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         if local:
             # force=True: Bitrix start/pause/complete must update the app even during PENDING sync
             status_changed = apply_inbound_status(task, local, force=True)
+
+        # Agency vs client copies can diverge (prod: agency still 3, client already 2).
+        try:
+            recon, _, _, _ = resolve_inbound_status_from_sources(task)
+            if recon and recon != local:
+                if apply_inbound_status(task, recon, force=True):
+                    status_changed = True
+                    local = recon
+        except Exception:
+            logger.exception(
+                "OnTaskUpdate multi-source reconcile failed id=%s", bitrix_task_id
+            )
 
         try:
             running, timer_payload, spent = fetch_bitrix_timer_state(

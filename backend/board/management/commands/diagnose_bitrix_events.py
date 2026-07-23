@@ -212,9 +212,16 @@ class Command(BaseCommand):
             )
             action = data.get("action") or data.get("ACTION") or {}
             chat = data.get("chatId") or data.get("CHAT_ID") or ""
+            changed = (
+                data.get("statusChangedDate")
+                or data.get("STATUS_CHANGED_DATE")
+                or data.get("changedDate")
+                or data.get("CHANGED_DATE")
+                or ""
+            )
             self.stdout.write(
                 f"  {portal.role} {portal.domain}#{bitrix_id}:\n"
-                f"    raw_status={raw!r} chatId={chat!r}\n"
+                f"    raw_status={raw!r} chatId={chat!r} changed={changed!r}\n"
                 f"    action.start={action.get('start')!r} "
                 f"action.pause={action.get('pause')!r}\n"
                 f"    mapped_from_task={remote!r} activity={activity!r} "
