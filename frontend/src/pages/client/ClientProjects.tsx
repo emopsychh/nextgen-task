@@ -206,7 +206,6 @@ export function ClientProjects() {
   }
 
   const titleName = portalInfo?.name || portalInfo?.domain || "Клиент";
-  const clientNeedsAttention = pendingReports.length > 0 || recentDone.length > 0;
   const agencyNeedsAttention =
     disputedReports.length > 0 || clientTasks.length > 0 || hotTasks.length > 0;
 
@@ -278,12 +277,12 @@ export function ClientProjects() {
         <div className="workspace-focus" data-tour="tour-waiting-for-you">
           <section className="workspace-focus-block">
             <div className="linked-head">
-              <h2 className="section-title">Ждёт вас</h2>
-              <p className="muted">Отчёты на согласовании и недавние результаты</p>
+              <h2 className="section-title">Отчёты на согласовании</h2>
+              <p className="muted">Нужно согласовать или оспорить</p>
             </div>
-            {!clientNeedsAttention ? (
+            {pendingReports.length === 0 ? (
               <div className="empty-linked workspace-empty">
-                <p className="muted">Пока ничего не ждёт — можно работать в проектах слева.</p>
+                <p className="muted">Сейчас нет отчётов, ожидающих вашего ответа.</p>
               </div>
             ) : (
               <div className="workspace-attention-list">
@@ -300,9 +299,24 @@ export function ClientProjects() {
                       <span className="muted">Отчёт</span>
                     </div>
                     <strong>{reportTitle(r)}</strong>
-                    <span className="muted">Нужно согласовать или оспорить</span>
+                    <span className="muted">Открыть и ответить</span>
                   </Link>
                 ))}
+              </div>
+            )}
+          </section>
+
+          <section className="workspace-focus-block">
+            <div className="linked-head">
+              <h2 className="section-title">Недавно завершено</h2>
+              <p className="muted">Можно посмотреть итог в задаче</p>
+            </div>
+            {recentDone.length === 0 ? (
+              <div className="empty-linked workspace-empty">
+                <p className="muted">За последние дни завершённых задач нет.</p>
+              </div>
+            ) : (
+              <div className="workspace-attention-list">
                 {recentDone.map((t) => (
                   <Link
                     key={`done-${t.id}`}
@@ -314,7 +328,7 @@ export function ClientProjects() {
                       <span className="muted">{t.project_name}</span>
                     </div>
                     <strong>{t.title}</strong>
-                    <span className="muted">Можно открыть и посмотреть итог в чате</span>
+                    <span className="muted">Открыть задачу</span>
                   </Link>
                 ))}
               </div>
