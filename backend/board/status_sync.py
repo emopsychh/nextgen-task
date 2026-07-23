@@ -222,16 +222,27 @@ def apply_inbound_timer_state(
     running: bool | None,
     timer_payload=None,
     bitrix_total: int | None = None,
+    bitrix_status: str | None = None,
 ) -> bool:
     """
     Mirror Bitrix Учёт времени onto local TimeEntry rows without echoing back.
-    Returns True if anything changed.
+
+    Important: task.timer.get is scoped to the OAuth user of the app token.
+    An empty result does NOT mean the Bitrix stopwatch is stopped when another
+    user started it — only trust running=False when Bitrix STATUS is todo/done,
+    or when running=True (we saw a live timer for this auth user).
     """
-    from board.models import Task
     from board.timeutils import stop_time_entry
 
-    if running is None and bitrix_total is None:
+    if running is None and bitrix_total is None and not bitrix_status:
         return False
+
+    # Status is the source of truth for start/pause in this product.
+    if bitrix_status in ("todo", "done"):
+        running = False
+    elif bitrix_status == "in_progress" and running is not True:
+        # Empty timer.get while in_progress → unknown (often wrong Bitrix user)
+        running = None
 
     changed = False
     if running is False:
@@ -254,7 +265,7 @@ def apply_inbound_timer_state(
         _start_local_timer_from_inbound(task, started_at=started)
         return task.time_entries.filter(ended_at__isnull=True).exists()
 
-    # running unknown — still reconcile closed totals when Bitrix sends them
+    # running unknown: do not invent a timer — status transitions own start/stop
     if bitrix_total is not None and not task.time_entries.filter(ended_at__isnull=True).exists():
         return _reconcile_tracked_seconds(task, bitrix_total)
     return False
@@ -434,6 +445,20 @@ def apply_inbound_status(
     ):
         return False
     if task.status == new_status:
+        # Heal drift without a status change
+        if stop_timers and new_status in (Task.Status.TODO, Task.Status.DONE):
+            stopped = False
+            for running in task.time_entries.filter(ended_at__isnull=True):
+                stop_time_entry(running, sync_bitrix=False)
+                stopped = True
+            return stopped
+        if (
+            stop_timers
+            and new_status == Task.Status.IN_PROGRESS
+            and not task.time_entries.filter(ended_at__isnull=True).exists()
+        ):
+            _start_local_timer_from_inbound(task)
+            return task.time_entries.filter(ended_at__isnull=True).exists()
         return False
     # Avoid clobbering an in-flight local→Bitrix push.
     # force=True (webhooks / pull): still skip for a short window so we don't
@@ -442,7 +467,7 @@ def apply_inbound_status(
         if not force:
             return False
         age = (timezone.now() - task.updated_at).total_seconds()
-        if age < 25:
+        if age < 12:
             return False
 
     old = task.status
@@ -459,8 +484,9 @@ def apply_inbound_status(
         for running in task.time_entries.filter(ended_at__isnull=True):
             # Do not echo pauseTimer back to Bitrix — status already came from there.
             stop_time_entry(running, sync_bitrix=False)
-    # Starting the local timer is owned by apply_inbound_timer_state (Bitrix
-    # may pause the stopwatch while STATUS stays in_progress).
+    elif stop_timers and new_status == Task.Status.IN_PROGRESS:
+        # Status-driven start: do not rely on task.timer.get (wrong OAuth user).
+        _start_local_timer_from_inbound(task)
 
     logger.info(
         "inbound status task=%s %s→%s (force=%s)",
@@ -576,22 +602,21 @@ def pull_task_status_from_bitrix(task) -> bool:
         # window still protects against stale echo right after local→Bitrix push.
         changed = apply_inbound_status(task, local, force=True) or changed
 
-    # Timer can pause in Bitrix without STATUS change — sync Учёт времени separately.
+    # Timer sync. Empty task.timer.get is ignored while STATUS=in_progress
+    # (app token user ≠ person who clicked Start in Bitrix UI).
     portal, bitrix_id = sources[0]
     try:
         running, timer_payload, spent = fetch_bitrix_timer_state(
             portal, bitrix_id, data
         )
         task.refresh_from_db()
-        # If Bitrix task is Waiting/Done, force timer stop even if timer.get lags
-        if local in ("todo", "done"):
-            running = False
         changed = (
             apply_inbound_timer_state(
                 task,
                 running=running,
                 timer_payload=timer_payload,
                 bitrix_total=spent,
+                bitrix_status=local,
             )
             or changed
         )
@@ -635,12 +660,18 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         except BitrixAPIError as exc:
             logger.info("OnTaskUpdate get_task failed id=%s: %s", bitrix_task_id, exc)
 
-        # Event payload often has DEADLINE immediately — use as fallback/primary
+        # Event payload often has DEADLINE/STATUS immediately — use as primary for status
         after = {}
+        before = {}
         if isinstance(event_data, dict):
             raw_after = event_data.get("FIELDS_AFTER") or event_data.get("fields_after") or {}
             if isinstance(raw_after, dict):
                 after = raw_after
+            raw_before = (
+                event_data.get("FIELDS_BEFORE") or event_data.get("fields_before") or {}
+            )
+            if isinstance(raw_before, dict):
+                before = raw_before
 
         merged = {**after, **data} if data else after
         if not merged:
@@ -652,8 +683,16 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         timer_changed = False
         # Prefer FIELDS_AFTER status: get_task often lags right after pause/start.
         after_status = local_status_from_bitrix_task(after) if after else None
+        before_status = local_status_from_bitrix_task(before) if before else None
         data_status = local_status_from_bitrix_task(data) if data else None
         local = after_status if after_status is not None else data_status
+        # Explicit transition in the event beats a stale get_task snapshot
+        if (
+            after_status is not None
+            and before_status is not None
+            and after_status != before_status
+        ):
+            local = after_status
         if local:
             # force=True: Bitrix start/pause/complete must update the app even during PENDING sync
             status_changed = apply_inbound_status(task, local, force=True)
@@ -663,13 +702,12 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
                 portal, str(bitrix_task_id), data or merged
             )
             task.refresh_from_db()
-            if local in ("todo", "done"):
-                running = False
             timer_changed = apply_inbound_timer_state(
                 task,
                 running=running,
                 timer_payload=timer_payload,
                 bitrix_total=spent,
+                bitrix_status=local,
             )
         except Exception:
             logger.exception(
