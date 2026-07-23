@@ -114,6 +114,43 @@ class BitrixClient:
         except BitrixAPIError:
             return self.call("task.timer.stop", {"taskId": task_id})
 
+    def get_task_timer(self, task_id: int | str) -> dict | list | None:
+        """
+        Current live timer for the app user, if any.
+        Empty / missing → timer is not running (for this auth user).
+        """
+        try:
+            return self.call("task.timer.get", {"taskId": task_id})
+        except BitrixAPIError:
+            try:
+                return self.call("task.timer.get", {"TASK_ID": task_id})
+            except BitrixAPIError:
+                return None
+
+    def get_task_elapsed_seconds(self, task_id: int | str) -> int | None:
+        """Sum closed elapsed items for a Bitrix task (seconds)."""
+        try:
+            rows = self.call(
+                "task.elapseditem.getlist",
+                {"TASKID": task_id, "ORDER": {"ID": "ASC"}},
+            )
+        except BitrixAPIError:
+            return None
+        if isinstance(rows, dict):
+            rows = rows.get("result") or rows.get("tasks") or []
+        if not isinstance(rows, list):
+            return None
+        total = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw = row.get("SECONDS") or row.get("seconds") or 0
+            try:
+                total += max(0, int(raw))
+            except (TypeError, ValueError):
+                continue
+        return total
+
     def add_elapsed_item(
         self,
         task_id: int | str,
