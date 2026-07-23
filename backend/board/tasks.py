@@ -29,12 +29,20 @@ def _bitrix_user_id(user_data: dict) -> str:
     return str(user_data.get("ID") or user_data.get("id") or "")
 
 
-def _resolve_responsible_id(client: BitrixClient, task) -> str:
+def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
     """
-    Bitrix requires RESPONSIBLE_ID on the same portal as the task.
-    Agency users creating work on a client portal must not use their agency user id.
+    Bitrix requires RESPONSIBLE_ID to be a user of the SAME portal the task is
+    created on. A client-portal user id is meaningless on the agency portal (and
+    vice-versa), so it must never leak across portals.
+
+    We resolve, in order:
+      1) the task author, only if they belong to *this* portal;
+      2) the acting OAuth user of *this* portal (so the app can later
+         start/pause/complete the task — Bitrix forbids these actions for
+         non-participants, which is exactly the "Действие над задачей не
+         разрешено" error);
+      3) any stored user of this portal (admin first).
     """
-    portal = task.project.portal
     if (
         task.created_by_id
         and task.created_by
@@ -47,8 +55,6 @@ def _resolve_responsible_id(client: BitrixClient, task) -> str:
     if uid:
         return uid
     # Fallback: any user stored for this portal
-    from portals.models import BitrixUser
-
     local = portal.users.order_by("-is_admin", "id").first()
     return str(local.bitrix_id) if local else ""
 
@@ -243,7 +249,7 @@ def _sync_one_portal(
         raise BitrixAPIError(f"Нет токена Bitrix у портала {portal.domain or portal.id}")
 
     client = BitrixClient(portal)
-    responsible_id = _resolve_responsible_id(client, task)
+    responsible_id = _resolve_responsible_id(client, task, portal)
     if not responsible_id and not existing_id:
         raise BitrixAPIError(
             f"Не указан исполнитель на {portal.domain}: откройте приложение на этом портале "
@@ -267,6 +273,14 @@ def _sync_one_portal(
             crm_bindings=crm_bindings,
         )
         fields["TITLE"] = title
+        logger.info(
+            "sync→bitrix update task=%s portal=%s bitrix_id=%s priority=%s important=%s",
+            task.id,
+            portal.id,
+            existing_id,
+            fields.get("PRIORITY"),
+            getattr(task, "is_important", None),
+        )
         client.update_task(existing_id, fields)
         # Only push status on explicit local→Bitrix sync (PENDING).
         # Title/deadline cleanup must not call start() and undo a Bitrix pause.

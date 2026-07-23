@@ -77,6 +77,44 @@ class ApplyInboundImportanceTests(TestCase):
         self.assertTrue(task.is_important)
 
 
+class BoardOrderingTests(TestCase):
+    def setUp(self):
+        self.portal = make_portal()
+        self.project = make_project(self.portal)
+
+    def test_important_active_first_done_last(self):
+        from board.models import Task
+        from board.views import default_task_board_ordering
+
+        normal_active = make_task(self.project, title="normal-active")
+        important_active = make_task(
+            self.project, title="important-active", is_important=True
+        )
+        important_done = make_task(
+            self.project,
+            title="important-done",
+            is_important=True,
+            status=Task.Status.DONE,
+        )
+        normal_done = make_task(
+            self.project, title="normal-done", status=Task.Status.DONE
+        )
+
+        ordered = list(
+            Task.objects.filter(project=self.project).order_by(
+                *default_task_board_ordering()
+            )
+        )
+        titles = [t.title for t in ordered]
+        # Active important → active normal → done important → done normal
+        self.assertEqual(
+            titles,
+            ["important-active", "normal-active", "important-done", "normal-done"],
+        )
+        self.assertEqual(ordered[0].id, important_active.id)
+        self.assertEqual(ordered[-1].id, normal_done.id)
+
+
 class OutboundPriorityFieldTests(TestCase):
     def setUp(self):
         self.portal = make_portal()

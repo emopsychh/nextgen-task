@@ -262,6 +262,31 @@ class ProjectViewSet(viewsets.ModelViewSet):
         instance.delete()
 
 
+def default_task_board_ordering():
+    """Board order shared by the list view (and its tests).
+
+    Active before done; important floats to the top within each group; soonest
+    deadline first; newest as the final tie-breaker (also stabilises the
+    pagination cursor so pages line up with what the UI renders).
+    """
+    from django.db.models import Case, F, IntegerField, When
+
+    return (
+        Case(
+            When(status=Task.Status.DONE, then=1),
+            default=0,
+            output_field=IntegerField(),
+        ),
+        Case(
+            When(is_important=True, then=0),
+            default=1,
+            output_field=IntegerField(),
+        ),
+        F("due_date").asc(nulls_last=True),
+        "-created_at",
+    )
+
+
 class TaskViewSet(viewsets.ModelViewSet):
     permission_classes = [IsPortalAuthenticated]
     filterset_fields = ["project", "status", "sync_status"]
@@ -288,20 +313,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         if portal_id:
             qs = qs.filter(project__portal_id=portal_id)
         if self.action == "list" and not self.request.query_params.get("ordering"):
-            # Deterministic board order so pagination pages line up with what
-            # the UI shows: active first, done last; soonest deadline first;
-            # newest as the final tie-breaker (also stabilises the cursor).
-            from django.db.models import Case, F, IntegerField, When
-
-            qs = qs.order_by(
-                Case(
-                    When(status=Task.Status.DONE, then=1),
-                    default=0,
-                    output_field=IntegerField(),
-                ),
-                F("due_date").asc(nulls_last=True),
-                "-created_at",
-            )
+            qs = qs.order_by(*default_task_board_ordering())
         return qs
 
     def list(self, request, *args, **kwargs):
