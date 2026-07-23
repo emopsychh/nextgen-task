@@ -448,18 +448,16 @@ export function ClientProjects() {
 
                 <section className="workspace-focus-block">
                   <div className="linked-head">
-                    <div className="workspace-hot-title-row">
-                      <h2
-                        className={`section-title workspace-hot-title${
-                          hotTasks.length > 0 ? " is-shaking" : ""
-                        }`}
-                      >
-                        <span className="workspace-hot-badge" aria-hidden>
-                          <FlameIcon filled size={15} />
-                        </span>
+                    <h2
+                      className={`workspace-hot-heading${
+                        hotTasks.length > 0 ? " is-shaking" : ""
+                      }`}
+                    >
+                      <span className="workspace-hot-pill">
+                        <FlameIcon filled size={14} />
                         <span className="workspace-hot-label">Горят</span>
-                      </h2>
-                    </div>
+                      </span>
+                    </h2>
                     <p className="muted">Просроченные, срок 1–2 дня и важные</p>
                   </div>
                   {hotTasks.length === 0 ? (

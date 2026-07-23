@@ -788,48 +788,44 @@ a {
   border-color: color-mix(in srgb, #e67a2e 30%, var(--line));
 }
 
-.workspace-hot-title-row {
+.workspace-hot-heading {
+  margin: 0 0 4px;
   display: flex;
   align-items: center;
-  gap: 8px;
 }
 
-.workspace-hot-title {
-  margin: 0;
+.workspace-hot-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-}
-
-.workspace-hot-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
+  gap: 5px;
+  padding: 5px 12px 5px 9px;
   border-radius: 999px;
+  font-size: 0.92rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
   color: #fff;
   background: linear-gradient(135deg, #ff7a2f, #e2440a);
-  box-shadow: 0 2px 6px rgba(226, 68, 10, 0.32);
-  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(226, 68, 10, 0.32);
 }
 
-.workspace-hot-badge svg {
+.workspace-hot-pill svg {
   display: block;
+  flex-shrink: 0;
   filter: drop-shadow(0 1px 1px rgba(120, 30, 0, 0.35));
 }
 
-.workspace-hot-title.is-shaking .workspace-hot-badge svg {
+.workspace-hot-heading.is-shaking .workspace-hot-pill svg {
   animation: flame-flicker 1.4s ease-in-out infinite;
 }
 
 .workspace-hot-label {
   display: inline-block;
-  color: #b33a0c;
   transform-origin: center;
+  line-height: 1;
 }
 
-.workspace-hot-title.is-shaking .workspace-hot-label {
+.workspace-hot-heading.is-shaking .workspace-hot-label {
   animation: workspace-hot-shake 0.55s ease-in-out infinite;
 }
 
@@ -868,8 +864,8 @@ a {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .workspace-hot-title.is-shaking .workspace-hot-label,
-  .workspace-hot-title.is-shaking .workspace-hot-badge svg {
+  .workspace-hot-heading.is-shaking .workspace-hot-label,
+  .workspace-hot-heading.is-shaking .workspace-hot-pill svg {
     animation: none;
   }
 }
