@@ -40,6 +40,21 @@ const BUCKETS: { id: Bucket; label: string }[] = [
   { id: "paid", label: "Оплаченные" },
 ];
 
+function reportTitle(r: Pick<WorkReport, "id" | "project_names" | "projects_count">): string {
+  const names = r.project_names || [];
+  if (names.length === 0) return `Отчёт №${r.id}`;
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} и ${names[1]}`;
+  return `${names[0]} и ещё ${names.length - 1}`;
+}
+
+function reportSubtitle(r: Pick<WorkReport, "project_names" | "projects_count">): string {
+  const n = r.projects_count || r.project_names?.length || 0;
+  if (n <= 1) return "1 проект";
+  if (n >= 2 && n <= 4) return `${n} проекта`;
+  return `${n} проектов`;
+}
+
 export function ProjectReports() {
   const { portalId: routePortalId, reportId: routeReportId, projectId: routeProjectId } =
     useParams();
@@ -142,7 +157,8 @@ export function ProjectReports() {
       if (!token) return;
       const data = await api<WorkReport>(`/api/reports/${id}/`, {}, token);
       setDetail(data);
-      setExpandedProjects(new Set());
+      // Open all projects by default so hours/outcomes are visible immediately.
+      setExpandedProjects(new Set((data.projects_detail || []).map((p) => p.id)));
     },
     [token]
   );
@@ -390,9 +406,17 @@ export function ProjectReports() {
 
       <div className="report-layout">
         <aside className="report-list-panel">
-          <h2 className="section-title">Список</h2>
+          <div className="report-list-heading">
+            <h2 className="report-panel-title">Отчёты</h2>
+            <span className="report-list-count">{reports.length}</span>
+          </div>
           {reports.length === 0 ? (
-            <p className="muted">В этой вкладке пока пусто.</p>
+            <div className="report-list-empty">
+              <p>В этой вкладке пока пусто.</p>
+              {isAgency && bucket === "current" ? (
+                <p className="muted">Нажмите «Создать отчёт», чтобы собрать проекты.</p>
+              ) : null}
+            </div>
           ) : (
             <ul className="report-list">
               {reports.map((r) => (
@@ -404,19 +428,22 @@ export function ProjectReports() {
                       setSelectedId(r.id);
                       if (isAgency && portalId) {
                         navigate(`/portals/${portalId}/reports/${r.id}`, { replace: true });
+                      } else if (!isAgency) {
+                        navigate(`/reports/${r.id}`, { replace: true });
                       }
                     }}
                   >
-                    <span className={`report-status-pill status-${r.status}`}>
-                      {STATUS_LABEL_RU[r.status]}
-                    </span>
-                    <span className="report-list-meta">
-                      {(r.project_names || []).slice(0, 2).join(", ") || "Проекты"}
-                      {(r.projects_count || 0) > 2 ? ` +${(r.projects_count || 0) - 2}` : ""}
-                    </span>
-                    <span className="report-list-meta">
-                      {formatDuration(r.total_tracked_seconds)} ·{" "}
-                      {formatDateTime(r.created_at)}
+                    <div className="report-list-item-top">
+                      <span className={`report-status-pill status-${r.status}`}>
+                        {STATUS_LABEL_RU[r.status]}
+                      </span>
+                      <span className="report-list-hours">
+                        {formatDuration(r.total_tracked_seconds)}
+                      </span>
+                    </div>
+                    <strong className="report-list-title">{reportTitle(r)}</strong>
+                    <span className="report-list-sub">
+                      {reportSubtitle(r)} · {formatDateTime(r.created_at)}
                     </span>
                   </button>
                 </li>
@@ -427,20 +454,28 @@ export function ProjectReports() {
 
         <section className="report-detail-panel">
           {!detail ? (
-            <p className="muted">Выберите отчёт слева или создайте новый.</p>
+            <div className="report-detail-empty">
+              <h2 className="report-panel-title">Выберите отчёт</h2>
+              <p className="muted">Слева список — справа содержимое и согласование.</p>
+            </div>
           ) : (
             <>
               <div className="report-detail-head">
-                <div>
-                  <h2 className="section-title">
-                    {(detail.project_names || []).join(" · ") || "Отчёт"}
-                  </h2>
-                  <p className="muted">
+                <div className="report-detail-head-text">
+                  <div className="report-detail-badges">
                     <span className={`report-status-pill status-${detail.status}`}>
                       {STATUS_LABEL_RU[detail.status]}
-                    </span>{" "}
-                    · всего {formatDuration(detail.total_tracked_seconds)}
-                  </p>
+                    </span>
+                    <span className="report-detail-date">
+                      Создан {formatDateTime(detail.created_at)}
+                    </span>
+                  </div>
+                  <h2 className="report-detail-title">{reportTitle(detail)}</h2>
+                  {(detail.project_names || []).length > 1 ? (
+                    <p className="report-detail-projects">
+                      {(detail.project_names || []).join(" · ")}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="report-actions">
                   {isAgency && detail.status === "draft" ? (
@@ -509,13 +544,37 @@ export function ProjectReports() {
                 </div>
               </div>
 
-              {detail.deal_hours ? (
-                <div className="report-deal-hours">
-                  Часы по сделке: осталось{" "}
-                  {formatPackageHours(detail.deal_hours.remaining_hours)} из{" "}
-                  {formatPackageHours(detail.deal_hours.paid_hours)}
+              <div className="report-stat-row">
+                <div className="report-stat-card is-hours">
+                  <span className="report-stat-label">Затрачено</span>
+                  <strong className="report-stat-value">
+                    {formatDuration(detail.total_tracked_seconds)}
+                  </strong>
                 </div>
-              ) : null}
+                <div className="report-stat-card">
+                  <span className="report-stat-label">Проекты</span>
+                  <strong className="report-stat-value">
+                    {detail.projects_count || detail.project_names?.length || 0}
+                  </strong>
+                </div>
+                <div className="report-stat-card">
+                  <span className="report-stat-label">Задачи</span>
+                  <strong className="report-stat-value">
+                    {(detail.projects_detail || []).reduce((n, p) => n + p.tasks.length, 0)}
+                  </strong>
+                </div>
+                {detail.deal_hours ? (
+                  <div className="report-stat-card is-deal">
+                    <span className="report-stat-label">Остаток по сделке</span>
+                    <strong className="report-stat-value report-stat-value-sm">
+                      {formatPackageHours(detail.deal_hours.remaining_hours)}
+                    </strong>
+                    <span className="report-stat-hint">
+                      из {formatPackageHours(detail.deal_hours.paid_hours)}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
 
               {detail.status === "disputed" && detail.client_comment ? (
                 <div className="report-dispute-banner">
@@ -576,69 +635,86 @@ export function ProjectReports() {
                 </div>
               ) : null}
 
-              <div className="report-project-blocks">
-                {(detail.projects_detail || []).map((block) => {
-                  const open = expandedProjects.has(block.id);
-                  return (
-                    <article
-                      key={block.id}
-                      className={`report-project-block${open ? " is-open" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        className="report-project-block-head"
-                        onClick={() => toggleExpand(block.id)}
+              <div className="report-section">
+                <h3 className="report-section-title">Проекты и итоги</h3>
+                <div className="report-project-blocks">
+                  {(detail.projects_detail || []).map((block) => {
+                    const open = expandedProjects.has(block.id);
+                    return (
+                      <article
+                        key={block.id}
+                        className={`report-project-block${open ? " is-open" : ""}`}
                       >
-                        <span className="report-project-block-title">{block.name}</span>
-                        <span className="report-project-block-meta">
-                          {block.tasks.length} задач ·{" "}
-                          {formatDuration(block.total_tracked_seconds)}
-                          <span className="report-task-chevron">{open ? "▾" : "▸"}</span>
-                        </span>
-                      </button>
-                      {open ? (
-                        <div className="report-project-block-body">
-                          {block.tasks.map((t) => (
-                            <div key={t.id} className="report-outcome-row">
-                              <div className="report-outcome-row-head">
-                                <Link to={`/tasks/${t.id}`}>{t.title}</Link>
-                                <span className="muted">
-                                  {STATUS_LABEL[t.status]} ·{" "}
-                                  {formatDuration(t.tracked_seconds)}
-                                </span>
+                        <button
+                          type="button"
+                          className="report-project-block-head"
+                          onClick={() => toggleExpand(block.id)}
+                        >
+                          <span className="report-project-block-title">{block.name}</span>
+                          <span className="report-project-block-meta">
+                            <span className="report-project-hours">
+                              {formatDuration(block.total_tracked_seconds)}
+                            </span>
+                            <span>
+                              {block.tasks.length}{" "}
+                              {block.tasks.length === 1 ? "задача" : "задач"}
+                            </span>
+                            <span className="report-task-chevron">{open ? "▾" : "▸"}</span>
+                          </span>
+                        </button>
+                        {open ? (
+                          <div className="report-project-block-body">
+                            {block.tasks.map((t) => (
+                              <div key={t.id} className="report-outcome-row">
+                                <div className="report-outcome-row-head">
+                                  <Link to={`/tasks/${t.id}`}>{t.title}</Link>
+                                  <span className="report-outcome-meta">
+                                    <span>{STATUS_LABEL[t.status]}</span>
+                                    <strong>{formatDuration(t.tracked_seconds)}</strong>
+                                  </span>
+                                </div>
+                                {t.outcome?.trim() ? (
+                                  <p className="report-outcome-text">{t.outcome}</p>
+                                ) : (
+                                  <p className="muted report-outcome-empty">
+                                    Итог не указан
+                                    {t.status !== "done" ? " (задача ещё не завершена)" : ""}
+                                  </p>
+                                )}
                               </div>
-                              {t.outcome?.trim() ? (
-                                <p className="report-outcome-text">{t.outcome}</p>
-                              ) : (
-                                <p className="muted report-outcome-empty">
-                                  Итог не указан
-                                  {t.status !== "done" ? " (задача ещё не завершена)" : ""}
-                                </p>
-                              )}
-                            </div>
-                          ))}
-                          {block.tasks.length === 0 ? (
-                            <p className="muted">В проекте пока нет задач</p>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </article>
-                  );
-                })}
+                            ))}
+                            {block.tasks.length === 0 ? (
+                              <p className="muted">В проекте пока нет задач</p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
               </div>
 
               {detail.events && detail.events.length > 0 ? (
-                <div className="report-events">
-                  <h3 className="section-title">История согласования</h3>
-                  <ul>
-                    {detail.events.map((ev) => (
-                      <li key={ev.id}>
-                        <strong>{EVENT_LABEL[ev.kind] || ev.kind}</strong>
-                        {ev.actor_name ? ` — ${ev.actor_name}` : ""}
-                        <span className="muted"> · {formatDateTime(ev.created_at)}</span>
+                <div className="report-section">
+                  <h3 className="report-section-title">История согласования</h3>
+                  <ol className="report-timeline">
+                    {detail.events.map((ev, idx) => (
+                      <li key={ev.id} className="report-timeline-item">
+                        <span className="report-timeline-dot" aria-hidden />
+                        {idx < detail.events!.length - 1 ? (
+                          <span className="report-timeline-line" aria-hidden />
+                        ) : null}
+                        <div className="report-timeline-body">
+                          <strong className="report-timeline-kind">
+                            {EVENT_LABEL[ev.kind] || ev.kind}
+                          </strong>
+                          <span className="report-timeline-meta">
+                            {ev.actor_name || "Участник"} · {formatDateTime(ev.created_at)}
+                          </span>
+                        </div>
                       </li>
                     ))}
-                  </ul>
+                  </ol>
                 </div>
               ) : null}
             </>
