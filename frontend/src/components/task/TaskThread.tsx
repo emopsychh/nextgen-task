@@ -1,5 +1,6 @@
-import { forwardRef, useState } from "react";
+import { forwardRef, useMemo, useState } from "react";
 import type { Attachment, Comment } from "../../api/types";
+import { ImageLightbox, type LightboxImage } from "../ImageLightbox";
 import { FileGlyph } from "../icons";
 import { isImageAttachment } from "../../lib/files";
 import { formatClock } from "../../lib/format";
@@ -16,6 +17,11 @@ export type ThreadRow =
 type Props = {
   rows: ThreadRow[];
 };
+
+function toLightboxImage(a: Attachment): LightboxImage | null {
+  if (!a.url || !isImageAttachment(a.original_name, a.url)) return null;
+  return { url: a.url, name: a.original_name || "Фото" };
+}
 
 function FileChip({
   url,
@@ -53,11 +59,13 @@ function AttachmentView({
   compact = false,
   time,
   cover = false,
+  onOpenImage,
 }: {
   attachment: Attachment;
   compact?: boolean;
   time?: string;
   cover?: boolean;
+  onOpenImage?: () => void;
 }) {
   const url = attachment.url || "#";
   const name = attachment.original_name || "Файл";
@@ -66,13 +74,11 @@ function AttachmentView({
 
   if (looksLikeImage && attachment.url && !imgFailed) {
     return (
-      <a
-        href={url}
-        download={name}
-        target="_blank"
-        rel="noreferrer"
+      <button
+        type="button"
         className={`msg-image${compact ? " compact" : ""}${cover ? " is-cover" : ""}`}
         title={name}
+        onClick={onOpenImage}
       >
         <img
           src={url}
@@ -81,7 +87,7 @@ function AttachmentView({
           onError={() => setImgFailed(true)}
         />
         {time ? <span className="msg-image-time muted">{time}</span> : null}
-      </a>
+      </button>
     );
   }
 
@@ -91,9 +97,11 @@ function AttachmentView({
 function AttachmentGroup({
   attachments,
   compact = false,
+  onOpenImage,
 }: {
   attachments: Attachment[];
   compact?: boolean;
+  onOpenImage: (images: LightboxImage[], index: number) => void;
 }) {
   const images: Attachment[] = [];
   const files: Attachment[] = [];
@@ -101,6 +109,10 @@ function AttachmentGroup({
     if (isImageAttachment(a.original_name, a.url)) images.push(a);
     else files.push(a);
   }
+
+  const lightboxImages = images
+    .map(toLightboxImage)
+    .filter((x): x is LightboxImage => Boolean(x));
 
   const gridMod =
     images.length <= 1 ? "is-single" : images.length === 2 ? "is-duo" : "is-many";
@@ -113,12 +125,13 @@ function AttachmentGroup({
     >
       {images.length > 0 && (
         <div className={`msg-image-grid ${gridMod}`}>
-          {images.map((a) => (
+          {images.map((a, i) => (
             <AttachmentView
               key={a.id}
               attachment={a}
               compact={compact}
               cover={images.length > 1}
+              onOpenImage={() => onOpenImage(lightboxImages, Math.min(i, lightboxImages.length - 1))}
             />
           ))}
         </div>
@@ -138,6 +151,25 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
   { rows },
   ref
 ) {
+  const [viewer, setViewer] = useState<{ images: LightboxImage[]; index: number } | null>(
+    null
+  );
+
+  const aloneImages = useMemo(() => {
+    const map = new Map<number, LightboxImage>();
+    for (const row of rows) {
+      if (row.type !== "item" || row.item.kind !== "file") continue;
+      const img = toLightboxImage(row.item.file);
+      if (img) map.set(row.item.file.id, img);
+    }
+    return map;
+  }, [rows]);
+
+  function openViewer(images: LightboxImage[], index: number) {
+    if (!images.length) return;
+    setViewer({ images, index: Math.max(0, Math.min(index, images.length - 1)) });
+  }
+
   return (
     <>
       {rows.map((row, idx) => {
@@ -151,11 +183,15 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
 
         const item = row.item;
         if (item.kind === "file") {
+          const alone = aloneImages.get(item.file.id);
           return (
             <div key={`file-${item.file.id}`} className="msg-file-alone">
               <AttachmentView
                 attachment={item.file}
                 time={formatClock(item.file.created_at)}
+                onOpenImage={
+                  alone ? () => openViewer([alone], 0) : undefined
+                }
               />
             </div>
           );
@@ -195,7 +231,11 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
               </div>
               {hasText ? <p className="comment-text">{c.text}</p> : null}
               {hasAttach && (
-                <AttachmentGroup attachments={c.attachments || []} compact />
+                <AttachmentGroup
+                  attachments={c.attachments || []}
+                  compact
+                  onOpenImage={openViewer}
+                />
               )}
               <time className="msg-time">{formatClock(c.created_at)}</time>
             </div>
@@ -203,6 +243,15 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
         );
       })}
       <div ref={ref} />
+
+      {viewer && (
+        <ImageLightbox
+          images={viewer.images}
+          index={viewer.index}
+          onClose={() => setViewer(null)}
+          onIndexChange={(index) => setViewer((v) => (v ? { ...v, index } : v))}
+        />
+      )}
     </>
   );
 });
