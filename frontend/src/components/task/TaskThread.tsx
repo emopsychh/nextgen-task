@@ -37,7 +37,7 @@ function FileChip({
       className={`msg-file${compact ? " compact" : ""}`}
       title={name}
     >
-      <span className="msg-file-icon">
+      <span className="msg-file-icon" aria-hidden>
         <FileGlyph />
       </span>
       <span className="msg-file-meta">
@@ -102,14 +102,17 @@ function AttachmentGroup({
     else files.push(a);
   }
 
+  const gridMod =
+    images.length <= 1 ? "is-single" : images.length === 2 ? "is-duo" : "is-many";
+
   return (
-    <div className="msg-attachments">
+    <div
+      className={`msg-attachments${images.length ? " has-images" : ""}${
+        files.length ? " has-files" : ""
+      }${!images.length && files.length ? " files-only" : ""}`}
+    >
       {images.length > 0 && (
-        <div
-          className={`msg-image-grid${images.length === 1 ? " is-single" : ""}${
-            images.length === 2 ? " is-duo" : ""
-          }${images.length >= 3 ? " is-many" : ""}`}
-        >
+        <div className={`msg-image-grid ${gridMod}`}>
           {images.map((a) => (
             <AttachmentView
               key={a.id}
@@ -170,17 +173,28 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
             </article>
           );
         }
+
+        const hasText = Boolean(c.text?.trim());
+        const hasAttach = (c.attachments || []).length > 0;
+        const bubbleClass = [
+          "msg-bubble",
+          hasAttach ? "has-attach" : "",
+          hasAttach && !hasText ? "is-media" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+
         return (
           <article key={`c-${c.id}`} className="msg-row">
             <div className="comment-avatar" aria-hidden>
               {initialsFromLabel(author)}
             </div>
-            <div className="msg-bubble">
+            <div className={bubbleClass}>
               <div className="comment-top">
                 <strong className="user-mark">{author}</strong>
               </div>
-              {c.text ? <p className="comment-text">{c.text}</p> : null}
-              {(c.attachments || []).length > 0 && (
+              {hasText ? <p className="comment-text">{c.text}</p> : null}
+              {hasAttach && (
                 <AttachmentGroup attachments={c.attachments || []} compact />
               )}
               <time className="msg-time">{formatClock(c.created_at)}</time>
