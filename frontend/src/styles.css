@@ -4389,11 +4389,29 @@ a.task-card.is-done:hover,
   font-size: clamp(1.85rem, 2.4vw, 2.35rem);
 }
 
-.report-layout {
+.report-card-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: grid;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.report-list-empty-card {
+  padding: 28px 20px;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg) 40%, #fff);
+  color: var(--ink-muted);
+}
+
+.report-list-empty-card p {
+  margin: 0 0 6px;
+}
+
+.report-list-empty-card p:last-child {
+  margin-bottom: 0;
 }
 
 .report-list-panel,
@@ -4402,7 +4420,15 @@ a.task-card.is-done:hover,
   border: 1px solid var(--line);
   border-radius: 18px;
   padding: 20px;
-  min-height: 420px;
+  min-height: 0;
+}
+
+.report-detail-panel.is-page {
+  padding: 22px 24px 28px;
+}
+
+.report-detail-page .task-back {
+  margin-bottom: 16px;
 }
 
 .report-list-heading,
@@ -4468,10 +4494,8 @@ a.task-card.is-done:hover,
   box-shadow: 0 6px 18px rgba(18, 30, 24, 0.05);
 }
 
-.report-list-item.is-active {
-  border-color: var(--ink);
-  background: color-mix(in srgb, var(--accent) 7%, #fff);
-  box-shadow: 0 8px 22px rgba(18, 30, 24, 0.07);
+.report-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
 }
 
 .report-list-item-top {
@@ -4768,12 +4792,12 @@ a.task-card.is-done:hover,
 }
 
 @media (max-width: 860px) {
-  .report-layout {
-    grid-template-columns: 1fr;
-  }
-
   .report-detail-head {
     flex-direction: column;
+  }
+
+  .report-detail-panel.is-page {
+    padding: 16px;
   }
 
   .report-banner {

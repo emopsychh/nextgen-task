@@ -8,6 +8,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { AgencyHome } from "./pages/agency/AgencyHome";
 import { ClientProjects } from "./pages/client/ClientProjects";
 import { ProjectReports } from "./pages/shared/ProjectReports";
+import { ReportDetail } from "./pages/shared/ReportDetail";
 import { ProjectTasks } from "./pages/shared/ProjectTasks";
 import { TaskDetail } from "./pages/shared/TaskDetail";
 
@@ -81,8 +82,10 @@ export default function App() {
       <Route element={<AppLayout />}>
         <Route index element={isAgency ? <AgencyHome /> : <ClientProjects />} />
         <Route path="portals/:portalId/projects" element={<ClientProjects />} />
-        <Route path="portals/:portalId/reports/:reportId?" element={<ProjectReports />} />
-        <Route path="reports/:reportId?" element={<ProjectReports />} />
+        <Route path="portals/:portalId/reports" element={<ProjectReports />} />
+        <Route path="portals/:portalId/reports/:reportId" element={<ReportDetail />} />
+        <Route path="reports" element={<ProjectReports />} />
+        <Route path="reports/:reportId" element={<ReportDetail />} />
         <Route path="projects/:projectId" element={<ProjectTasks />} />
         <Route path="projects/:projectId/reports" element={<ProjectReports />} />
         <Route path="tasks/:taskId" element={<TaskDetail />} />
