@@ -602,11 +602,17 @@ class BitrixEventView(APIView):
             ):
                 portal.application_token = app_token
                 portal.save(update_fields=["application_token", "updated_at"])
-        elif not settings.DEBUG:
-            return Response({"ok": False, "reason": "app_token_not_configured"}, status=403)
         elif app_token:
+            # First real Bitrix event after install — learn and persist the app token.
             portal.application_token = app_token
             portal.save(update_fields=["application_token", "updated_at"])
+            logger.info(
+                "Stored application_token from Bitrix event for portal=%s %s",
+                portal.id,
+                portal.domain,
+            )
+        elif not settings.DEBUG:
+            return Response({"ok": False, "reason": "app_token_not_configured"}, status=403)
 
         # Refresh tokens from event auth when provided
         access = (auth or {}).get("access_token") or (auth or {}).get("AUTH_ID")
