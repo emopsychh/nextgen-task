@@ -78,36 +78,50 @@ export function ClientProjects() {
     return ordered.slice(0, 4);
   }, [activity, projects]);
 
+  const loadGenRef = useRef(0);
+  const loadInFlightRef = useRef(false);
+
   async function load() {
     if (!token || !portalId) return;
-    const [projectData, activityData, portalsData, hoursData] = await Promise.all([
-      api<Project[] | { results: Project[] }>(
-        `/api/projects/?portal=${portalId}`,
-        {},
-        token
-      ),
-      api<ActivityEvent[]>(`/api/activity/?portal=${portalId}`, {}, token),
-      isAgency
-        ? api<Portal[] | { results: Portal[] }>("/api/portals/", {}, token)
-        : Promise.resolve([] as Portal[]),
-      !isAgency
-        ? api<DealBinding>("/api/deal-bindings/mine/", {}, token).catch(() => null)
-        : Promise.resolve(null),
-    ]);
-    setProjects(unwrapList(projectData));
-    setActivity(Array.isArray(activityData) ? activityData : []);
-    setDealHours(hoursData);
-    if (isAgency) {
-      const found = unwrapList(portalsData as Portal[] | { results: Portal[] }).find(
-        (p) => p.id === portalId
-      );
-      setPortalInfo(found || null);
-    } else {
-      setPortalInfo(portal);
+    // Collapse overlapping reloads (SSE burst + mount + interval).
+    if (loadInFlightRef.current) return;
+    const gen = loadGenRef.current;
+    loadInFlightRef.current = true;
+    try {
+      const [projectData, activityData, portalsData, hoursData] = await Promise.all([
+        api<Project[] | { results: Project[] }>(
+          `/api/projects/?portal=${portalId}`,
+          {},
+          token
+        ),
+        api<ActivityEvent[]>(`/api/activity/?portal=${portalId}`, {}, token),
+        isAgency
+          ? api<Portal[] | { results: Portal[] }>("/api/portals/", {}, token)
+          : Promise.resolve([] as Portal[]),
+        !isAgency
+          ? api<DealBinding>("/api/deal-bindings/mine/", {}, token).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      // Drop results if the portal changed while we were fetching.
+      if (gen !== loadGenRef.current) return;
+      setProjects(unwrapList(projectData));
+      setActivity(Array.isArray(activityData) ? activityData : []);
+      setDealHours(hoursData);
+      if (isAgency) {
+        const found = unwrapList(portalsData as Portal[] | { results: Portal[] }).find(
+          (p) => p.id === portalId
+        );
+        setPortalInfo(found || null);
+      } else {
+        setPortalInfo(portal);
+      }
+    } finally {
+      loadInFlightRef.current = false;
     }
   }
 
   useEffect(() => {
+    loadGenRef.current += 1;
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
   }, [token, portalId]);
 

@@ -1,13 +1,19 @@
+import logging
+import mimetypes
+from pathlib import Path
+from urllib.parse import quote
+
 from django.conf import settings
+from django.core import signing
 from django.db.models import Prefetch
+from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
-from rest_framework import viewsets
+from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
-import logging
 
 from portals.models import Portal, PortalLink
 from portals.permissions import IsPortalAuthenticated, can_access_client_portal
@@ -16,11 +22,13 @@ from .events import append_task_change_events
 from .models import Attachment, Comment, Project, Task, TimeEntry
 from .naming import display_attachment_name
 from .serializers import (
+    ATTACHMENT_SIGN_SALT,
     AttachmentSerializer,
     CommentSerializer,
     ProjectSerializer,
     TaskListSerializer,
     TaskSerializer,
+    serialize_thread_items,
 )
 from .tasks import sync_comment_to_bitrix, sync_project_to_bitrix, sync_task_to_bitrix
 from .timeutils import enqueue_timer_bitrix_sync, stop_time_entry
@@ -271,15 +279,29 @@ class TaskViewSet(viewsets.ModelViewSet):
             "project", "project__portal", "created_by"
         )
         if self.action == "retrieve":
+            # Comments/attachments are loaded lazily via the `thread` action,
+            # so we only prefetch what the task payload itself needs.
             qs = qs.prefetch_related(
-                Prefetch("comments", queryset=Comment.objects.select_related("author")),
-                "attachments",
-                "comments__attachments",
                 Prefetch("time_entries", queryset=TimeEntry.objects.select_related("author")),
             )
         portal_id = self.request.query_params.get("portal")
         if portal_id:
             qs = qs.filter(project__portal_id=portal_id)
+        if self.action == "list" and not self.request.query_params.get("ordering"):
+            # Deterministic board order so pagination pages line up with what
+            # the UI shows: active first, done last; soonest deadline first;
+            # newest as the final tie-breaker (also stabilises the cursor).
+            from django.db.models import Case, F, IntegerField, When
+
+            qs = qs.order_by(
+                Case(
+                    When(status=Task.Status.DONE, then=1),
+                    default=0,
+                    output_field=IntegerField(),
+                ),
+                F("due_date").asc(nulls_last=True),
+                "-created_at",
+            )
         return qs
 
     def list(self, request, *args, **kwargs):
@@ -451,6 +473,103 @@ class TaskViewSet(viewsets.ModelViewSet):
         task.refresh_from_db()
         return Response(TaskSerializer(task, context={"request": request}).data)
 
+    @action(detail=False, methods=["get"], url_path="counts")
+    def counts(self, request):
+        """Per-status task totals for a project (independent of pagination).
+
+        Lets the filter chips show true totals even when only the first page
+        of tasks has been loaded on the client.
+        """
+        from django.db.models import Count, Q
+
+        ids = accessible_portal_ids(request.user)
+        qs = Task.objects.filter(project__portal_id__in=ids)
+        project_id = request.query_params.get("project")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        portal_id = request.query_params.get("portal")
+        if portal_id:
+            qs = qs.filter(project__portal_id=portal_id)
+        agg = qs.aggregate(
+            all=Count("id"),
+            todo=Count("id", filter=Q(status=Task.Status.TODO)),
+            in_progress=Count("id", filter=Q(status=Task.Status.IN_PROGRESS)),
+            done=Count("id", filter=Q(status=Task.Status.DONE)),
+        )
+        return Response(
+            {
+                "all": agg["all"] or 0,
+                "todo": agg["todo"] or 0,
+                "in_progress": agg["in_progress"] or 0,
+                "done": agg["done"] or 0,
+            }
+        )
+
+    @action(detail=True, methods=["get"], url_path="thread")
+    def thread(self, request, pk=None):
+        """Paginated chat thread (comments + standalone files) for a task.
+
+        Modes:
+          * default        → newest `limit` items (chronological order)
+          * ?before=<iso>  → the `limit` items strictly older than the cursor
+                             (for infinite scroll upward)
+          * ?after=<iso>   → all items strictly newer than the cursor
+                             (for live delta after new activity)
+          * ?pull=1        → also pull fresh comments/files from Bitrix first
+                             (used on the initial open only)
+        """
+        from django.utils.dateparse import parse_datetime
+
+        task = self.get_object()
+        if not can_access_client_portal(request.user, task.project.portal):
+            raise PermissionDenied("No access")
+
+        if request.query_params.get("pull") in ("1", "true", "yes"):
+            try:
+                from board.comment_sync import pull_comments_from_bitrix
+                from board.file_sync import pull_attachments_from_bitrix
+
+                pull_comments_from_bitrix(task)
+                pull_attachments_from_bitrix(task)
+            except Exception:
+                logger.exception("Bitrix thread pull failed for task %s", task.id)
+
+        try:
+            limit = int(request.query_params.get("limit", 30))
+        except (TypeError, ValueError):
+            limit = 30
+        limit = max(1, min(limit, 100))
+
+        before = parse_datetime(request.query_params.get("before") or "")
+        after = parse_datetime(request.query_params.get("after") or "")
+
+        comments_qs = task.comments.select_related("author").prefetch_related("attachments")
+        files_qs = task.attachments.filter(comment__isnull=True)
+
+        # Live delta: everything strictly newer than the cursor, ascending.
+        if after:
+            comments = list(comments_qs.filter(created_at__gt=after))
+            files = list(files_qs.filter(created_at__gt=after))
+            items = serialize_thread_items(comments, files)
+            items.sort(key=lambda x: x["at"])
+            return Response({"items": items, "has_more": False})
+
+        # History page: newest `limit`, optionally older than `before`.
+        if before:
+            comments_qs = comments_qs.filter(created_at__lt=before)
+            files_qs = files_qs.filter(created_at__lt=before)
+
+        # Over-fetch by 1 from each source so the merged newest-N is exact and
+        # we can reliably tell whether older items remain.
+        comments = list(comments_qs.order_by("-created_at")[: limit + 1])
+        files = list(files_qs.order_by("-created_at")[: limit + 1])
+        merged = serialize_thread_items(comments, files)
+        merged.sort(key=lambda x: x["at"], reverse=True)  # newest first
+        has_more = len(merged) > limit
+        page = merged[:limit]
+        page.sort(key=lambda x: x["at"])  # chronological for rendering
+        return Response({"items": page, "has_more": has_more})
+
 
 class CommentViewSet(viewsets.ModelViewSet):
     serializer_class = CommentSerializer
@@ -535,3 +654,48 @@ class AttachmentViewSet(viewsets.ModelViewSet):
             logger.exception(
                 "Failed to enqueue Bitrix sync for attachment %s", attachment.id
             )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="download",
+        permission_classes=[permissions.AllowAny],
+        authentication_classes=[],
+    )
+    def download(self, request, pk=None):
+        """Serve an uploaded file behind a signed, expiring capability token.
+
+        Files are otherwise unreachable (nginx only exposes them via an
+        `internal` X-Accel location). The token is minted by the serializer
+        only for callers who already passed portal-access scoping, and it
+        expires after ATTACHMENT_URL_TTL so leaked links go dead.
+        """
+        token = request.query_params.get("t", "")
+        try:
+            signed_id = signing.loads(
+                token, salt=ATTACHMENT_SIGN_SALT, max_age=settings.ATTACHMENT_URL_TTL
+            )
+        except signing.BadSignature:
+            raise PermissionDenied("Ссылка недействительна или устарела")
+        if str(signed_id) != str(pk):
+            raise PermissionDenied("Ссылка недействительна")
+
+        attachment = Attachment.objects.filter(pk=pk).first()
+        if not attachment or not attachment.file:
+            raise Http404("Файл не найден")
+
+        filename = attachment.original_name or Path(attachment.file.name).name
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        disposition = f"inline; filename*=UTF-8''{quote(filename)}"
+
+        if settings.MEDIA_USE_X_ACCEL:
+            # nginx streams the bytes from the internal location; Django only
+            # authorises and points at the file.
+            resp = HttpResponse(content_type=content_type)
+            resp["X-Accel-Redirect"] = settings.MEDIA_X_ACCEL_PREFIX + attachment.file.name
+            resp["Content-Disposition"] = disposition
+            return resp
+
+        resp = FileResponse(attachment.file.open("rb"), content_type=content_type)
+        resp["Content-Disposition"] = disposition
+        return resp

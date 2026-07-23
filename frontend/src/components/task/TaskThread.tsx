@@ -1,14 +1,12 @@
 import { forwardRef, useMemo, useState } from "react";
-import type { Attachment, Comment } from "../../api/types";
+import type { Attachment, ThreadItem } from "../../api/types";
 import { ImageLightbox, type LightboxImage } from "../ImageLightbox";
 import { FileGlyph } from "../icons";
 import { isImageAttachment } from "../../lib/files";
 import { formatClock } from "../../lib/format";
 import { initialsFromLabel } from "../../lib/portalUi";
 
-export type ThreadItem =
-  | { kind: "comment"; at: string; comment: Comment }
-  | { kind: "file"; at: string; file: Attachment };
+export type { ThreadItem };
 
 export type ThreadRow =
   | { type: "day"; label: string }
@@ -172,10 +170,10 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
 
   return (
     <>
-      {rows.map((row, idx) => {
+      {rows.map((row) => {
         if (row.type === "day") {
           return (
-            <div key={`day-${idx}-${row.label}`} className="chat-day-pill">
+            <div key={`day-${row.label}`} className="chat-day-pill">
               {row.label}
             </div>
           );

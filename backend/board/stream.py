@@ -5,60 +5,105 @@ from __future__ import annotations
 import json
 import time
 
+from django.conf import settings
+from django.core import signing
 from django.http import JsonResponse, StreamingHttpResponse
 from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
-from rest_framework.permissions import AllowAny
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.tokens import AccessToken
 
 from portals.authentication import AnonymousPortalUser
 from portals.models import BitrixUser, Portal
-from portals.permissions import can_access_client_portal
+from portals.permissions import IsPortalAuthenticated, can_access_client_portal
 
 from board.realtime import _redis, get_cursor, portal_channel
 
+# Salt for the short-lived signed token used to authorise EventSource
+# connections (which cannot carry an Authorization header).
+STREAM_TOKEN_SALT = "board.stream.token.v1"
+
+
+def _resolve_portal_user(portal_id, bitrix_user_id):
+    if not portal_id or not bitrix_user_id:
+        return None
+    try:
+        portal = Portal.objects.get(pk=portal_id, is_active=True)
+        bitrix_user = BitrixUser.objects.get(portal=portal, bitrix_id=str(bitrix_user_id))
+    except (Portal.DoesNotExist, BitrixUser.DoesNotExist):
+        return None
+    return AnonymousPortalUser(portal=portal, bitrix_user=bitrix_user)
+
+
+def mint_stream_token(user) -> str:
+    """Sign a short-lived capability identifying the portal user.
+
+    Used instead of putting the long-lived app JWT in the SSE URL.
+    """
+    return signing.dumps(
+        {"p": user.portal_id, "u": user.bitrix_user.bitrix_id},
+        salt=STREAM_TOKEN_SALT,
+    )
+
 
 def _user_from_request(request):
-    """Support Authorization header or ?access_token= for EventSource."""
+    """Authenticate via DRF (Authorization header) or a signed stream token.
+
+    The app JWT is only ever accepted from the Authorization header — never
+    from the query string — so it cannot leak into access logs. EventSource,
+    which cannot set headers, passes a short-lived signed `?t=` token instead.
+    """
     user = getattr(request, "user", None)
     if user and getattr(user, "is_authenticated", False) and getattr(user, "portal", None):
         return user
     params = getattr(request, "query_params", None) or getattr(request, "GET", {})
-    raw = (params.get("access_token") or params.get("token") or "") if params is not None else ""
-    if not raw:
-        auth = request.META.get("HTTP_AUTHORIZATION") or ""
-        if auth.lower().startswith("bearer "):
-            raw = auth.split(" ", 1)[1].strip()
-    if not raw:
-        return None
-    try:
-        token = AccessToken(raw)
-        portal_id = token.get("portal_id")
-        bitrix_user_id = token.get("bitrix_user_id")
-        if not portal_id or not bitrix_user_id:
+    raw = (params.get("t") or "") if params is not None else ""
+    if raw:
+        try:
+            data = signing.loads(
+                raw, salt=STREAM_TOKEN_SALT, max_age=settings.STREAM_TOKEN_TTL
+            )
+        except signing.BadSignature:
             return None
-        portal = Portal.objects.get(pk=portal_id, is_active=True)
-        bitrix_user = BitrixUser.objects.get(portal=portal, bitrix_id=str(bitrix_user_id))
-        return AnonymousPortalUser(portal=portal, bitrix_user=bitrix_user)
-    except Exception:
-        return None
+        return _resolve_portal_user(data.get("p"), data.get("u"))
+    return None
+
+
+class StreamTokenView(APIView):
+    """Mint a short-lived signed token for the EventSource connection.
+
+    Authenticated with the normal app JWT (Authorization header); returns a
+    capability scoped to the caller that expires after STREAM_TOKEN_TTL.
+    """
+
+    permission_classes = [IsPortalAuthenticated]
+
+    def get(self, request):
+        portal_id = request.query_params.get("portal")
+        if not portal_id:
+            return Response({"detail": "portal required"}, status=400)
+        portal = Portal.objects.filter(pk=portal_id).first()
+        if not portal or not can_access_client_portal(request.user, portal):
+            return Response({"detail": "No access"}, status=403)
+        return Response(
+            {"t": mint_stream_token(request.user), "ttl": settings.STREAM_TOKEN_TTL}
+        )
 
 
 class SyncCursorView(APIView):
-    """Lightweight version counter — FE polls when SSE unavailable."""
+    """Lightweight version counter — FE polls when SSE unavailable.
 
-    permission_classes = [AllowAny]
-    authentication_classes = []
+    Authenticated with the app JWT via the Authorization header (standard DRF),
+    so no credential is ever placed in the query string / logs.
+    """
+
+    permission_classes = [IsPortalAuthenticated]
     renderer_classes = [JSONRenderer]
 
     def get(self, request):
-        user = _user_from_request(request)
-        if not user:
-            return Response({"detail": "Unauthorized"}, status=401)
+        user = request.user
         portal_id = request.query_params.get("portal")
         if not portal_id:
             return Response({"detail": "portal required"}, status=400)

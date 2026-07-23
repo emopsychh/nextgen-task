@@ -7,7 +7,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, type AuthSession, type Portal, type BitrixUser } from "../api/types";
+import {
+  api,
+  AUTH_EXPIRED_EVENT,
+  AUTH_REFRESHED_EVENT,
+  type AuthSession,
+  type Portal,
+  type BitrixUser,
+} from "../api/types";
 
 type AuthState = {
   token: string | null;
@@ -90,7 +97,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => persist(null), [persist]);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    // Bitrix auth is handed off in the URL fragment (never sent to servers /
+    // logs). Fall back to the query string for backward compatibility.
+    const hash = window.location.hash.startsWith("#")
+      ? window.location.hash.slice(1)
+      : "";
+    const params = new URLSearchParams(hash || window.location.search);
     const authId = params.get("AUTH_ID") || params.get("auth_id");
     const domain = params.get("DOMAIN") || params.get("domain");
     const memberId = params.get("member_id") || params.get("MEMBER_ID");
@@ -120,6 +132,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     void boot();
   }, [loginBitrix]);
+
+  // Keep in-memory token in sync with the api-layer refresh flow, and log out
+  // when the refresh token is no longer valid.
+  useEffect(() => {
+    function onRefreshed(e: Event) {
+      const detail = (e as CustomEvent).detail as { access?: string } | undefined;
+      if (detail?.access) setToken(detail.access);
+    }
+    function onExpired() {
+      persist(null);
+    }
+    window.addEventListener(AUTH_REFRESHED_EVENT, onRefreshed);
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => {
+      window.removeEventListener(AUTH_REFRESHED_EVENT, onRefreshed);
+      window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    };
+  }, [persist]);
 
   const value = useMemo(
     () => ({

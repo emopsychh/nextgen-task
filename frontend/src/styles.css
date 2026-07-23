@@ -3557,6 +3557,23 @@ a.task-card.is-done:hover,
   backdrop-filter: blur(6px);
 }
 
+.chat-load-older {
+  align-self: center;
+  padding: 4px 12px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.task-list-sentinel {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 32px;
+  padding: 8px 0;
+  font-size: 0.8rem;
+}
+
 .task-summary-card {
   position: relative;
   align-self: stretch;
@@ -3607,6 +3624,66 @@ a.task-card.is-done:hover,
   align-items: flex-start;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+/* «Важная задача» toggle (task card) + list flag */
+.task-important-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: 2px;
+  margin-left: auto;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #b4bdb9;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.task-important-toggle:hover:not(:disabled) {
+  color: #e0a300;
+  background: rgba(240, 180, 0, 0.1);
+  border-color: rgba(240, 180, 0, 0.28);
+}
+
+.task-important-toggle:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.task-important-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.task-important-toggle.is-important {
+  color: #f0a500;
+}
+
+.task-important-toggle.is-static {
+  cursor: default;
+  background: transparent;
+  border-color: transparent;
+}
+
+.task-important-flag {
+  display: inline-flex;
+  align-items: center;
+  color: #f0a500;
+  flex-shrink: 0;
+}
+
+.task-card.is-important {
+  border-color: #f2d38a;
+  box-shadow: inset 3px 0 0 #f0a500;
+}
+
+.task-card.is-important:hover {
+  border-color: #eec661;
 }
 
 .task-summary-icon {

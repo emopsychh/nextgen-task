@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "django_filters",
     "portals",
     "board",
@@ -100,6 +101,29 @@ STORAGES = {
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# --- Attachment access control -------------------------------------------
+# Uploaded files are NEVER served publicly. They are delivered only through the
+# authenticated `/api/attachments/<id>/download/` endpoint, gated by a signed,
+# expiring capability token. In production nginx serves the bytes efficiently
+# via X-Accel-Redirect from an `internal` location.
+try:
+    ATTACHMENT_URL_TTL = int(os.getenv("ATTACHMENT_URL_TTL", str(60 * 60 * 12)))  # 12h
+except (TypeError, ValueError):
+    ATTACHMENT_URL_TTL = 60 * 60 * 12
+MEDIA_USE_X_ACCEL = os.getenv("MEDIA_USE_X_ACCEL", "0") == "1"
+MEDIA_X_ACCEL_PREFIX = (
+    os.getenv("MEDIA_X_ACCEL_PREFIX", "/_protected_media/").rstrip("/") + "/"
+)
+
+# --- Live sync (SSE) ------------------------------------------------------
+# EventSource cannot send Authorization headers, so the SSE connection is
+# authorised by a short-lived signed token minted from the user's JWT. The
+# long-lived app JWT is NEVER placed in a URL (it would land in access logs).
+try:
+    STREAM_TOKEN_TTL = int(os.getenv("STREAM_TOKEN_TTL", "900"))  # 15 min
+except (TypeError, ValueError):
+    STREAM_TOKEN_TTL = 900
+
 # Behind reverse proxy / nginx
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
@@ -139,10 +163,23 @@ REST_FRAMEWORK = {
 
 from datetime import timedelta  # noqa: E402
 
+try:
+    _access_min = int(os.getenv("ACCESS_TOKEN_MINUTES", "60"))
+except (TypeError, ValueError):
+    _access_min = 60
+try:
+    _refresh_days = int(os.getenv("REFRESH_TOKEN_DAYS", "7"))
+except (TypeError, ValueError):
+    _refresh_days = 7
+
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=12),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
-    "ROTATE_REFRESH_TOKENS": False,
+    # Short-lived access token: a leaked/logged token is useless within an hour.
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=_access_min),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=_refresh_days),
+    # Rotate on every refresh and blacklist the old refresh token, so a stolen
+    # refresh token stops working the moment the real client refreshes.
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
 }
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
@@ -169,6 +206,12 @@ BITRIX_ACCOMPANIMENT_CATEGORY_ID = os.getenv("BITRIX_ACCOMPANIMENT_CATEGORY_ID",
 PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "http://localhost:8000").rstrip("/")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 DEV_AUTH_BYPASS = os.getenv("DEV_AUTH_BYPASS", "0") == "1"
+if DEV_AUTH_BYPASS and not DEBUG:
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "DEV_AUTH_BYPASS must be 0 when DEBUG=0 — it disables authentication entirely"
+    )
 # Comma-separated Bitrix member_id and/or portal domains treated as agency.
 # Everyone else defaults to client (no UI role picker).
 AGENCY_MEMBER_IDS = os.getenv("AGENCY_MEMBER_IDS", "")

@@ -20,8 +20,8 @@ class Project(models.Model):
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
     # Agency Bitrix: parent task inside company workgroup (GROUP_ID)
-    bitrix_task_id = models.CharField(max_length=64, blank=True)
-    bitrix_group_id = models.CharField(max_length=64, blank=True)
+    bitrix_task_id = models.CharField(max_length=64, blank=True, db_index=True)
+    bitrix_group_id = models.CharField(max_length=64, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -49,8 +49,10 @@ class Task(models.Model):
     description = models.TextField(blank=True)
     due_date = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.TODO)
-    bitrix_task_id = models.CharField(max_length=64, blank=True)
-    agency_bitrix_task_id = models.CharField(max_length=64, blank=True)
+    # Bitrix «Важная задача» → PRIORITY high (2). Two-way synced.
+    is_important = models.BooleanField(default=False)
+    bitrix_task_id = models.CharField(max_length=64, blank=True, db_index=True)
+    agency_bitrix_task_id = models.CharField(max_length=64, blank=True, db_index=True)
     sync_status = models.CharField(
         max_length=16, choices=SyncStatus.choices, default=SyncStatus.PENDING
     )

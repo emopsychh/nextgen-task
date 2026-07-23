@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { API_BASE, refreshAccessToken } from "../api/types";
 
 type Options = {
   token: string | null;
@@ -39,25 +40,40 @@ export function usePortalLiveSync({ token, portalId, enabled = true, onEvent }: 
       }
     }
 
-    const base = "";
-    const url = `${base}/api/stream/?portal=${portalId}&access_token=${encodeURIComponent(token)}`;
-    try {
-      es = new EventSource(url);
-      es.onmessage = (ev) => {
-        if (!cancelled) handlePayload(ev.data);
-      };
-    // Fall back to cursor poll if SSE dies (close to stop browser auto-reconnect storm)
-      es.onerror = () => {
-        try {
-          es?.close();
-        } catch {
-          // ignore
+    // The app JWT is NEVER put in a URL. EventSource (which can't send headers)
+    // is authorised by a short-lived signed stream token minted over a normal
+    // authenticated fetch; the cursor poll uses the Authorization header.
+    async function connect() {
+      try {
+        const res = await fetch(`${API_BASE}/api/stream/token/?portal=${portalId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled) return;
+        if (res.status === 401) {
+          // Access token expired — refresh; the token change re-runs this effect.
+          void refreshAccessToken();
+          return;
         }
-        es = null;
-        if (!cancelled && pollTimer == null) startPoll();
-      };
-    } catch {
-      startPoll();
+        if (!res.ok) throw new Error("stream token failed");
+        const { t } = (await res.json()) as { t: string };
+        if (cancelled || !t) throw new Error("stream token missing");
+        es = new EventSource(`${API_BASE}/api/stream/?portal=${portalId}&t=${encodeURIComponent(t)}`);
+        es.onmessage = (ev) => {
+          if (!cancelled) handlePayload(ev.data);
+        };
+        // Fall back to cursor poll if SSE dies (close to stop reconnect storm)
+        es.onerror = () => {
+          try {
+            es?.close();
+          } catch {
+            // ignore
+          }
+          es = null;
+          if (!cancelled && pollTimer == null) startPoll();
+        };
+      } catch {
+        if (!cancelled) startPoll();
+      }
     }
 
     function startPoll() {
@@ -65,11 +81,17 @@ export function usePortalLiveSync({ token, portalId, enabled = true, onEvent }: 
       async function tick() {
         if (cancelled || !token) return;
         try {
-          const res = await fetch(
-            `/api/sync/cursor/?portal=${portalId}&access_token=${encodeURIComponent(token)}`
-          );
+          const res = await fetch(`${API_BASE}/api/sync/cursor/?portal=${portalId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (cancelled) return;
+          if (res.status === 401) {
+            void refreshAccessToken();
+            return;
+          }
           if (!res.ok) return;
           const data = (await res.json()) as { v?: number };
+          if (cancelled) return;
           const v = Number(data.v || 0);
           if (lastV.current && v > lastV.current) {
             onEventRef.current({ v });
@@ -83,17 +105,12 @@ export function usePortalLiveSync({ token, portalId, enabled = true, onEvent }: 
       pollTimer = window.setInterval(() => void tick(), 2000);
     }
 
-    // Safety net even with SSE
-    const safety = window.setInterval(() => {
-      if (cancelled) return;
-      // light nudge every 20s in case a publish was missed
-    }, 20000);
+    void connect();
 
     return () => {
       cancelled = true;
       es?.close();
       if (pollTimer != null) window.clearInterval(pollTimer);
-      window.clearInterval(safety);
     };
   }, [token, portalId, enabled]);
 }

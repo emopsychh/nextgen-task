@@ -7,6 +7,20 @@ import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import type { DueTone } from "../../lib/dates";
 import { TaskTimer } from "./TaskTimer";
 
+function StarIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden>
+      <path
+        d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.9l-5.2 2.73.99-5.79-4.21-4.1 5.82-.85L12 3.5z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 type Props = {
   task: Task;
   creator: string;
@@ -24,6 +38,7 @@ type Props = {
   onCommitDescription: () => void;
   onSetStatus: (status: TaskStatus) => void;
   onSetDueDate: (iso: string) => void;
+  onToggleImportant: () => void;
 };
 
 export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSummaryCard(
@@ -44,9 +59,11 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
     onCommitDescription,
     onSetStatus,
     onSetDueDate,
+    onToggleImportant,
   },
   ref
 ) {
+  const important = Boolean(task.is_important);
   return (
     <article
       className={`task-summary-card${canManage ? " is-editable" : ""}${task.status === "done" ? " is-done" : ""}`}
@@ -81,6 +98,27 @@ export const TaskSummaryCard = forwardRef<HTMLElement, Props>(function TaskSumma
             {task.title}
           </h1>
         )}
+        {canManage ? (
+          <button
+            type="button"
+            className={`task-important-toggle${important ? " is-important" : ""}`}
+            onClick={onToggleImportant}
+            disabled={saveBusy}
+            aria-pressed={important}
+            title={important ? "Снять отметку «Важная»" : "Отметить как важную"}
+            aria-label={important ? "Снять отметку «Важная»" : "Отметить как важную"}
+          >
+            <StarIcon filled={important} />
+          </button>
+        ) : important ? (
+          <span
+            className="task-important-toggle is-important is-static"
+            title="Важная задача"
+            aria-label="Важная задача"
+          >
+            <StarIcon filled />
+          </span>
+        ) : null}
       </div>
 
       {canManage ? (

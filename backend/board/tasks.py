@@ -1,6 +1,8 @@
 from celery import shared_task
 import logging
 
+logger = logging.getLogger(__name__)
+
 from portals.bitrix import (
     BITRIX_STATUS_COMPLETED,
     BITRIX_STATUS_DEFERRED,
@@ -120,6 +122,8 @@ def _task_fields(
         fields["PARENT_ID"] = parent_id
     # Enable Bitrix «Учёт времени» so startTimer/pauseTimer work in the UI
     fields["ALLOW_TIME_TRACKING"] = "Y"
+    # Bitrix PRIORITY: 2 = High («важная»), 1 = Normal. Mirror the local flag.
+    fields["PRIORITY"] = "2" if getattr(task, "is_important", False) else "1"
     if crm_bindings:
         fields["UF_CRM_TASK"] = list(crm_bindings)
     return fields
@@ -369,21 +373,15 @@ def _do_sync_project_to_bitrix(project_id: int) -> dict:
     return {"ok": True, "bitrix_task_id": bitrix_id, "group_id": group_id}
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=30)
-def sync_task_to_bitrix(self, task_id: int):
-    """
-    Sync task:
-    - client Bitrix: flat task (no GROUP/PARENT)
-    - agency Bitrix: subtask under Project parent (PARENT_ID + GROUP_ID)
+def _sync_task_locked(task) -> dict:
+    """Create/update the Bitrix copies for a task.
+
+    Assumes the caller holds a row lock (select_for_update) on this Task, so two
+    concurrent runs cannot both see an empty bitrix_task_id and both create a
+    Bitrix task (which would duplicate it). All ids are saved here, inside the
+    caller's transaction, so they are committed before any Celery retry.
     """
     from board.models import Task
-
-    try:
-        task = Task.objects.select_related(
-            "project", "project__portal", "created_by"
-        ).get(pk=task_id)
-    except Task.DoesNotExist:
-        return {"ok": False, "reason": "missing"}
 
     client_portal = task.project.portal
     errors: list[str] = []
@@ -428,17 +426,65 @@ def sync_task_to_bitrix(self, task_id: int):
         task.sync_status = Task.SyncStatus.ERROR
         task.sync_error = "; ".join(errors)
         task.save(update_fields=list(set(update_fields)))
-        try:
-            raise self.retry(exc=BitrixAPIError(task.sync_error))
-        except self.MaxRetriesExceededError:
-            return {"ok": False, "error": task.sync_error, "partial_ids": {
+        return {
+            "errors": True,
+            "error": task.sync_error,
+            "partial_ids": {
                 "bitrix_task_id": task.bitrix_task_id,
                 "agency_bitrix_task_id": task.agency_bitrix_task_id,
-            }}
+            },
+        }
 
     task.sync_status = Task.SyncStatus.SYNCED
     task.sync_error = ""
     task.save(update_fields=list(set(update_fields)))
+    return {"errors": False}
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=30)
+def sync_task_to_bitrix(self, task_id: int):
+    """
+    Sync task:
+    - client Bitrix: flat task (no GROUP/PARENT)
+    - agency Bitrix: subtask under Project parent (PARENT_ID + GROUP_ID)
+
+    Runs under a per-task row lock so overlapping jobs (rapid create+edit, or a
+    retry racing a fresh enqueue) can never create duplicate Bitrix tasks.
+    """
+    from django.db import transaction
+
+    from board.models import Task
+
+    try:
+        with transaction.atomic():
+            try:
+                task = (
+                    Task.objects.select_for_update()
+                    .select_related("project", "project__portal", "created_by")
+                    .get(pk=task_id)
+                )
+            except Task.DoesNotExist:
+                return {"ok": False, "reason": "missing"}
+            outcome = _sync_task_locked(task)
+    except Exception as exc:
+        # Unexpected failure around the locked section — let Celery retry.
+        logger.exception("sync_task_to_bitrix crashed task=%s", task_id)
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": str(exc)}
+
+    # Ids are committed at this point; a retry will UPDATE, never re-create.
+    if outcome.get("errors"):
+        try:
+            raise self.retry(exc=BitrixAPIError(outcome["error"]))
+        except self.MaxRetriesExceededError:
+            return {
+                "ok": False,
+                "error": outcome["error"],
+                "partial_ids": outcome.get("partial_ids"),
+            }
+
     try:
         from board.realtime import publish_task_event
 
@@ -733,6 +779,7 @@ def post_time_entry_to_deal(self, entry_id: int):
     Deduct a closed time session from the accompaniment deal remaining hours.
     Idempotent via atomic claim on TimeEntry.billed_to_deal_at.
     """
+    from django.db import transaction
     from django.utils import timezone
 
     from board.models import TimeEntry
@@ -807,22 +854,34 @@ def post_time_entry_to_deal(self, entry_id: int):
     try:
         hours_result = None
         if hours_fields_configured():
-            deal = client.get_deal(binding.deal_id)
-            new_remaining, spent = compute_remaining_after_spend(deal, seconds)
-            if new_remaining is not None:
-                client.update_deal(binding.deal_id, remaining_update_fields(new_remaining))
-                deal_updated = True
-                hours = read_deal_hours(deal)
-                paid = hours.paid
-                binding.paid_hours = paid
-                binding.remaining_hours = new_remaining
-                binding.save(update_fields=["paid_hours", "remaining_hours", "updated_at"])
-                comment += f". Остаток часов: {new_remaining}"
-                hours_result = {
-                    "spent_hours": float(spent),
-                    "remaining_hours": float(new_remaining),
-                    "paid_hours": float(paid) if paid is not None else None,
-                }
+            # Serialize the remaining-hours read-modify-write for this client.
+            # Without this, two sessions on the same deal (or a concurrent credit
+            # transfer) both read the same remaining value and the second write
+            # clobbers the first — silently losing billed hours (double-spend).
+            # We lock the same PortalLink row the credit logic locks, so ALL
+            # remaining-hours mutations for a client↔agency pair are ordered.
+            with transaction.atomic():
+                PortalLink.objects.select_for_update().filter(pk=link.pk).first()
+                deal = client.get_deal(binding.deal_id)
+                new_remaining, spent = compute_remaining_after_spend(deal, seconds)
+                if new_remaining is not None:
+                    client.update_deal(
+                        binding.deal_id, remaining_update_fields(new_remaining)
+                    )
+                    deal_updated = True
+                    hours = read_deal_hours(deal)
+                    paid = hours.paid
+                    binding.paid_hours = paid
+                    binding.remaining_hours = new_remaining
+                    binding.save(
+                        update_fields=["paid_hours", "remaining_hours", "updated_at"]
+                    )
+                    comment += f". Остаток часов: {new_remaining}"
+                    hours_result = {
+                        "spent_hours": float(spent),
+                        "remaining_hours": float(new_remaining),
+                        "paid_hours": float(paid) if paid is not None else None,
+                    }
 
         result = client.add_deal_timeline_comment(binding.deal_id, comment)
         return {

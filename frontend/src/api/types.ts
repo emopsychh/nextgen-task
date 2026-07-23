@@ -85,21 +85,48 @@ export type Task = {
   description: string;
   due_date: string | null;
   status: TaskStatus;
+  is_important?: boolean;
   bitrix_task_id: string;
   agency_bitrix_task_id?: string;
   sync_status: SyncStatus;
   sync_error?: string;
   created_by?: number | null;
   created_by_name?: string | null;
+  // Lightweight activity signals — the full chat thread is loaded lazily via
+  // GET /api/tasks/{id}/thread/ (see ThreadPage), never inlined on the task.
   comments_count?: number;
-  comments?: Comment[];
-  attachments?: Attachment[];
+  last_comment_id?: number;
+  files_count?: number;
+  last_file_id?: number;
   total_tracked_seconds?: number;
   active_timer?: TimeEntry | null;
   deal_paid_hours?: number | null;
   deal_remaining_hours?: number | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ThreadItem =
+  | { kind: "comment"; at: string; comment: Comment }
+  | { kind: "file"; at: string; file: Attachment };
+
+export type ThreadPage = {
+  items: ThreadItem[];
+  has_more: boolean;
+};
+
+export type Paginated<T> = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: T[];
+};
+
+export type TaskCounts = {
+  all: number;
+  todo: number;
+  in_progress: number;
+  done: number;
 };
 
 export type TimeEntry = {
@@ -144,7 +171,71 @@ export type AuthSession = {
   user: BitrixUser;
 };
 
-const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "";
+export const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "";
+
+// Must match AuthContext's storage key so the refresh flow shares one session.
+const AUTH_STORAGE_KEY = "nextgen_auth";
+export const AUTH_REFRESHED_EVENT = "nextgen-auth-refreshed";
+export const AUTH_EXPIRED_EVENT = "nextgen-auth-expired";
+
+function readStoredSession(): AuthSession | null {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as AuthSession) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredTokens(access: string, refresh: string): void {
+  const s = readStoredSession();
+  if (!s) return;
+  s.access = access;
+  s.refresh = refresh;
+  try {
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(s));
+  } catch {
+    // ignore quota / privacy-mode errors
+  }
+}
+
+// Single-flight refresh: many requests may 401 at once; only one hits the
+// refresh endpoint, the rest await the same promise.
+let refreshInFlight: Promise<string | null> | null = null;
+
+export function refreshAccessToken(): Promise<string | null> {
+  if (refreshInFlight) return refreshInFlight;
+  const refresh = readStoredSession()?.refresh;
+  if (!refresh) return Promise.resolve(null);
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/refresh/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh }),
+      });
+      if (!res.ok) {
+        // Refresh token expired/blacklisted → session is over.
+        window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+        return null;
+      }
+      const data = (await res.json()) as { access: string; refresh?: string };
+      const nextRefresh = data.refresh ?? refresh;
+      writeStoredTokens(data.access, nextRefresh);
+      window.dispatchEvent(
+        new CustomEvent(AUTH_REFRESHED_EVENT, {
+          detail: { access: data.access, refresh: nextRefresh },
+        })
+      );
+      return data.access;
+    } catch {
+      return null;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
 
 async function parseError(res: Response): Promise<string> {
   try {
@@ -161,13 +252,21 @@ export async function api<T>(
   options: RequestInit = {},
   token?: string | null
 ): Promise<T> {
-  const headers = new Headers(options.headers || {});
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (!(options.body instanceof FormData) && !headers.has("Content-Type") && options.body) {
-    headers.set("Content-Type", "application/json");
-  }
+  const send = (bearer?: string | null) => {
+    const headers = new Headers(options.headers || {});
+    if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
+    if (!(options.body instanceof FormData) && !headers.has("Content-Type") && options.body) {
+      headers.set("Content-Type", "application/json");
+    }
+    return fetch(`${API_BASE}${path}`, { ...options, headers });
+  };
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  let res = await send(token);
+  // Transparently refresh a short-lived access token once on 401, then retry.
+  if (res.status === 401 && token) {
+    const fresh = await refreshAccessToken();
+    if (fresh) res = await send(fresh);
+  }
   if (!res.ok) {
     throw new Error(await parseError(res));
   }

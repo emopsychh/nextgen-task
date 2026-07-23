@@ -593,6 +593,41 @@ def parse_bitrix_deadline(task_data: dict):
     return dt
 
 
+def bitrix_task_is_important(task_data: dict) -> bool | None:
+    """Bitrix PRIORITY high (>=2) → important. None when Bitrix gave no signal."""
+    if not isinstance(task_data, dict):
+        return None
+    for key in ("priority", "PRIORITY"):
+        if key in task_data and task_data[key] not in (None, ""):
+            try:
+                return int(task_data[key]) >= 2
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def apply_inbound_importance(task, is_important, *, allow_while_pending: bool = True) -> bool:
+    """Apply «important» flag from Bitrix. Returns True if changed."""
+    from board.models import Task
+
+    if is_important is None:
+        return False
+    if task.sync_status == Task.SyncStatus.PENDING and not allow_while_pending:
+        return False
+    if bool(task.is_important) == bool(is_important):
+        return False
+    task.is_important = bool(is_important)
+    if task.sync_status != Task.SyncStatus.PENDING:
+        task.sync_status = Task.SyncStatus.SYNCED
+        task.sync_error = ""
+        task.save(
+            update_fields=["is_important", "sync_status", "sync_error", "updated_at"]
+        )
+    else:
+        task.save(update_fields=["is_important", "updated_at"])
+    return True
+
+
 def apply_inbound_deadline(task, new_due, *, allow_while_pending: bool = True) -> bool:
     """Apply deadline from Bitrix. Returns True if changed."""
     from board.models import Task
@@ -843,6 +878,9 @@ def pull_task_status_from_bitrix(task) -> bool:
     task.refresh_from_db()
     changed = apply_inbound_deadline(task, due, allow_while_pending=True) or changed
 
+    important = bitrix_task_is_important(data)
+    changed = apply_inbound_importance(task, important, allow_while_pending=True) or changed
+
     raw_title = str(data.get("title") or data.get("TITLE") or "").strip()
     if raw_title:
         new_title = strip_portal_title_prefix(raw_title, task.project.portal)
@@ -1019,12 +1057,26 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
                 )
             except Exception:
                 logger.exception("mirror deadline failed for task %s", task.id)
+
+        important = bitrix_task_is_important(data or merged)
+        if important is None and after:
+            important = bitrix_task_is_important(after)
+        importance_changed = apply_inbound_importance(
+            task, important, allow_while_pending=True
+        )
+
         return {
             "ok": True,
             "task_id": task.id,
             "status": local,
             "due_date": due.isoformat() if due else None,
-            "changed": status_changed or due_changed or meta_changed or timer_changed,
+            "changed": (
+                status_changed
+                or due_changed
+                or meta_changed
+                or timer_changed
+                or importance_changed
+            ),
             "timer_changed": timer_changed,
         }
 

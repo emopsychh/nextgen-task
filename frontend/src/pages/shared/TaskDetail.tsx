@@ -5,13 +5,15 @@ import {
   type Comment,
   type Task,
   type TaskStatus,
+  type ThreadItem,
+  type ThreadPage,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { TaskGlyph } from "../../components/icons";
 import { TaskComposer } from "../../components/task/TaskComposer";
 import { TaskSummaryCard } from "../../components/task/TaskSummaryCard";
-import { TaskThread, type ThreadItem, type ThreadRow } from "../../components/task/TaskThread";
+import { TaskThread, type ThreadRow } from "../../components/task/TaskThread";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { useTaskLiveSync } from "../../hooks/useTaskLiveSync";
 import { dueMeta } from "../../lib/dates";
@@ -39,6 +41,7 @@ type TaskPatch = Partial<{
   description: string;
   status: TaskStatus;
   due_date: string | null;
+  is_important: boolean;
 }>;
 
 export function TaskDetail() {
@@ -53,6 +56,16 @@ export function TaskDetail() {
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   const [task, setTask] = useState<Task | null>(null);
+  const [items, setItems] = useState<ThreadItem[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const itemsRef = useRef<ThreadItem[]>([]);
+  const activityRef = useRef<{ c: number; lc: number; f: number; lf: number } | null>(
+    null
+  );
+  // Bumped whenever the task/token changes; async responses that resolve after
+  // a switch are discarded so a slow request can't overwrite a newer task.
+  const genRef = useRef(0);
   const [comment, setComment] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -72,18 +85,167 @@ export function TaskDetail() {
 
   async function load() {
     if (!token || !taskId) return;
+    const gen = genRef.current;
     // Fast path: show task from DB immediately. Bitrix pull happens in live sync.
     const data = await api<Task>(`/api/tasks/${taskId}/`, {}, token);
+    if (gen !== genRef.current) return;
     setTask(data);
     setDraftTitle(data.title);
     setDraftDescription(data.description || "");
   }
 
+  // --- Chat thread: loaded lazily & paginated (never inlined on the task) ---
+
+  function itemKey(it: ThreadItem): string {
+    return it.kind === "comment" ? `c${it.comment.id}` : `f${it.file.id}`;
+  }
+
+  function isNearBottom(): boolean {
+    const el = threadRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+  }
+
+  function scrollToBottom(smooth = false) {
+    requestAnimationFrame(() =>
+      threadEndRef.current?.scrollIntoView(smooth ? { behavior: "smooth" } : undefined)
+    );
+  }
+
+  async function fetchThread(query: string): Promise<ThreadPage | null> {
+    if (!token || !taskId) return null;
+    return api<ThreadPage>(`/api/tasks/${taskId}/thread/${query}`, {}, token);
+  }
+
+  function appendNew(newItems: ThreadItem[]) {
+    if (!newItems.length) return;
+    setItems((prev) => {
+      const seen = new Set(prev.map(itemKey));
+      const merged = prev.slice();
+      for (const it of newItems) if (!seen.has(itemKey(it))) merged.push(it);
+      merged.sort((a, b) => a.at.localeCompare(b.at));
+      return merged;
+    });
+  }
+
+  async function loadInitialThread() {
+    const gen = genRef.current;
+    const page = await fetchThread("?pull=1&limit=30");
+    if (!page || gen !== genRef.current) return;
+    setItems(page.items);
+    setHasMore(page.has_more);
+    scrollToBottom(false);
+  }
+
+  async function reloadLatestThread() {
+    const gen = genRef.current;
+    const page = await fetchThread("?limit=30");
+    if (!page || gen !== genRef.current) return;
+    setItems(page.items);
+    setHasMore(page.has_more);
+  }
+
+  async function loadOlder() {
+    if (loadingOlder || !hasMore) return;
+    const cur = itemsRef.current;
+    const oldest = cur.length ? cur[0].at : "";
+    if (!oldest) return;
+    const gen = genRef.current;
+    setLoadingOlder(true);
+    const el = threadRef.current;
+    const prevH = el?.scrollHeight ?? 0;
+    const prevTop = el?.scrollTop ?? 0;
+    try {
+      const page = await fetchThread(`?before=${encodeURIComponent(oldest)}&limit=30`);
+      if (!page || gen !== genRef.current) return;
+      setItems((prev) => {
+        const seen = new Set(prev.map(itemKey));
+        const older = page.items.filter((it) => !seen.has(itemKey(it)));
+        return older.length ? [...older, ...prev] : prev;
+      });
+      setHasMore(page.has_more);
+      // Preserve the viewport anchor after prepending older messages.
+      requestAnimationFrame(() => {
+        const node = threadRef.current;
+        if (node) node.scrollTop = prevTop + (node.scrollHeight - prevH);
+      });
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
+
+  // Detect new/removed activity from the lightweight live-poll signals and
+  // fetch only the delta instead of the whole history.
+  async function reconcileThread(data: Task) {
+    const gen = genRef.current;
+    const next = {
+      c: data.comments_count ?? 0,
+      lc: data.last_comment_id ?? 0,
+      f: data.files_count ?? 0,
+      lf: data.last_file_id ?? 0,
+    };
+    const prev = activityRef.current;
+    activityRef.current = next;
+    if (!prev) return; // baseline is established by loadInitialThread()
+    if (next.c === prev.c && next.lc === prev.lc && next.f === prev.f && next.lf === prev.lf) {
+      return;
+    }
+    const grew =
+      next.lc > prev.lc || next.lf > prev.lf || next.c > prev.c || next.f > prev.f;
+    if (!grew) {
+      // Something was removed (e.g. a deleted comment) — resync from latest.
+      await reloadLatestThread();
+      return;
+    }
+    const stick = isNearBottom();
+    const cur = itemsRef.current;
+    const newestAt = cur.length ? cur[cur.length - 1].at : "";
+    const page = await fetchThread(
+      newestAt ? `?after=${encodeURIComponent(newestAt)}` : "?limit=30"
+    );
+    if (!page || gen !== genRef.current) return;
+    if (newestAt) {
+      appendNew(page.items);
+    } else {
+      setItems(page.items);
+      setHasMore(page.has_more);
+    }
+    if (stick) scrollToBottom(true);
+  }
+
+  async function refreshAfterSend() {
+    const gen = genRef.current;
+    const cur = itemsRef.current;
+    const newestAt = cur.length ? cur[cur.length - 1].at : "";
+    const page = await fetchThread(
+      newestAt ? `?after=${encodeURIComponent(newestAt)}` : "?limit=30"
+    );
+    if (page && gen === genRef.current) {
+      if (newestAt) {
+        appendNew(page.items);
+      } else {
+        setItems(page.items);
+        setHasMore(page.has_more);
+      }
+    }
+    scrollToBottom(true);
+  }
+
   useEffect(() => {
+    genRef.current += 1;
     setTask(null);
     setError(null);
+    setItems([]);
+    setHasMore(false);
+    itemsRef.current = [];
+    activityRef.current = null;
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
+    void loadInitialThread().catch(() => {});
   }, [token, taskId]);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   useTaskLiveSync({
     token,
@@ -96,27 +258,14 @@ export function TaskDetail() {
       setTask(data);
       if (drafts.title !== undefined) setDraftTitle(drafts.title);
       if (drafts.description !== undefined) setDraftDescription(drafts.description);
+      void reconcileThread(data);
     },
   });
-
-  const thread = useMemo(() => {
-    if (!task) return [] as ThreadItem[];
-    const items: ThreadItem[] = [];
-    for (const c of task.comments || []) {
-      items.push({ kind: "comment", at: c.created_at, comment: c });
-    }
-    for (const f of task.attachments || []) {
-      if (f.comment) continue;
-      items.push({ kind: "file", at: f.created_at, file: f });
-    }
-    items.sort((a, b) => a.at.localeCompare(b.at));
-    return items;
-  }, [task]);
 
   const threadWithDays = useMemo(() => {
     const rows: ThreadRow[] = [];
     let lastDay = "";
-    for (const item of thread) {
+    for (const item of items) {
       const day = item.at.slice(0, 10);
       if (day !== lastDay) {
         rows.push({ type: "day", label: formatDayLabel(item.at) });
@@ -125,11 +274,18 @@ export function TaskDetail() {
       rows.push({ type: "item", item });
     }
     return rows;
-  }, [thread]);
+  }, [items]);
 
+  // Infinite scroll upward: load older messages when near the top.
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [thread.length]);
+    const el = threadRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (el.scrollTop < 140 && hasMore && !loadingOlder) void loadOlder();
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [hasMore, loadingOlder]);
 
   useEffect(() => {
     const el = textInputRef.current;
@@ -210,6 +366,15 @@ export function TaskDetail() {
     const next = iso || null;
     if (next === task.due_date) return;
     await patchTask({ due_date: next });
+  }
+
+  async function toggleImportant() {
+    if (!task || !canManage) return;
+    const next = !task.is_important;
+    await patchTask(
+      { is_important: next },
+      next ? "Задача отмечена как важная" : "Отметка «Важная» снята"
+    );
   }
 
   function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
@@ -302,7 +467,7 @@ export function TaskDetail() {
 
       setComment("");
       setPendingFiles([]);
-      await load();
+      await refreshAfterSend();
       toast.show(text ? "Сообщение отправлено" : "Файл отправлен");
     } catch (err) {
       console.error("[nextgen-attach] sendMessage failed", err);
@@ -322,7 +487,16 @@ export function TaskDetail() {
   if (!task) {
     return (
       <div className="task-detail-page">
-        <div className="muted">Загрузка задачи…</div>
+        {error ? (
+          <div className="stack" style={{ gap: 12 }}>
+            <div className="error-banner">{error}</div>
+            <Link to="/" className="task-back" title="Назад">
+              <span className="task-back-label">Вернуться назад</span>
+            </Link>
+          </div>
+        ) : (
+          <div className="muted">Загрузка задачи…</div>
+        )}
       </div>
     );
   }
@@ -410,7 +584,14 @@ export function TaskDetail() {
             onCommitDescription={() => void commitDescription()}
             onSetStatus={(s) => void setStatus(s)}
             onSetDueDate={(iso) => void setDueDate(iso)}
+            onToggleImportant={() => void toggleImportant()}
           />
+
+          {hasMore ? (
+            <div className="chat-load-older muted">
+              {loadingOlder ? "Загрузка истории…" : "Прокрутите вверх для истории"}
+            </div>
+          ) : null}
 
           <TaskThread ref={threadEndRef} rows={threadWithDays} />
         </div>

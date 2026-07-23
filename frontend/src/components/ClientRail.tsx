@@ -82,6 +82,7 @@ export function ClientRail() {
 
   useEffect(() => {
     if (!token) return;
+    let cancelled = false;
 
     async function refresh() {
       try {
@@ -90,9 +91,9 @@ export function ClientRail() {
           {},
           token
         );
-        setLinks(unwrapList(data));
+        if (!cancelled) setLinks(unwrapList(data));
       } catch {
-        setLinks([]);
+        if (!cancelled) setLinks([]);
       }
     }
 
@@ -108,7 +109,10 @@ export function ClientRail() {
     };
 
     window.addEventListener("clients-updated", onUpdate);
-    return () => window.removeEventListener("clients-updated", onUpdate);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("clients-updated", onUpdate);
+    };
   }, [token, location.key]);
 
   return (

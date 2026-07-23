@@ -1,6 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, unwrapList, type Project, type Task, type TaskStatus } from "../../api/types";
+import {
+  api,
+  type Paginated,
+  type Project,
+  type Task,
+  type TaskCounts,
+  type TaskStatus,
+} from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { DueDatePicker } from "../../components/DueDatePicker";
 import { FlashToast } from "../../components/FlashToast";
@@ -28,51 +35,126 @@ export function ProjectTasks() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [enteringId, setEnteringId] = useState<number | null>(null);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [counts, setCounts] = useState<TaskCounts>({
+    all: 0,
+    todo: 0,
+    in_progress: 0,
+    done: 0,
+  });
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const loadedPagesRef = useRef(1);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  // Discard responses that resolve after project/filter/search changed.
+  const genRef = useRef(0);
 
-  const counts = useMemo(() => {
-    const base = { all: tasks.length, todo: 0, in_progress: 0, done: 0 };
-    for (const t of tasks) base[t.status] += 1;
-    return base;
-  }, [tasks]);
+  // Filtering / search / sorting now happen server-side, so render as-is.
+  const visible = tasks;
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const list = tasks.filter((t) => {
-      if (filter !== "all" && t.status !== filter) return false;
-      if (!q) return true;
-      return (
-        t.title.toLowerCase().includes(q) ||
-        (t.description || "").toLowerCase().includes(q)
-      );
-    });
-    list.sort((a, b) => {
-      if (a.status === "done" && b.status !== "done") return 1;
-      if (b.status === "done" && a.status !== "done") return -1;
-      if (!a.due_date && !b.due_date) return 0;
-      if (!a.due_date) return 1;
-      if (!b.due_date) return -1;
-      return a.due_date.localeCompare(b.due_date);
-    });
-    return list;
-  }, [tasks, filter, query]);
-
-  async function load() {
-    if (!token || !projectId) return;
-    const [projectData, taskData] = await Promise.all([
-      api<Project>(`/api/projects/${projectId}/`, {}, token),
-      api<Task[] | { results: Task[] }>(
-        `/api/tasks/?project=${projectId}`,
-        {},
-        token
-      ),
-    ]);
-    setProject(projectData);
-    setTasks(unwrapList(taskData));
+  function buildListUrl(page: number, withPull: boolean): string {
+    let url = `/api/tasks/?project=${projectId}&page=${page}`;
+    if (filter !== "all") url += `&status=${filter}`;
+    const q = debouncedQuery.trim();
+    if (q) url += `&search=${encodeURIComponent(q)}`;
+    if (withPull) url += "&pull=1";
+    return url;
   }
 
+  function fetchPage(page: number, withPull: boolean) {
+    return api<Paginated<Task>>(buildListUrl(page, withPull), {}, token!);
+  }
+
+  function mergeById(base: Task[], incoming: Task[]): Task[] {
+    const seen = new Set(base.map((t) => t.id));
+    const merged = base.slice();
+    for (const t of incoming) if (!seen.has(t.id)) merged.push(t);
+    return merged;
+  }
+
+  function dedupeById(list: Task[]): Task[] {
+    const seen = new Set<number>();
+    return list.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)));
+  }
+
+  async function loadCounts() {
+    if (!token || !projectId) return;
+    try {
+      const c = await api<TaskCounts>(`/api/tasks/counts/?project=${projectId}`, {}, token);
+      setCounts(c);
+    } catch {
+      // non-critical
+    }
+  }
+
+  async function loadFirst() {
+    if (!token || !projectId) return;
+    const gen = genRef.current;
+    const [projectData, taskData] = await Promise.all([
+      api<Project>(`/api/projects/${projectId}/`, {}, token),
+      fetchPage(1, true),
+    ]);
+    if (gen !== genRef.current) return;
+    setProject(projectData);
+    setTasks(taskData.results);
+    setHasMore(Boolean(taskData.next));
+    loadedPagesRef.current = 1;
+    void loadCounts();
+  }
+
+  async function loadMore() {
+    if (loadingMore || !hasMore || !token || !projectId) return;
+    const gen = genRef.current;
+    setLoadingMore(true);
+    try {
+      const nextPage = loadedPagesRef.current + 1;
+      const data = await fetchPage(nextPage, false);
+      if (gen !== genRef.current) return;
+      setTasks((prev) => mergeById(prev, data.results));
+      setHasMore(Boolean(data.next));
+      loadedPagesRef.current = nextPage;
+    } catch {
+      // retry on next scroll
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  // Debounce the search box → server-side search.
   useEffect(() => {
-    void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
-  }, [token, projectId]);
+    const id = window.setTimeout(() => setDebouncedQuery(query), 300);
+    return () => window.clearTimeout(id);
+  }, [query]);
+
+  // Reset & reload page 1 whenever project / filter / search change.
+  useEffect(() => {
+    if (!token || !projectId) return;
+    genRef.current += 1;
+    setInitialLoading(true);
+    setTasks([]);
+    setHasMore(false);
+    loadedPagesRef.current = 1;
+    void loadFirst()
+      .catch((e) => setError(e instanceof Error ? e.message : "Ошибка"))
+      .finally(() => setInitialLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, projectId, filter, debouncedQuery]);
+
+  // Infinite scroll: auto-load the next page when the sentinel comes into view.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void loadMore();
+      },
+      { rootMargin: "300px 0px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMore, loadingMore, filter, debouncedQuery]);
 
   const pullNowRef = useRef(false);
   usePortalLiveSync({
@@ -84,7 +166,8 @@ export function ProjectTasks() {
     },
   });
 
-  // Soft realtime: cheap local poll; Bitrix pull only every ~15s (or on SSE)
+  // Soft realtime: refresh only the pages already loaded (bounded by scroll);
+  // Bitrix pull only on page 1 and only every ~12s (or on SSE).
   useEffect(() => {
     if (!token || !projectId) return;
     let cancelled = false;
@@ -99,13 +182,20 @@ export function ProjectTasks() {
       try {
         const wantPull = pullNowRef.current || tickCount % 5 === 0;
         pullNowRef.current = false;
-        const pull = wantPull ? "&pull=1" : "";
-        const taskData = await api<Task[] | { results: Task[] }>(
-          `/api/tasks/?project=${projectId}${pull}`,
-          {},
-          token!
-        );
-        if (!cancelled) setTasks(unwrapList(taskData));
+        const pages = loadedPagesRef.current;
+        const acc: Task[] = [];
+        let lastNext: string | null = null;
+        for (let p = 1; p <= pages; p++) {
+          const data = await fetchPage(p, wantPull && p === 1);
+          if (cancelled) return;
+          acc.push(...data.results);
+          if (p === pages) lastNext = data.next;
+        }
+        if (!cancelled) {
+          setTasks(dedupeById(acc));
+          setHasMore(Boolean(lastNext));
+          void loadCounts();
+        }
       } catch {
         // next tick retries
       } finally {
@@ -123,7 +213,8 @@ export function ProjectTasks() {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [token, projectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, projectId, filter, debouncedQuery]);
 
   async function createTask(e: React.FormEvent) {
     e.preventDefault();
@@ -152,7 +243,7 @@ export function ProjectTasks() {
       setShowCreate(false);
       setEnteringId(created.id);
       toast.show("Она появилась в списке ниже", "Задача создана");
-      await load();
+      await loadFirst();
       window.dispatchEvent(new Event("projects-updated"));
       window.setTimeout(() => setEnteringId(null), 900);
     } catch (err) {
@@ -302,12 +393,16 @@ export function ProjectTasks() {
       </div>
 
       <div className="task-list">
-        {visible.length === 0 ? (
+        {initialLoading && visible.length === 0 ? (
+          <div className="empty-linked task-empty">
+            <p className="muted">Загрузка задач…</p>
+          </div>
+        ) : visible.length === 0 ? (
           <div className="empty-linked task-empty">
             <p className="muted">
-              {tasks.length === 0
+              {counts.all === 0
                 ? "Создайте первую задачу — кнопка «Новая задача» сверху."
-                : query.trim()
+                : debouncedQuery.trim()
                   ? "Ничего не найдено по запросу."
                   : "В этом статусе задач нет."}
             </p>
@@ -319,10 +414,23 @@ export function ProjectTasks() {
               <Link
                 key={t.id}
                 to={`/tasks/${t.id}`}
-                className={`task-card${t.status === "done" ? " is-done" : ""}${enteringId === t.id ? " is-entering" : ""}`}
+                className={`task-card${t.status === "done" ? " is-done" : ""}${t.is_important ? " is-important" : ""}${enteringId === t.id ? " is-entering" : ""}`}
               >
                 <div className="task-card-main">
                   <div className="task-card-top">
+                    {t.is_important ? (
+                      <span className="task-important-flag" title="Важная задача" aria-label="Важная задача">
+                        <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                          <path
+                            d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.9l-5.2 2.73.99-5.79-4.21-4.1 5.82-.85L12 3.5z"
+                            fill="currentColor"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </span>
+                    ) : null}
                     <span className={`task-status-pill ${STATUS_TONE[t.status]}`}>
                       {STATUS_LABEL[t.status]}
                     </span>
@@ -361,6 +469,12 @@ export function ProjectTasks() {
             );
           })
         )}
+
+        {hasMore ? (
+          <div ref={sentinelRef} className="task-list-sentinel muted">
+            {loadingMore ? "Загрузка…" : ""}
+          </div>
+        ) : null}
       </div>
     </div>
   );

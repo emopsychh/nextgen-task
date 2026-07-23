@@ -1,11 +1,35 @@
+import ipaddress
+import time
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from django.conf import settings
 from django.utils import timezone
 
 from .models import Portal
+
+# Transient HTTP statuses that are worth retrying with backoff.
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _host_is_public(host: str) -> bool:
+    """Reject internal/loopback/link-local targets to blunt SSRF.
+
+    IP literals must be globally routable; hostnames must look like real FQDNs.
+    (DNS-rebinding to a private IP is still possible in theory — this stops the
+    common `localhost` / `169.254.169.254` / `10.x` style attacks.)
+    """
+    host = (host or "").strip().lower().strip(".")
+    if not host or host == "localhost":
+        return False
+    if host.endswith(".local") or host.endswith(".internal"):
+        return False
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        return "." in host
 
 
 class BitrixAPIError(Exception):
@@ -19,8 +43,15 @@ class BitrixClient:
         self.portal = portal
 
     @property
+    def portal_host(self) -> str:
+        raw = (self.portal.domain or "").replace("https://", "").replace("http://", "").rstrip("/")
+        return raw.split("/")[0].split(":")[0].lower()
+
+    @property
     def base_url(self) -> str:
         domain = self.portal.domain.replace("https://", "").replace("http://", "").rstrip("/")
+        if not _host_is_public(self.portal_host):
+            raise BitrixAPIError(f"Refusing to contact non-public Bitrix host: {self.portal_host!r}")
         return f"https://{domain}/rest"
 
     def _ensure_token(self):
@@ -37,17 +68,70 @@ class BitrixClient:
             "client_secret": settings.BITRIX_CLIENT_SECRET,
             "refresh_token": self.portal.refresh_token,
         }
-        resp = requests.get(url, params=params, timeout=30)
-        data = resp.json()
-        if "access_token" not in data:
-            raise BitrixAPIError("Failed to refresh Bitrix token", data)
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+        except requests.RequestException as exc:
+            raise BitrixAPIError(f"Token refresh request failed: {exc}")
+        try:
+            data = resp.json()
+        except ValueError:
+            raise BitrixAPIError(f"Token refresh returned HTTP {resp.status_code}")
+        if not isinstance(data, dict) or "access_token" not in data:
+            raise BitrixAPIError("Failed to refresh Bitrix token", data if isinstance(data, dict) else None)
         self.portal.access_token = data["access_token"]
         self.portal.refresh_token = data.get("refresh_token", self.portal.refresh_token)
-        expires_in = int(data.get("expires_in", 3600))
+        try:
+            expires_in = int(data.get("expires_in", 3600))
+        except (TypeError, ValueError):
+            expires_in = 3600
         self.portal.expires_at = timezone.now() + timedelta(seconds=expires_in)
         self.portal.save(
             update_fields=["access_token", "refresh_token", "expires_at", "updated_at"]
         )
+
+    def _post(
+        self, url: str, payload: dict, timeout: int, *, attempts: int = 3
+    ) -> dict:
+        """POST to Bitrix with bounded retry/backoff for transient failures.
+
+        Returns the parsed JSON dict. Raises BitrixAPIError on network errors,
+        non-JSON bodies, or HTTP errors that carry no JSON error payload — so
+        callers never crash on a 502 HTML page or a timeout.
+        """
+        last_status = None
+        for attempt in range(attempts):
+            try:
+                resp = requests.post(url, json=payload, timeout=timeout)
+            except requests.RequestException as exc:
+                if attempt < attempts - 1:
+                    time.sleep(0.5 * (2**attempt))
+                    continue
+                raise BitrixAPIError(f"Bitrix request failed: {exc}")
+
+            last_status = resp.status_code
+            if resp.status_code in _RETRYABLE_STATUSES and attempt < attempts - 1:
+                time.sleep(0.5 * (2**attempt))
+                continue
+
+            try:
+                data = resp.json()
+            except ValueError:
+                # Non-JSON body (e.g. 502 HTML) — retry if transient, else fail.
+                if resp.status_code in _RETRYABLE_STATUSES and attempt < attempts - 1:
+                    time.sleep(0.5 * (2**attempt))
+                    continue
+                raise BitrixAPIError(
+                    f"Bitrix returned non-JSON HTTP {resp.status_code}",
+                    {"status_code": resp.status_code, "body": (resp.text or "")[:500]},
+                )
+            if not isinstance(data, dict):
+                raise BitrixAPIError(
+                    "Bitrix returned unexpected payload",
+                    {"status_code": resp.status_code},
+                )
+            return data
+
+        raise BitrixAPIError(f"Bitrix request failed after retries (HTTP {last_status})")
 
     def call(
         self,
@@ -60,14 +144,12 @@ class BitrixClient:
         url = f"{self.base_url}/{method}"
         payload = dict(params or {})
         payload["auth"] = self.portal.access_token
-        resp = requests.post(url, json=payload, timeout=timeout)
-        data = resp.json()
+        data = self._post(url, payload, timeout)
         if "error" in data:
             if data.get("error") in ("expired_token", "invalid_token"):
                 self.refresh_tokens()
                 payload["auth"] = self.portal.access_token
-                resp = requests.post(url, json=payload, timeout=timeout)
-                data = resp.json()
+                data = self._post(url, payload, timeout)
             if "error" in data:
                 raise BitrixAPIError(data.get("error_description") or data["error"], data)
         return data.get("result", data)
@@ -226,6 +308,7 @@ class BitrixClient:
                 "GROUP_ID",
                 "PARENT_ID",
                 "DEADLINE",
+                "PRIORITY",
             ],
             "start": start,
         }
@@ -352,8 +435,17 @@ class BitrixClient:
         )
         if not url:
             return b""
+        # Bitrix may hand back a relative DOWNLOAD_URL — resolve against the portal.
+        if "://" not in url:
+            url = f"https://{self.portal_host}{url if url.startswith('/') else '/' + url}"
+        dl_host = (urlparse(url).hostname or "").lower()
+        if not _host_is_public(dl_host):
+            raise BitrixAPIError(f"Refusing to download from non-public host: {dl_host!r}")
         self._ensure_token()
-        resp = requests.get(url, params={"auth": self.portal.access_token}, timeout=60)
+        # Only forward the portal auth token to the portal's own Bitrix host, so a
+        # malicious/misconfigured DOWNLOAD_URL can never exfiltrate our token.
+        params = {"auth": self.portal.access_token} if dl_host == self.portal_host else None
+        resp = requests.get(url, params=params, timeout=60)
         if resp.status_code >= 400:
             raise BitrixAPIError(f"download failed {resp.status_code}")
         return resp.content

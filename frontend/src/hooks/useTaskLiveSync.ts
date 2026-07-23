@@ -6,10 +6,8 @@ const POLL_MS = 2000;
 const PULL_EVERY = 6; // Bitrix pull ~ every 12s
 
 function fingerprint(task: Task): string {
-  const comments = task.comments || [];
-  const files = task.attachments || [];
-  const lastComment = comments.length ? comments[comments.length - 1]?.id : 0;
-  const lastFile = files.length ? files[files.length - 1]?.id : 0;
+  // Chat history is no longer inlined on the task; we rely on lightweight
+  // activity signals to detect new messages/files cheaply on each poll.
   const timer = task.active_timer?.started_at || "";
   const tracked = task.total_tracked_seconds || 0;
   const paid = task.deal_paid_hours ?? "";
@@ -20,10 +18,10 @@ function fingerprint(task: Task): string {
     task.title,
     task.description || "",
     task.due_date || "",
-    comments.length,
-    lastComment,
-    files.length,
-    lastFile,
+    task.comments_count ?? 0,
+    task.last_comment_id ?? 0,
+    task.files_count ?? 0,
+    task.last_file_id ?? 0,
     timer,
     tracked,
     paid,

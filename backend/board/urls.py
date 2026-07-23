@@ -8,7 +8,7 @@ from .views import (
     ProjectViewSet,
     TaskViewSet,
 )
-from .stream import PortalStreamView, SyncCursorView
+from .stream import PortalStreamView, StreamTokenView, SyncCursorView
 
 router = DefaultRouter()
 router.register("projects", ProjectViewSet, basename="project")
@@ -19,6 +19,7 @@ router.register("attachments", AttachmentViewSet, basename="attachment")
 urlpatterns = [
     path("activity/", ActivityFeedView.as_view(), name="activity-feed"),
     path("stream/", PortalStreamView.as_view(), name="portal-stream"),
+    path("stream/token/", StreamTokenView.as_view(), name="stream-token"),
     path("sync/cursor/", SyncCursorView.as_view(), name="sync-cursor"),
     path("", include(router.urls)),
 ]

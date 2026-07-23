@@ -30,6 +30,19 @@ def _clean_task_title(instance: Task) -> str:
     return instance.title or ""
 
 
+# Salt for the signed, expiring capability token embedded in attachment URLs.
+# The token proves the caller was handed the link by an access-scoped API
+# response; the download endpoint needs no separate auth header (so plain
+# <img>/<a download> work) yet leaked links stop working after ATTACHMENT_URL_TTL.
+ATTACHMENT_SIGN_SALT = "board.attachment.download.v1"
+
+
+def sign_attachment_id(att_id: int) -> str:
+    from django.core import signing
+
+    return signing.dumps(int(att_id), salt=ATTACHMENT_SIGN_SALT)
+
+
 class AttachmentSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
     original_name = serializers.SerializerMethodField()
@@ -51,10 +64,9 @@ class AttachmentSerializer(serializers.ModelSerializer):
     def get_url(self, obj):
         if not obj.file:
             return None
-        # Relative same-origin URL — browser keeps https; avoids Mixed Content
-        # when TLS terminates at Caddy and Django sees http.
-        path = obj.file.url
-        return path if path.startswith("/") else f"/{path}"
+        # Access-controlled, signed, expiring URL — NEVER the raw /media path.
+        # Same-origin relative URL keeps https and avoids Mixed Content.
+        return f"/api/attachments/{obj.id}/download/?t={sign_attachment_id(obj.id)}"
 
     def get_original_name(self, obj):
         return display_attachment_name(obj)
@@ -94,6 +106,32 @@ class CommentSerializer(serializers.ModelSerializer):
         return obj.author_name or "Unknown"
 
 
+def serialize_thread_items(comments, files) -> list[dict]:
+    """Build the chat-thread payload the frontend expects (ThreadItem[]).
+
+    `comments` and `files` are iterables of Comment / standalone Attachment.
+    The result is NOT sorted here; callers sort by `at`.
+    """
+    items: list[dict] = []
+    for c in comments:
+        items.append(
+            {
+                "kind": "comment",
+                "at": c.created_at.isoformat(),
+                "comment": CommentSerializer(c).data,
+            }
+        )
+    for f in files:
+        items.append(
+            {
+                "kind": "file",
+                "at": f.created_at.isoformat(),
+                "file": AttachmentSerializer(f).data,
+            }
+        )
+    return items
+
+
 class TimeEntrySerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
     is_running = serializers.BooleanField(read_only=True)
@@ -122,8 +160,14 @@ class TimeEntrySerializer(serializers.ModelSerializer):
 
 
 class TaskSerializer(serializers.ModelSerializer):
-    comments = CommentSerializer(many=True, read_only=True)
-    attachments = AttachmentSerializer(many=True, read_only=True)
+    # NOTE: full comments/attachments are intentionally NOT nested here.
+    # The chat thread is loaded lazily (paginated) via the `thread` action so
+    # that opening a task and the 2s live-poll never ship the whole history.
+    # These lightweight signals let the client cheaply detect new activity.
+    comments_count = serializers.IntegerField(source="comments.count", read_only=True)
+    last_comment_id = serializers.SerializerMethodField()
+    files_count = serializers.SerializerMethodField()
+    last_file_id = serializers.SerializerMethodField()
     project_name = serializers.CharField(source="project.name", read_only=True)
     portal_id = serializers.IntegerField(source="project.portal_id", read_only=True)
     created_by_name = serializers.SerializerMethodField()
@@ -157,14 +201,17 @@ class TaskSerializer(serializers.ModelSerializer):
             "description",
             "due_date",
             "status",
+            "is_important",
             "bitrix_task_id",
             "agency_bitrix_task_id",
             "sync_status",
             "sync_error",
             "created_by",
             "created_by_name",
-            "comments",
-            "attachments",
+            "comments_count",
+            "last_comment_id",
+            "files_count",
+            "last_file_id",
             "total_tracked_seconds",
             "active_timer",
             "deal_paid_hours",
@@ -192,6 +239,23 @@ class TaskSerializer(serializers.ModelSerializer):
         if obj.created_by:
             return obj.created_by.display_name
         return None
+
+    def get_last_comment_id(self, obj):
+        return (
+            obj.comments.order_by("-id").values_list("id", flat=True).first() or 0
+        )
+
+    def get_files_count(self, obj):
+        return obj.attachments.filter(comment__isnull=True).count()
+
+    def get_last_file_id(self, obj):
+        return (
+            obj.attachments.filter(comment__isnull=True)
+            .order_by("-id")
+            .values_list("id", flat=True)
+            .first()
+            or 0
+        )
 
     def get_total_tracked_seconds(self, obj):
         from .timeutils import task_tracked_seconds
@@ -271,6 +335,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             "description",
             "due_date",
             "status",
+            "is_important",
             "bitrix_task_id",
             "sync_status",
             "comments_count",

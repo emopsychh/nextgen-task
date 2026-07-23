@@ -1,5 +1,6 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
     BitrixAuthView,
@@ -24,6 +25,7 @@ urlpatterns = [
     path("bitrix/events/", BitrixEventView.as_view(), name="bitrix-events"),
     path("bitrix/entry/", app_entry, name="bitrix-entry"),
     path("auth/dev/", DevAuthView.as_view(), name="dev-auth"),
+    path("auth/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
     path("me/", MeView.as_view(), name="me"),
     path("", include(router.urls)),
 ]

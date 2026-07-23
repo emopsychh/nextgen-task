@@ -1,3 +1,4 @@
+import requests
 from django.db.models import Q
 from django.conf import settings
 from django.http import HttpResponse, HttpResponseRedirect
@@ -5,6 +6,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from rest_framework import viewsets
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -25,6 +27,34 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _event_is_authentic(portal, auth: dict) -> bool:
+    """Prove an inbound Bitrix event is genuine before trusting its payload.
+
+    Used only to *establish* the application_token on the very first event of a
+    freshly-installed portal (Bitrix never exposes application_token in the app
+    UI — it only arrives inside ONAPPINSTALL / event payloads). We exercise the
+    OAuth access_token carried by the event against the portal's own REST API:
+    a forger cannot mint a valid access_token, so a successful call authenticates
+    the event without us having a pre-shared secret yet.
+    """
+    access = str((auth or {}).get("access_token") or (auth or {}).get("AUTH_ID") or "").strip()
+    if not access:
+        return False
+    from .deal_resolve import normalize_portal_host
+
+    host = normalize_portal_host(portal.domain or "")
+    if not host or "." not in host or host in ("localhost",):
+        return False
+    try:
+        resp = requests.post(
+            f"https://{host}/rest/app.info", data={"auth": access}, timeout=10
+        )
+        payload = resp.json()
+    except (requests.RequestException, ValueError):
+        return False
+    return isinstance(payload, dict) and "error" not in payload and "result" in payload
 
 
 def _bitrix_install_finish_html() -> HttpResponse:
@@ -348,6 +378,21 @@ class PortalLinkViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         client_portal = serializer.validated_data["client_portal"]
+        # Only client portals are linkable.
+        if client_portal.role != Portal.Role.CLIENT:
+            raise PermissionDenied("Связывать можно только клиентские порталы")
+        # Tenant isolation: a client already linked to another agency must not be
+        # claimable by a different one (otherwise a rogue agency could link an
+        # existing client and read all of its projects, chats and files).
+        taken = (
+            PortalLink.objects.filter(client_portal=client_portal)
+            .exclude(agency_portal=self.request.user.portal)
+            .exists()
+        )
+        if taken:
+            raise PermissionDenied(
+                "Этот клиентский портал уже привязан к другому агентству"
+            )
         link, _ = PortalLink.objects.get_or_create(
             agency_portal=self.request.user.portal,
             client_portal=client_portal,
@@ -612,7 +657,16 @@ class BitrixEventView(APIView):
         if member_id:
             portal = Portal.objects.filter(member_id=member_id).first()
         if portal is None and domain:
-            portal = Portal.objects.filter(domain__icontains=str(domain).replace("https://", "")).first()
+            # Exact host match only — substring (icontains) could match the wrong
+            # client when domains share a suffix (e.g. a.bitrix24.ru vs xa.bitrix24.ru).
+            from portals.deal_resolve import normalize_portal_host
+
+            host = normalize_portal_host(str(domain))
+            if host:
+                portal = (
+                    Portal.objects.filter(domain__iexact=host).first()
+                    or Portal.objects.filter(domain__iexact=f"https://{host}").first()
+                )
         if portal is None:
             return Response({"ok": False, "reason": "unknown_portal"}, status=200)
 
@@ -627,6 +681,8 @@ class BitrixEventView(APIView):
         settings_tok = (settings.BITRIX_APPLICATION_TOKEN or "").strip()
         accepted = {t for t in (portal_tok, settings_tok) if t}
         if accepted:
+            # A token is known — every event MUST carry a matching one. No DEBUG
+            # bypass: forged events must never mutate data.
             if not app_token or app_token not in accepted:
                 logger.warning(
                     "Bitrix event forbidden portal=%s domain=%s has_token=%s",
@@ -635,23 +691,33 @@ class BitrixEventView(APIView):
                     bool(app_token),
                 )
                 return Response({"ok": False, "reason": "forbidden"}, status=403)
-            # Heal portal row if placement install stored APP_SID instead of app token
-            if app_token and app_token != portal_tok and (
-                not portal_tok or app_token == settings_tok
-            ):
+            # Heal the per-portal token when the caller authenticated with the
+            # trusted global application token (still an authenticated write).
+            if app_token != portal_tok and app_token == settings_tok:
                 portal.application_token = app_token
                 portal.save(update_fields=["application_token", "updated_at"])
-        elif app_token:
-            # First real Bitrix event after install — learn and persist the app token.
-            portal.application_token = app_token
-            portal.save(update_fields=["application_token", "updated_at"])
-            logger.info(
-                "Stored application_token from Bitrix event for portal=%s %s",
-                portal.id,
-                portal.domain,
-            )
-        elif not settings.DEBUG:
-            return Response({"ok": False, "reason": "app_token_not_configured"}, status=403)
+        else:
+            # No token known yet (fresh install). Bitrix never exposes the
+            # application_token in the app UI — it only arrives with events. We
+            # establish it here, but ONLY from a provably-authentic event, so a
+            # forger racing the real install cannot poison the stored secret.
+            if app_token and _event_is_authentic(portal, auth):
+                portal.application_token = app_token
+                portal.save(update_fields=["application_token", "updated_at"])
+                logger.info(
+                    "Established application_token for portal=%s %s from verified Bitrix event",
+                    portal.id,
+                    portal.domain,
+                )
+            else:
+                logger.warning(
+                    "Bitrix event rejected: no application_token and event not verifiable portal=%s %s",
+                    portal.id,
+                    portal.domain,
+                )
+                return Response(
+                    {"ok": False, "reason": "app_token_not_configured"}, status=403
+                )
 
         # Refresh tokens from event auth when provided
         access = (auth or {}).get("access_token") or (auth or {}).get("AUTH_ID")
@@ -803,6 +869,9 @@ def app_entry(request):
     qs = _collect_bitrix_query(request)
     target = settings.FRONTEND_URL.rstrip("/") + "/"
     if qs:
-        target = f"{target}?{qs}"
+        # Pass Bitrix auth in the URL *fragment*, not the query string: browsers
+        # never send the fragment to any server, so these tokens never land in
+        # nginx/proxy access logs. The SPA reads it from window.location.hash.
+        target = f"{target}#{qs}"
     return HttpResponseRedirect(target)
 
