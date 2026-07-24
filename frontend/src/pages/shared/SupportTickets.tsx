@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import {
   api,
+  isAbortError,
   unwrapList,
   type Paginated,
   type Project,
@@ -57,45 +58,69 @@ export function SupportTickets() {
   const listPath = ticketsListPath(listPortalId, isAgency);
   const livePortalId = detail?.portal ?? listPortalId;
 
-  const loadList = useCallback(async () => {
-    if (!token) return;
-    if (!isAgency && !listPortalId) return;
-    const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
-      ticketsApiQuery(listPortalId, bucket),
-      {},
-      token
-    );
-    setTickets(unwrapList(data));
-  }, [token, isAgency, listPortalId, bucket]);
+  const loadList = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!token) return;
+      if (!isAgency && !listPortalId) return;
+      const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
+        ticketsApiQuery(listPortalId, bucket),
+        { signal },
+        token
+      );
+      if (signal?.aborted) return;
+      setTickets(unwrapList(data));
+    },
+    [token, isAgency, listPortalId, bucket]
+  );
 
-  const loadDetail = useCallback(async () => {
-    if (!token || !selectedId) {
-      setDetail(null);
-      return;
-    }
-    const data = await api<SupportTicket>(`/api/tickets/${selectedId}/`, {}, token);
-    setDetail(data);
-  }, [token, selectedId]);
+  const loadDetail = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!token || !selectedId) {
+        setDetail(null);
+        return;
+      }
+      const data = await api<SupportTicket>(
+        `/api/tickets/${selectedId}/`,
+        { signal },
+        token
+      );
+      if (signal?.aborted) return;
+      setDetail(data);
+    },
+    [token, selectedId]
+  );
 
-  const loadProjects = useCallback(async () => {
-    if (!token || !listPortalId) return;
-    const data = await api<Project[] | Paginated<Project>>(
-      `/api/projects/?portal=${listPortalId}`,
-      {},
-      token
-    );
-    setProjects(unwrapList(data));
-  }, [token, listPortalId]);
+  const loadProjects = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!token || !listPortalId) return;
+      const data = await api<Project[] | Paginated<Project>>(
+        `/api/projects/?portal=${listPortalId}`,
+        { signal },
+        token
+      );
+      if (signal?.aborted) return;
+      setProjects(unwrapList(data));
+    },
+    [token, listPortalId]
+  );
 
   useEffect(() => {
     if (!token) return;
     if (!isAgency && !listPortalId) return;
-    void loadList().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
+    const ac = new AbortController();
+    void loadList(ac.signal).catch((e) => {
+      if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    });
+    return () => ac.abort();
   }, [token, isAgency, listPortalId, loadList]);
 
   useEffect(() => {
     if (!token) return;
-    void loadDetail().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
+    const ac = new AbortController();
+    void loadDetail(ac.signal).catch((e) => {
+      if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    });
+    return () => ac.abort();
   }, [token, loadDetail]);
 
   useEffect(() => {
@@ -103,17 +128,17 @@ export function SupportTickets() {
       setTasks([]);
       return;
     }
-    let cancelled = false;
-    void api<Task[] | Paginated<Task>>(`/api/tasks/?project=${projectId}`, {}, token)
-      .then((data) => {
-        if (!cancelled) setTasks(unwrapList(data));
-      })
-      .catch(() => {
-        if (!cancelled) setTasks([]);
+    const ac = new AbortController();
+    void api<Task[] | Paginated<Task>>(
+      `/api/tasks/?project=${projectId}`,
+      { signal: ac.signal },
+      token
+    )
+      .then((data) => setTasks(unwrapList(data)))
+      .catch((e) => {
+        if (!isAbortError(e)) setTasks([]);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => ac.abort();
   }, [token, listPortalId, projectId]);
 
   useEffect(() => {

@@ -2335,6 +2335,49 @@ a {
   max-width: none;
 }
 
+.sync-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: var(--ink-muted);
+  letter-spacing: -0.01em;
+}
+
+.page-sub .sync-hint {
+  display: flex;
+  margin-top: 6px;
+}
+
+.chat-topbar .sync-hint {
+  margin-top: 0;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.sync-hint-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+  animation: sync-hint-pulse 1.15s ease-in-out infinite;
+}
+
+@keyframes sync-hint-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .create-task-panel {
   animation: linked-card-in 0.35s ease;
 }

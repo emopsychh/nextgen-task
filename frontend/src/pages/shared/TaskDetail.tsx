@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
+  isAbortError,
   type Comment,
   type Task,
   type TaskStatus,
@@ -15,6 +16,7 @@ import { TaskGlyph } from "../../components/icons";
 import { TaskComposer } from "../../components/task/TaskComposer";
 import { TaskSummaryCard } from "../../components/task/TaskSummaryCard";
 import { TaskThread, type ThreadRow } from "../../components/task/TaskThread";
+import { SyncHint } from "../../components/SyncHint";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { useTaskLiveSync } from "../../hooks/useTaskLiveSync";
 import { dueMeta } from "../../lib/dates";
@@ -78,6 +80,7 @@ export function TaskDetail() {
   const [draftOutcome, setDraftOutcome] = useState("");
   const [completeOpen, setCompleteOpen] = useState(false);
   const [compactTask, setCompactTask] = useState(false);
+  const [threadSyncing, setThreadSyncing] = useState(false);
 
   const canEditDueDate =
     portal?.role === "agency" ||
@@ -87,12 +90,12 @@ export function TaskDetail() {
       task.created_by != null &&
       task.created_by === user.id);
 
-  async function load() {
+  async function load(signal?: AbortSignal) {
     if (!token || !taskId) return;
     const gen = genRef.current;
     // Fast path: show task from DB immediately. Bitrix pull happens in live sync.
-    const data = await api<Task>(`/api/tasks/${taskId}/`, {}, token);
-    if (gen !== genRef.current) return;
+    const data = await api<Task>(`/api/tasks/${taskId}/`, { signal }, token);
+    if (gen !== genRef.current || signal?.aborted) return;
     setTask(data);
     setDraftTitle(data.title);
     setDraftDescription(data.description || "");
@@ -117,9 +120,9 @@ export function TaskDetail() {
     );
   }
 
-  async function fetchThread(query: string): Promise<ThreadPage | null> {
+  async function fetchThread(query: string, signal?: AbortSignal): Promise<ThreadPage | null> {
     if (!token || !taskId) return null;
-    return api<ThreadPage>(`/api/tasks/${taskId}/thread/${query}`, {}, token);
+    return api<ThreadPage>(`/api/tasks/${taskId}/thread/${query}`, { signal }, token);
   }
 
   function appendNew(newItems: ThreadItem[]) {
@@ -133,22 +136,26 @@ export function TaskDetail() {
     });
   }
 
-  async function loadInitialThread() {
+  async function loadInitialThread(signal?: AbortSignal) {
     const gen = genRef.current;
     // Paint from DB immediately; Bitrix comments catch up in the background.
-    const page = await fetchThread("?limit=30");
-    if (!page || gen !== genRef.current) return;
+    const page = await fetchThread("?limit=30", signal);
+    if (!page || gen !== genRef.current || signal?.aborted) return;
     setItems(page.items);
     setHasMore(page.has_more);
     scrollToBottom(false);
 
-    void fetchThread("?pull=1&limit=30")
+    setThreadSyncing(true);
+    void fetchThread("?pull=1&limit=30", signal)
       .then((pulled) => {
-        if (!pulled || gen !== genRef.current) return;
+        if (!pulled || gen !== genRef.current || signal?.aborted) return;
         setItems(pulled.items);
         setHasMore(pulled.has_more);
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (gen === genRef.current) setThreadSyncing(false);
+      });
   }
 
   async function reloadLatestThread() {
@@ -251,10 +258,15 @@ export function TaskDetail() {
     setError(null);
     setItems([]);
     setHasMore(false);
+    setThreadSyncing(false);
     itemsRef.current = [];
     activityRef.current = null;
-    void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
-    void loadInitialThread().catch(() => {});
+    const ac = new AbortController();
+    void load(ac.signal).catch((e) => {
+      if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    });
+    void loadInitialThread(ac.signal).catch(() => {});
+    return () => ac.abort();
   }, [token, taskId]);
 
   useEffect(() => {
@@ -613,6 +625,7 @@ export function TaskDetail() {
             <strong>Чат задачи</strong>
             <span className="muted">{task.project_name}</span>
           </div>
+          {threadSyncing ? <SyncHint>Обновляем чат…</SyncHint> : null}
         </div>
       </div>
 

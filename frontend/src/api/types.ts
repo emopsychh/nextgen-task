@@ -380,6 +380,14 @@ export async function api<T>(
   return res.json();
 }
 
+/** True when fetch was cancelled via AbortController (safe to ignore). */
+export function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (err instanceof Error && err.name === "AbortError")
+  );
+}
+
 export function unwrapList<T>(data: T[] | { results: T[] }): T[] {
   if (Array.isArray(data)) return data;
   return data.results || [];

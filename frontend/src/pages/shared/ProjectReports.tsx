@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   api,
+  isAbortError,
   unwrapList,
   type Paginated,
   type Project,
@@ -15,6 +16,7 @@ import { formatDateTime, formatDuration } from "../../lib/format";
 import {
   REPORT_BUCKETS,
   type ReportBucket,
+  countsFromReports,
   reportDetailPath,
   reportsApiQuery,
   reportSubtitle,
@@ -40,15 +42,13 @@ export function ProjectReports() {
 
   useEffect(() => {
     if (!token || !routeProjectId || routePortalId) return;
-    let cancelled = false;
-    void api<Project>(`/api/projects/${routeProjectId}/`, {}, token)
-      .then((p) => {
-        if (!cancelled) setResolvedPortalId(p.portal);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
+    const ac = new AbortController();
+    void api<Project>(`/api/projects/${routeProjectId}/`, { signal: ac.signal }, token)
+      .then((p) => setResolvedPortalId(p.portal))
+      .catch((e) => {
+        if (!isAbortError(e)) undefined;
+      });
+    return () => ac.abort();
   }, [token, routeProjectId, routePortalId]);
 
   const [bucket, setBucket] = useState<ReportBucket>("all");
@@ -65,50 +65,85 @@ export function ProjectReports() {
     paid: 0,
   });
 
-  const loadCounts = useCallback(async () => {
-    if (!token || !portalId) return;
-    try {
-      const next = await api<Record<ReportBucket, number>>(
-        `/api/reports/counts/?portal=${portalId}`,
-        {},
+  const applyCounts = useCallback((next: Record<ReportBucket, number>) => {
+    setCounts({
+      all: next.all ?? 0,
+      current: next.current ?? 0,
+      review: next.review ?? 0,
+      paid: next.paid ?? 0,
+    });
+  }, []);
+
+  const loadCounts = useCallback(
+    async (signal?: AbortSignal, seed?: WorkReport[]) => {
+      if (!token || !portalId) return;
+      // Paint badges immediately from the list we already have (tab «Все»).
+      if (seed?.length) applyCounts(countsFromReports(seed));
+      try {
+        const next = await api<Record<ReportBucket, number>>(
+          `/api/reports/counts/?portal=${portalId}`,
+          { signal },
+          token
+        );
+        if (signal?.aborted) return;
+        applyCounts(next);
+      } catch (e) {
+        if (isAbortError(e) || signal?.aborted) return;
+        // Endpoint missing/failed — count from full list.
+        try {
+          const data = await api<WorkReport[] | Paginated<WorkReport>>(
+            reportsApiQuery(portalId, "all"),
+            { signal },
+            token
+          );
+          if (signal?.aborted) return;
+          applyCounts(countsFromReports(unwrapList(data)));
+        } catch (err) {
+          if (!isAbortError(err) && seed?.length) applyCounts(countsFromReports(seed));
+        }
+      }
+    },
+    [token, portalId, applyCounts]
+  );
+
+  const loadList = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!token || !portalId) return;
+      const data = await api<WorkReport[] | Paginated<WorkReport>>(
+        reportsApiQuery(portalId, bucket),
+        { signal },
         token
       );
-      setCounts({
-        all: next.all ?? 0,
-        current: next.current ?? 0,
-        review: next.review ?? 0,
-        paid: next.paid ?? 0,
-      });
-    } catch {
-      // non-critical
-    }
-  }, [token, portalId]);
+      if (signal?.aborted) return;
+      const list = unwrapList(data);
+      setReports(list);
+      void loadCounts(signal, bucket === "all" ? list : undefined);
+    },
+    [token, portalId, bucket, loadCounts]
+  );
 
-  const loadList = useCallback(async () => {
-    if (!token || !portalId) return;
-    const data = await api<WorkReport[] | Paginated<WorkReport>>(
-      reportsApiQuery(portalId, bucket),
-      {},
-      token
-    );
-    setReports(unwrapList(data));
-    void loadCounts();
-  }, [token, portalId, bucket, loadCounts]);
-
-  const loadProjects = useCallback(async () => {
-    if (!token || !portalId) return;
-    const data = await api<Project[] | Paginated<Project>>(
-      `/api/projects/?portal=${portalId}`,
-      {},
-      token
-    );
-    setProjects(unwrapList(data));
-  }, [token, portalId]);
+  const loadProjects = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!token || !portalId) return;
+      const data = await api<Project[] | Paginated<Project>>(
+        `/api/projects/?portal=${portalId}`,
+        { signal },
+        token
+      );
+      if (signal?.aborted) return;
+      setProjects(unwrapList(data));
+    },
+    [token, portalId]
+  );
 
   useEffect(() => {
     if (!token || !portalId) return;
-    void loadList().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
-    void loadProjects().catch(() => undefined);
+    const ac = new AbortController();
+    void loadList(ac.signal).catch((e) => {
+      if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    });
+    void loadProjects(ac.signal).catch(() => undefined);
+    return () => ac.abort();
   }, [token, portalId, loadList, loadProjects]);
 
   usePortalLiveSync({

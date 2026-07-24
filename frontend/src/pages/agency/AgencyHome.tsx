@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, unwrapList, type DealBinding, type Portal } from "../../api/types";
+import { api, isAbortError, unwrapList, type DealBinding, type Portal } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { DealHoursCard } from "../../components/DealHoursCard";
@@ -63,28 +63,51 @@ export function AgencyHome() {
     setBindings(unwrapList(dealData));
   }, [token]);
 
-  const refreshAllDealHours = useCallback(async (signal?: { cancelled: boolean }) => {
+  const refreshAllDealHours = useCallback(async (signal?: AbortSignal) => {
     if (!token) return;
     const active = bindingsRef.current.filter((b) => b.is_active);
     if (!active.length) return;
     // Stagger CRM calls so the home page does not storm Bitrix.
     for (const b of active) {
-      if (signal?.cancelled) return;
+      if (signal?.aborted) return;
       try {
-        await api(`/api/deal-bindings/${b.id}/refresh-hours/`, { method: "POST" }, token);
-      } catch {
+        await api(
+          `/api/deal-bindings/${b.id}/refresh-hours/`,
+          { method: "POST", signal },
+          token
+        );
+      } catch (e) {
+        if (isAbortError(e)) return;
         // ignore per-binding errors
       }
-      if (signal?.cancelled) return;
-      await new Promise((r) => window.setTimeout(r, 450));
+      if (signal?.aborted) return;
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) {
+          resolve();
+          return;
+        }
+        const t = window.setTimeout(resolve, 450);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            window.clearTimeout(t);
+            resolve();
+          },
+          { once: true }
+        );
+      });
     }
-    if (signal?.cancelled) return;
-    const dealData = await api<DealBinding[] | { results: DealBinding[] }>(
-      "/api/deal-bindings/",
-      {},
-      token
-    );
-    if (!signal?.cancelled) setBindings(unwrapList(dealData));
+    if (signal?.aborted) return;
+    try {
+      const dealData = await api<DealBinding[] | { results: DealBinding[] }>(
+        "/api/deal-bindings/",
+        { signal },
+        token
+      );
+      if (!signal?.aborted) setBindings(unwrapList(dealData));
+    } catch (e) {
+      if (!isAbortError(e)) undefined;
+    }
   }, [token]);
 
   useEffect(() => {
@@ -93,20 +116,20 @@ export function AgencyHome() {
 
   useEffect(() => {
     if (!token) return;
-    const signal = { cancelled: false };
+    const ac = new AbortController();
     let lastRefreshAt = 0;
     const COOLDOWN_MS = 20000;
 
     async function tick(force = false) {
-      if (signal.cancelled || document.visibilityState === "hidden") return;
+      if (ac.signal.aborted || document.visibilityState === "hidden") return;
       if (!bindingsRef.current.some((b) => b.is_active)) return;
       const now = Date.now();
       if (!force && now - lastRefreshAt < COOLDOWN_MS) return;
       lastRefreshAt = now;
       try {
-        await refreshAllDealHours(signal);
-      } catch {
-        // ignore background refresh errors
+        await refreshAllDealHours(ac.signal);
+      } catch (e) {
+        if (!isAbortError(e)) undefined;
       }
     }
 
@@ -118,7 +141,7 @@ export function AgencyHome() {
     const first = window.setTimeout(() => void tick(true), 6000);
 
     return () => {
-      signal.cancelled = true;
+      ac.abort();
       window.clearInterval(interval);
       window.clearTimeout(first);
       window.removeEventListener("focus", onFocus);

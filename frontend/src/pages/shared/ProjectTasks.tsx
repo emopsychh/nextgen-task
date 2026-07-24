@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
+  isAbortError,
   type Paginated,
   type Project,
   type Task,
@@ -20,6 +21,7 @@ import {
 } from "../../lib/portalSessionCache";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import { CalendarGlyph, FlameIcon } from "../../components/icons";
+import { SyncHint } from "../../components/SyncHint";
 
 export function ProjectTasks() {
   const { projectId } = useParams();
@@ -48,6 +50,7 @@ export function ProjectTasks() {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [bitrixSyncing, setBitrixSyncing] = useState(false);
   const loadedPagesRef = useRef(1);
   const sentinelRef = useRef<HTMLDivElement>(null);
   // Discard responses that resolve after project/filter/search changed.
@@ -65,8 +68,8 @@ export function ProjectTasks() {
     return url;
   }
 
-  function fetchPage(page: number, withPull: boolean) {
-    return api<Paginated<Task>>(buildListUrl(page, withPull), {}, token!);
+  function fetchPage(page: number, withPull: boolean, signal?: AbortSignal) {
+    return api<Paginated<Task>>(buildListUrl(page, withPull), { signal }, token!);
   }
 
   function mergeById(base: Task[], incoming: Task[]): Task[] {
@@ -104,17 +107,17 @@ export function ProjectTasks() {
     }
   }
 
-  async function loadFirst() {
+  async function loadFirst(signal?: AbortSignal) {
     if (!token || !projectId) return;
     const gen = genRef.current;
     const parts = cacheKeyParts();
 
     // Paint from DB first; Bitrix soft-pull runs in the background.
     const [projectData, taskData] = await Promise.all([
-      api<Project>(`/api/projects/${projectId}/`, {}, token),
-      fetchPage(1, false),
+      api<Project>(`/api/projects/${projectId}/`, { signal }, token),
+      fetchPage(1, false, signal),
     ]);
-    if (gen !== genRef.current) return;
+    if (gen !== genRef.current || signal?.aborted) return;
     setProject(projectData);
     setTasks(taskData.results);
     setHasMore(Boolean(taskData.next));
@@ -128,9 +131,10 @@ export function ProjectTasks() {
     void loadCounts();
 
     // Background Bitrix status pull — merge when ready.
-    void fetchPage(1, true)
+    setBitrixSyncing(true);
+    void fetchPage(1, true, signal)
       .then((pulled) => {
-        if (gen !== genRef.current) return;
+        if (gen !== genRef.current || signal?.aborted) return;
         setTasks((prev) => mergePage1(prev, pulled.results));
         setHasMore(Boolean(pulled.next) || loadedPagesRef.current > 1);
         if (parts) {
@@ -141,7 +145,12 @@ export function ProjectTasks() {
         }
         void loadCounts();
       })
-      .catch(() => undefined);
+      .catch((e) => {
+        if (!isAbortError(e)) undefined;
+      })
+      .finally(() => {
+        if (gen === genRef.current) setBitrixSyncing(false);
+      });
   }
 
   async function loadMore() {
@@ -172,6 +181,8 @@ export function ProjectTasks() {
   useEffect(() => {
     if (!token || !projectId) return;
     genRef.current += 1;
+    setBitrixSyncing(false);
+    const ac = new AbortController();
     const parts = cacheKeyParts();
     const cached = parts
       ? readBoardTasksCache(parts[0], parts[1], parts[2])
@@ -186,9 +197,12 @@ export function ProjectTasks() {
       setHasMore(false);
     }
     loadedPagesRef.current = 1;
-    void loadFirst()
-      .catch((e) => setError(e instanceof Error ? e.message : "Ошибка"))
+    void loadFirst(ac.signal)
+      .catch((e) => {
+        if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+      })
       .finally(() => setInitialLoading(false));
+    return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, projectId, filter, debouncedQuery]);
 
@@ -223,24 +237,28 @@ export function ProjectTasks() {
     let cancelled = false;
     let inFlight = false;
     let tickCount = 0;
+    let tickAc: AbortController | null = null;
 
     async function tick() {
       if (cancelled || inFlight) return;
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       inFlight = true;
       tickCount += 1;
+      tickAc?.abort();
+      tickAc = new AbortController();
+      const signal = tickAc.signal;
       try {
         const wantPull = pullNowRef.current || tickCount % 5 === 0;
         pullNowRef.current = false;
-        const data = await fetchPage(1, wantPull);
-        if (cancelled) return;
+        const data = await fetchPage(1, wantPull, signal);
+        if (cancelled || signal.aborted) return;
         setTasks((prev) => mergePage1(prev, data.results));
         if (loadedPagesRef.current <= 1) {
           setHasMore(Boolean(data.next));
         }
         void loadCounts();
-      } catch {
-        // next tick retries
+      } catch (e) {
+        if (!isAbortError(e)) undefined;
       } finally {
         inFlight = false;
       }
@@ -253,6 +271,7 @@ export function ProjectTasks() {
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
+      tickAc?.abort();
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -311,6 +330,7 @@ export function ProjectTasks() {
             {counts.all
               ? `${counts.done} из ${counts.all} выполнено`
               : "Задачи этого модуля"}
+            {bitrixSyncing ? <SyncHint>Обновляем статусы…</SyncHint> : null}
           </p>
         </div>
         <div className="report-header-actions">

@@ -26,6 +26,30 @@ export const REPORT_BUCKETS: { id: ReportBucket; label: string }[] = [
   { id: "paid", label: "Оплаченные" },
 ];
 
+/** Mirrors backend board.reports.BUCKET_STATUSES for client-side badge fallback. */
+export const BUCKET_STATUSES: Record<Exclude<ReportBucket, "all">, WorkReportStatus[]> = {
+  current: ["draft", "disputed", "accepted"],
+  review: ["pending_client"],
+  paid: ["paid"],
+};
+
+export function countsFromReports(
+  reports: Pick<WorkReport, "status">[]
+): Record<ReportBucket, number> {
+  const next: Record<ReportBucket, number> = {
+    all: reports.length,
+    current: 0,
+    review: 0,
+    paid: 0,
+  };
+  for (const r of reports) {
+    if (BUCKET_STATUSES.current.includes(r.status)) next.current += 1;
+    else if (BUCKET_STATUSES.review.includes(r.status)) next.review += 1;
+    else if (BUCKET_STATUSES.paid.includes(r.status)) next.paid += 1;
+  }
+  return next;
+}
+
 export function reportTitle(
   r: Pick<WorkReport, "id" | "project_names" | "projects_count">
 ): string {

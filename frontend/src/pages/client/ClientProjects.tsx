@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
+  isAbortError,
   unwrapList,
   type DealBinding,
   type Paginated,
@@ -175,17 +176,19 @@ export function ClientProjects() {
     return () => window.removeEventListener(PORTAL_LABEL_EVENT, onLabel);
   }, [isAgency, portalId]);
 
-  async function refreshDealHoursInBackground(bindingId: number) {
+  async function refreshDealHoursInBackground(bindingId: number, signal?: AbortSignal) {
     if (!token || !portalId) return;
     try {
       const updated = await api<DealBinding>(
         `/api/deal-bindings/${bindingId}/refresh-hours/`,
-        { method: "POST" },
+        { method: "POST", signal },
         token
       );
+      if (signal?.aborted) return;
       setDealHours(updated);
       writePortalCache(CACHE_DEAL_HOURS, portalId, updated);
-    } catch {
+    } catch (e) {
+      if (!isAbortError(e)) undefined;
       // keep cached hours
     }
   }
@@ -200,44 +203,54 @@ export function ClientProjects() {
     if (cached) setDealHours(cached);
   }, [portalId]);
 
-  async function load() {
+  async function load(signal?: AbortSignal) {
     if (!token || !portalId) return;
     if (loadInFlightRef.current) return;
     const gen = loadGenRef.current;
     loadInFlightRef.current = true;
     try {
       const [openData, doneData, hoursData, reportsData, disputedData] = await Promise.all([
-        api<Task[] | Paginated<Task>>(`/api/tasks/?portal=${portalId}&open=1`, {}, token),
+        api<Task[] | Paginated<Task>>(
+          `/api/tasks/?portal=${portalId}&open=1`,
+          { signal },
+          token
+        ),
         !isAgency
           ? api<Task[] | Paginated<Task>>(
               `/api/tasks/?portal=${portalId}&status=done&ordering=-updated_at`,
-              {},
+              { signal },
               token
             )
           : Promise.resolve([] as Task[]),
         isAgency
           ? api<DealBinding[] | Paginated<DealBinding>>(
               `/api/deal-bindings/?client_portal=${portalId}&is_active=true`,
-              {},
+              { signal },
               token
-            ).catch(() => [] as DealBinding[])
-          : api<DealBinding>("/api/deal-bindings/mine/", {}, token).catch(() => null),
+            ).catch((e) => {
+              if (isAbortError(e)) throw e;
+              return [] as DealBinding[];
+            })
+          : api<DealBinding>("/api/deal-bindings/mine/", { signal }, token).catch((e) => {
+              if (isAbortError(e)) throw e;
+              return null;
+            }),
         !isAgency
           ? api<WorkReport[] | Paginated<WorkReport>>(
               `/api/reports/?portal=${portalId}&bucket=review`,
-              {},
+              { signal },
               token
             )
           : Promise.resolve([] as WorkReport[]),
         isAgency
           ? api<WorkReport[] | Paginated<WorkReport>>(
               `/api/reports/?portal=${portalId}&status=disputed`,
-              {},
+              { signal },
               token
             )
           : Promise.resolve([] as WorkReport[]),
       ]);
-      if (gen !== loadGenRef.current) return;
+      if (gen !== loadGenRef.current || signal?.aborted) return;
 
       setOpenTasks(unwrapList(openData));
 
@@ -254,7 +267,7 @@ export function ClientProjects() {
         setDealHours(mine);
         if (mine) writePortalCache(CACHE_DEAL_HOURS, portalId, mine);
         if (portal) setPortalInfo(portal);
-        if (mine?.id) void refreshDealHoursInBackground(mine.id);
+        if (mine?.id) void refreshDealHoursInBackground(mine.id, signal);
       } else {
         const bindings = unwrapList(hoursData as DealBinding[] | Paginated<DealBinding>);
         const binding = bindings[0] || null;
@@ -295,7 +308,11 @@ export function ClientProjects() {
 
   useEffect(() => {
     loadGenRef.current += 1;
-    void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
+    const ac = new AbortController();
+    void load(ac.signal).catch((e) => {
+      if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    });
+    return () => ac.abort();
   }, [token, portalId]);
 
   const reloadRef = useRef<() => void>(() => undefined);
