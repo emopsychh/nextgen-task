@@ -445,25 +445,33 @@ export function ReportDetail() {
 
         <div className="report-section">
           <div className="report-section-head">
-            <h2 className="report-section-title">Проекты и итоги</h2>
-            <div className="report-task-filters" role="group" aria-label="Фильтр задач">
-              {(
-                [
-                  { id: "all", label: "Все" },
-                  { id: "with", label: "С итогом" },
-                  { id: "without", label: "Без итога" },
-                ] as const
-              ).map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  className={`report-mini-chip${taskFilter === f.id ? " active" : ""}`}
-                  onClick={() => setTaskFilter(f.id)}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
+            <h2 className="report-section-title">
+              {detail.status === "disputed" ? "Оспоренные задачи" : "Проекты и итоги"}
+            </h2>
+            {detail.status === "disputed" ? (
+              <p className="muted report-dispute-scope-hint">
+                Показаны только задачи, которые клиент отметил в споре
+              </p>
+            ) : (
+              <div className="report-task-filters" role="group" aria-label="Фильтр задач">
+                {(
+                  [
+                    { id: "all", label: "Все" },
+                    { id: "with", label: "С итогом" },
+                    { id: "without", label: "Без итога" },
+                  ] as const
+                ).map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    className={`report-mini-chip${taskFilter === f.id ? " active" : ""}`}
+                    onClick={() => setTaskFilter(f.id)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="report-project-blocks">
             {(detail.projects_detail || []).map((block) => {

@@ -134,6 +134,37 @@ class WorkReportApiTests(TestCase):
         )
         self.assertFalse(any(r["id"] == report_id for r in current2.data["results"]))
 
+    def test_dispute_shows_only_flagged_tasks(self):
+        other = make_task(self.project, title="Ок задача", status="done", outcome="Всё ок")
+        create = self.agency_client.post(
+            "/api/reports/",
+            {"portal": self.client_portal.id, "project_ids": [self.project.id]},
+            format="json",
+        )
+        report_id = create.data["id"]
+        self.agency_client.post(f"/api/reports/{report_id}/send/", {}, format="json")
+
+        disputed = self.client_client.post(
+            f"/api/reports/{report_id}/dispute/",
+            {
+                "client_comment": "Нужно переделать",
+                "task_ids": [self.task.id],
+            },
+            format="json",
+        )
+        self.assertEqual(disputed.status_code, 200, disputed.content)
+        self.assertEqual(disputed.data["status"], "disputed")
+
+        tasks = disputed.data["projects_detail"][0]["tasks"]
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["id"], self.task.id)
+        self.assertTrue(tasks[0]["disputed"])
+        self.assertNotIn(other.id, [t["id"] for t in tasks])
+
+        agency_view = self.agency_client.get(f"/api/reports/{report_id}/")
+        self.assertEqual(len(agency_view.data["projects_detail"][0]["tasks"]), 1)
+        self.assertEqual(agency_view.data["projects_detail"][0]["tasks"][0]["id"], self.task.id)
+
     def test_task_outcome_on_complete_patch(self):
         from unittest.mock import patch
 

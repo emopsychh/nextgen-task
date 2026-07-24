@@ -15,10 +15,51 @@
   --radius-sm: 14px;
   --font: "Manrope", system-ui, sans-serif;
   --display: "Sora", "Manrope", system-ui, sans-serif;
+  --scrollbar-size: 10px;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #c9d2ce;
+  --scrollbar-thumb-hover: #9fb0aa;
+  --scrollbar-thumb-active: var(--accent-ink);
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/* App-wide scrollbars (Firefox + Chromium/WebKit/Safari) */
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 html,
@@ -5583,6 +5624,11 @@ a.task-card.is-done:hover,
 
 .report-section-head .report-section-title {
   margin: 0;
+}
+
+.report-dispute-scope-hint {
+  margin: 0;
+  font-size: 0.88rem;
 }
 
 .report-task-filters {

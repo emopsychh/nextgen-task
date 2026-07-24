@@ -99,10 +99,22 @@ def report_project_ids(report: WorkReport) -> list[int]:
 
 
 def report_projects_payload(report: WorkReport) -> list[dict]:
-    """Projects → tasks with live hours + task.outcome (no per-report text)."""
+    """Projects → tasks with live hours + task.outcome (no per-report text).
+
+    For disputed reports, only tasks the client flagged are included so the
+    agency can focus on the problems.
+    """
     project_ids = report_project_ids(report)
     if not project_ids:
         return []
+
+    disputed_task_ids: set[int] | None = None
+    if report.status == WorkReport.Status.DISPUTED:
+        disputed_task_ids = set(
+            report.dispute_items.values_list("task_id", flat=True)
+        )
+        if not disputed_task_ids:
+            return []
 
     seconds_by_task = {
         row["task_id"]: int(row["total"] or 0)
@@ -115,7 +127,10 @@ def report_projects_payload(report: WorkReport) -> list[dict]:
     for project in Project.objects.filter(id__in=project_ids).order_by("name", "id"):
         tasks = []
         total = 0
-        for task in Task.objects.filter(project=project).order_by("created_at", "id"):
+        qs = Task.objects.filter(project=project).order_by("created_at", "id")
+        if disputed_task_ids is not None:
+            qs = qs.filter(id__in=disputed_task_ids)
+        for task in qs:
             secs = seconds_by_task.get(task.id, 0)
             total += secs
             tasks.append(
@@ -125,8 +140,11 @@ def report_projects_payload(report: WorkReport) -> list[dict]:
                     "status": task.status,
                     "tracked_seconds": secs,
                     "outcome": task.outcome or "",
+                    "disputed": disputed_task_ids is not None,
                 }
             )
+        if not tasks and disputed_task_ids is not None:
+            continue
         blocks.append(
             {
                 "id": project.id,

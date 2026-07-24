@@ -158,6 +158,7 @@ export type WorkReportTaskRow = {
   status: TaskStatus;
   tracked_seconds: number;
   outcome?: string;
+  disputed?: boolean;
 };
 
 export type WorkReportProjectBlock = {
