@@ -47,6 +47,13 @@ class CompletionHelpersTests(TestCase):
         self.assertTrue(row.text.startswith(TIME_SPENT_MARKER))
         self.assertIn("1 мин", row.text)
 
+    def test_chat_line_bitrix_completion_uses_team_label(self):
+        task = make_task(self.project, created_by=self.user, status=Task.Status.DONE)
+        self.assertTrue(append_time_spent_chat(task, author=None))
+        row = Comment.objects.get(task=task, is_system=True)
+        self.assertEqual(row.author_name, "Команда")
+        self.assertIsNone(row.author_id)
+
     @patch("board.completion.post_app_elapsed_to_bitrix", return_value={"agency": True})
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
     def test_finalize_stops_timer_and_chats(self, _post):

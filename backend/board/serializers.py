@@ -114,7 +114,12 @@ class CommentSerializer(serializers.ModelSerializer):
     def get_author_display(self, obj):
         if obj.author:
             return obj.author.display_name
-        return obj.author_name or "Unknown"
+        if obj.author_name:
+            return obj.author_name
+        # System lines from Bitrix (no local actor) — never show English "Unknown".
+        if obj.is_system:
+            return "Команда"
+        return "Участник"
 
 
 def serialize_thread_items(comments, files) -> list[dict]:

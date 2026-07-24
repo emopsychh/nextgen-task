@@ -112,19 +112,9 @@ export function ClientProjects() {
     return out.slice(0, 12);
   }, [openTasks]);
 
-  const visiblePendingReports = useMemo(
-    () => pendingReports.filter((r) => !isDismissed("report", r.id, r.updated_at)),
-    [pendingReports, isDismissed]
-  );
-
   const visibleRecentDone = useMemo(
     () => recentDone.filter((t) => !isDismissed("task", t.id, t.updated_at)),
     [recentDone, isDismissed]
-  );
-
-  const visibleDisputedReports = useMemo(
-    () => disputedReports.filter((r) => !isDismissed("report", r.id, r.updated_at)),
-    [disputedReports, isDismissed]
   );
   const loadGenRef = useRef(0);
   const loadInFlightRef = useRef(false);
@@ -365,7 +355,7 @@ export function ClientProjects() {
 
   const titleName = portalInfo?.name || portalInfo?.domain || "Клиент";
   const agencyNeedsAttention =
-    visibleDisputedReports.length > 0 ||
+    disputedReports.length > 0 ||
     clientTasks.length > 0 ||
     hotTasks.length > 0;
 
@@ -441,18 +431,17 @@ export function ClientProjects() {
                 <h2 className="section-title">Отчёты на согласовании</h2>
                 <p className="muted">Нужно согласовать или оспорить</p>
               </div>
-              {visiblePendingReports.length === 0 ? (
+              {pendingReports.length === 0 ? (
                 <div className="empty-linked workspace-empty">
                   <p className="muted">Сейчас нет отчётов, ожидающих вашего ответа.</p>
                 </div>
               ) : (
                 <div className="workspace-attention-list">
-                  {visiblePendingReports.map((r) => (
+                  {pendingReports.map((r) => (
                     <Link
                       key={`report-${r.id}`}
                       to={reportDetailPath(portalId, false, r.id)}
                       className="workspace-attention-card is-report"
-                      onClick={() => dismiss("report", r.id, r.updated_at)}
                     >
                       <div className="workspace-attention-top">
                         <span className={`report-status-pill status-${r.status}`}>
@@ -509,7 +498,7 @@ export function ClientProjects() {
             </div>
           ) : (
             <>
-              {visibleDisputedReports.length > 0 ? (
+              {disputedReports.length > 0 ? (
                 <section className="workspace-focus-block workspace-dispute-section">
                   <div className="linked-head">
                     <div className="workspace-dispute-title-row">
@@ -523,12 +512,11 @@ export function ClientProjects() {
                     <p className="muted">Клиент оспорил отчёт — нужно разобрать</p>
                   </div>
                   <div className="workspace-attention-list">
-                    {visibleDisputedReports.map((r) => (
+                    {disputedReports.map((r) => (
                       <Link
                         key={`dispute-${r.id}`}
                         to={reportDetailPath(portalId, true, r.id)}
                         className="workspace-attention-card is-dispute"
-                        onClick={() => dismiss("report", r.id, r.updated_at)}
                       >
                         <div className="workspace-attention-top">
                           <span className="workspace-dispute-pill">Оспорен</span>

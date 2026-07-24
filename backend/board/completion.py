@@ -58,6 +58,9 @@ def append_time_spent_chat(task, *, author=None) -> bool:
     author_name = ""
     if author is not None:
         author_name = getattr(author, "display_name", None) or ""
+    # Bitrix inbound completion has no local actor — show agency team label.
+    if not author_name:
+        author_name = "Команда"
     Comment.objects.create(
         task=task,
         author=author,

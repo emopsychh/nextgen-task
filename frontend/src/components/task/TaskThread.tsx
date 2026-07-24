@@ -196,7 +196,10 @@ export const TaskThread = forwardRef<HTMLDivElement, Props>(function TaskThread(
         }
 
         const c = item.comment;
-        const author = c.author_display || c.author_name || "Участник";
+        const author =
+          c.author_display ||
+          c.author_name ||
+          (c.is_system ? "Команда" : "Участник");
         if (c.is_system) {
           return (
             <article key={`c-${c.id}`} className="msg-system">
