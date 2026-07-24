@@ -12,7 +12,6 @@ import {
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { TaskCompleteModal } from "../../components/TaskCompleteModal";
-import { TaskGlyph } from "../../components/icons";
 import { TaskComposer } from "../../components/task/TaskComposer";
 import { TaskSummaryCard } from "../../components/task/TaskSummaryCard";
 import { TaskThread, type ThreadRow } from "../../components/task/TaskThread";
@@ -20,9 +19,9 @@ import { SyncHint } from "../../components/SyncHint";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { useTaskLiveSync } from "../../hooks/useTaskLiveSync";
 import { dueMeta } from "../../lib/dates";
-import { formatDayLabel, formatDueFull } from "../../lib/format";
+import { formatDayLabel } from "../../lib/format";
 import { isImageFile } from "../../lib/files";
-import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
+import { isTaskOverdue } from "../../lib/status";
 
 /** Images first, then documents; drop exact duplicates (same name+size). */
 function normalizePendingFiles(files: File[]): File[] {
@@ -56,7 +55,6 @@ export function TaskDetail() {
   const toast = useFlashToast(1800);
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
-  const summaryRef = useRef<HTMLElement>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   const [task, setTask] = useState<Task | null>(null);
@@ -79,7 +77,6 @@ export function TaskDetail() {
   const [draftDescription, setDraftDescription] = useState("");
   const [draftOutcome, setDraftOutcome] = useState("");
   const [completeOpen, setCompleteOpen] = useState(false);
-  const [compactTask, setCompactTask] = useState(false);
   const [threadSyncing, setThreadSyncing] = useState(false);
 
   const canEditDueDate =
@@ -365,25 +362,6 @@ export function TaskDetail() {
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 34), 160)}px`;
   }, [comment]);
 
-  useEffect(() => {
-    const card = summaryRef.current;
-    const root = threadRef.current;
-    if (!card || !root) return;
-
-    const io = new IntersectionObserver(
-      ([entry]) => {
-        setCompactTask(!entry.isIntersecting);
-      },
-      { root, threshold: 0.15, rootMargin: "0px 0px 0px 0px" }
-    );
-    io.observe(card);
-    return () => io.disconnect();
-  }, [task?.id]);
-
-  function scrollToTaskCard() {
-    summaryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
   async function patchTask(fields: TaskPatch, okMessage?: string) {
     if (!token || !task || !canManage) return;
     setSaveBusy(true);
@@ -665,7 +643,7 @@ export function TaskDetail() {
             <span className="task-back-label">К задачам</span>
           </Link>
           <div className="chat-topbar-title">
-            <strong>Чат задачи</strong>
+            <strong>{task.title}</strong>
             <span className="muted">{task.project_name}</span>
           </div>
           {threadSyncing ? <SyncHint>Обновляем чат…</SyncHint> : null}
@@ -685,84 +663,60 @@ export function TaskDetail() {
         onConfirm={(outcome) => void completeWithOutcome(outcome)}
       />
 
-      <section className="messenger">
-        <button
-          type="button"
-          className={`task-sticky-bar${compactTask ? " visible" : ""}`}
-          onClick={scrollToTaskCard}
-          aria-hidden={!compactTask}
-          tabIndex={compactTask ? 0 : -1}
-        >
-          <span className="task-sticky-icon" aria-hidden>
-            <TaskGlyph />
-          </span>
-          <span className="task-sticky-main">
-            <strong className="task-sticky-title">{task.title}</strong>
-            <span className="task-sticky-meta">
-              <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
-                {STATUS_LABEL[task.status]}
-              </span>
-              {overdue ? (
-                <span className="task-status-pill status-overdue">Опаздывает</span>
-              ) : null}
-              <span className={`task-due-inline ${due.tone}`}>
-                {formatDueFull(task.due_date)}
-              </span>
-            </span>
-          </span>
-          <span className="task-sticky-hint muted">к карточке</span>
-        </button>
-
-        <div className="messenger-thread" ref={threadRef}>
-          <div className="chat-day-pill">задача</div>
-
-          <TaskSummaryCard
-            ref={summaryRef}
-            task={task}
-            creator={creator}
-            overdue={overdue}
-            due={due}
-            canManage={canManage}
-            canChangeStatus={canChangeStatus}
-            canEditDueDate={canEditDueDate}
-            saveBusy={saveBusy}
-            draftTitle={draftTitle}
-            draftDescription={draftDescription}
-            onDraftTitle={setDraftTitle}
-            onDraftDescription={setDraftDescription}
-            onCommitTitle={() => void commitTitle()}
-            onCommitDescription={() => void commitDescription()}
-            onSetStatus={(s) => void setStatus(s)}
-            onRequestComplete={() => setCompleteOpen(true)}
-            onSetDueDate={(iso) => void setDueDate(iso)}
-            onToggleImportant={() => void toggleImportant()}
-            draftOutcome={draftOutcome}
-            onDraftOutcome={setDraftOutcome}
-            onCommitOutcome={() => void commitOutcome()}
-          />
-
-          {hasMore ? (
-            <div className="chat-load-older muted">
-              {loadingOlder ? "Загрузка истории…" : "Прокрутите вверх для истории"}
-            </div>
-          ) : null}
-
-          <TaskThread ref={threadEndRef} rows={threadWithDays} />
-        </div>
-
-        <TaskComposer
-          ref={textInputRef}
-          comment={comment}
-          pendingFiles={pendingFiles}
-          canSend={canSend}
-          onCommentChange={setComment}
-          onPickFiles={onPickFiles}
-          onAddFiles={onAddFiles}
-          onRemovePending={removePending}
-          onSend={(e) => void sendMessage(e)}
-          onKeyDown={onComposerKeyDown}
+      <div className="task-bitrix">
+        <TaskSummaryCard
+          task={task}
+          creator={creator}
+          overdue={overdue}
+          due={due}
+          canManage={canManage}
+          canChangeStatus={canChangeStatus}
+          canEditDueDate={canEditDueDate}
+          saveBusy={saveBusy}
+          draftTitle={draftTitle}
+          draftDescription={draftDescription}
+          onDraftTitle={setDraftTitle}
+          onDraftDescription={setDraftDescription}
+          onCommitTitle={() => void commitTitle()}
+          onCommitDescription={() => void commitDescription()}
+          onSetStatus={(s) => void setStatus(s)}
+          onRequestComplete={() => setCompleteOpen(true)}
+          onSetDueDate={(iso) => void setDueDate(iso)}
+          onToggleImportant={() => void toggleImportant()}
+          draftOutcome={draftOutcome}
+          onDraftOutcome={setDraftOutcome}
+          onCommitOutcome={() => void commitOutcome()}
         />
-      </section>
+
+        <section className="messenger task-chat-pane">
+          <div className="task-chat-header">
+            <strong>Чат задачи</strong>
+          </div>
+
+          <div className="messenger-thread" ref={threadRef}>
+            {hasMore ? (
+              <div className="chat-load-older muted">
+                {loadingOlder ? "Загрузка истории…" : "Прокрутите вверх для истории"}
+              </div>
+            ) : null}
+
+            <TaskThread ref={threadEndRef} rows={threadWithDays} />
+          </div>
+
+          <TaskComposer
+            ref={textInputRef}
+            comment={comment}
+            pendingFiles={pendingFiles}
+            canSend={canSend}
+            onCommentChange={setComment}
+            onPickFiles={onPickFiles}
+            onAddFiles={onAddFiles}
+            onRemovePending={removePending}
+            onSend={(e) => void sendMessage(e)}
+            onKeyDown={onComposerKeyDown}
+          />
+        </section>
+      </div>
     </div>
   );
 }

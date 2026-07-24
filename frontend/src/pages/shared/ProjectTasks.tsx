@@ -14,6 +14,7 @@ import { DueDatePicker } from "../../components/DueDatePicker";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
+import { useSeenProjects } from "../../hooks/useSeenProjects";
 import { dueMeta } from "../../lib/dates";
 import {
   readBoardTasksCache,
@@ -30,6 +31,7 @@ export function ProjectTasks() {
   const toast = useFlashToast();
 
   const [project, setProject] = useState<Project | null>(null);
+  const { markSeen } = useSeenProjects(project?.portal ?? null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
   const [query, setQuery] = useState("");
@@ -176,6 +178,13 @@ export function ProjectTasks() {
     const id = window.setTimeout(() => setDebouncedQuery(query), 300);
     return () => window.clearTimeout(id);
   }, [query]);
+
+  // Opening a project clears it from the "new" badge.
+  useEffect(() => {
+    const id = Number(projectId);
+    if (!id || !project) return;
+    markSeen(id);
+  }, [projectId, project, markSeen]);
 
   // Reset & reload page 1 whenever project / filter / search change.
   useEffect(() => {

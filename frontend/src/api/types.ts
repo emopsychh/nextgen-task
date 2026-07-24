@@ -31,6 +31,8 @@ export type Project = {
   bitrix_group_id?: string;
   tasks_count: number;
   done_count: number;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type ActivityType =

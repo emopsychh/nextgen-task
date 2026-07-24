@@ -7,6 +7,7 @@ import {
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePortalLiveSync } from "../hooks/usePortalLiveSync";
+import { useSeenProjects } from "../hooks/useSeenProjects";
 import {
   getPortalLabel,
   PORTAL_LABEL_EVENT,
@@ -64,6 +65,9 @@ export function ProjectSidebarNav() {
     if (routeProjectId && lastPortalRef.current) return lastPortalRef.current;
     return null;
   }, [routePortalId, isAgency, portal?.id, resolvedPortalId, routeProjectId]);
+
+  const { seedIfEmpty, unseenCount } = useSeenProjects(contextPortalId);
+  const projectsUnseen = unseenCount(projects);
 
   useEffect(() => {
     if (contextPortalId) lastPortalRef.current = contextPortalId;
@@ -130,7 +134,10 @@ export function ProjectSidebarNav() {
     if (isAgency && onTicketsRoute) return;
 
     const cached = readPortalCache<Project[]>(CACHE_PROJECTS, contextPortalId);
-    if (cached?.length) setProjects(cached);
+    if (cached?.length) {
+      setProjects(cached);
+      seedIfEmpty(cached.map((p) => p.id));
+    }
 
     let cancelled = false;
     async function load() {
@@ -143,6 +150,7 @@ export function ProjectSidebarNav() {
         if (cancelled) return;
         const list = unwrapList(data);
         setProjects(list);
+        seedIfEmpty(list.map((p) => p.id));
         writePortalCache(CACHE_PROJECTS, contextPortalId!, list);
         if (list[0]?.portal_name) {
           setPortalLabel(contextPortalId!, list[0].portal_name);
@@ -160,7 +168,7 @@ export function ProjectSidebarNav() {
       cancelled = true;
       window.removeEventListener("projects-updated", onUpdate);
     };
-  }, [token, contextPortalId, isAgency, onTicketsRoute]);
+  }, [token, contextPortalId, isAgency, onTicketsRoute, seedIfEmpty]);
 
   // Open tickets badge — client only (agency badge lives in ClientRail)
   useEffect(() => {
@@ -240,9 +248,21 @@ export function ProjectSidebarNav() {
       const kind = payload?.kind || "";
       const refreshReports = kind.startsWith("report_");
       const refreshTickets = kind.startsWith("ticket_");
-      if (!refreshReports && !refreshTickets) return;
+      const refreshProjects = kind.startsWith("project_");
+      if (!refreshReports && !refreshTickets && !refreshProjects) return;
       void (async () => {
         try {
+          if (refreshProjects && contextPortalId && !(isAgency && onTicketsRoute)) {
+            const data = await api<Project[] | { results: Project[] }>(
+              `/api/projects/?portal=${contextPortalId}`,
+              {},
+              token
+            );
+            const list = unwrapList(data);
+            setProjects(list);
+            seedIfEmpty(list.map((p) => p.id));
+            writePortalCache(CACHE_PROJECTS, contextPortalId, list);
+          }
           if (refreshReports && contextPortalId && !(isAgency && onTicketsRoute)) {
             const data = await api<{
               draft?: number;
@@ -358,9 +378,9 @@ export function ProjectSidebarNav() {
           </svg>
         </span>
         <span className="feed-nav-label">Проекты</span>
-        {projects.length > 0 ? (
-          <span className="feed-nav-count" aria-label={`${projects.length} проектов`}>
-            {projects.length > 99 ? "99+" : projects.length}
+        {projectsUnseen > 0 ? (
+          <span className="feed-nav-count" aria-label={`${projectsUnseen} новых проектов`}>
+            {projectsUnseen > 99 ? "99+" : projectsUnseen}
           </span>
         ) : null}
       </NavLink>

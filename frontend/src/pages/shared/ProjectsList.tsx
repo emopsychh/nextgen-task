@@ -5,6 +5,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
+import { useSeenProjects } from "../../hooks/useSeenProjects";
 import {
   getPortalLabel,
   portalDisplayName,
@@ -32,6 +33,7 @@ export function ProjectsList() {
   const [description, setDescription] = useState("");
   const [enteringId, setEnteringId] = useState<number | null>(null);
   const [title, setTitle] = useState("Проекты");
+  const { isUnseen, seedIfEmpty } = useSeenProjects(portalId);
 
   const load = useCallback(async () => {
     if (!token || !portalId) return;
@@ -40,8 +42,10 @@ export function ProjectsList() {
       {},
       token
     );
-    setProjects(unwrapList(data));
-  }, [token, portalId]);
+    const list = unwrapList(data);
+    setProjects(list);
+    seedIfEmpty(list.map((p) => p.id));
+  }, [token, portalId, seedIfEmpty]);
 
   useEffect(() => {
     if (!portalId) return;
@@ -178,11 +182,12 @@ export function ProjectsList() {
         <ul className="projects-hub-grid">
           {projects.map((p) => {
             const { done, total, pct } = projectProgress(p);
+            const unseen = isUnseen(p.id);
             return (
               <li key={p.id}>
                 <Link
                   to={`/projects/${p.id}`}
-                  className={`projects-hub-card${enteringId === p.id ? " is-entering" : ""}`}
+                  className={`projects-hub-card${enteringId === p.id ? " is-entering" : ""}${unseen ? " is-new" : ""}`}
                 >
                   <div className="projects-hub-card-top">
                     <strong className="projects-hub-card-title">{p.name}</strong>
