@@ -64,7 +64,7 @@ export function ReportDetail() {
     portalId,
     enabled: !!portalId && !!reportId,
     onEvent: (payload) => {
-      if (payload?.kind?.startsWith("report_") || !payload?.kind) {
+      if (payload?.kind?.startsWith("report_")) {
         void loadDetail().catch(() => undefined);
       }
     },

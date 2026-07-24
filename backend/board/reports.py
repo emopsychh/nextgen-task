@@ -90,6 +90,12 @@ def report_portal_id(report: WorkReport) -> int | None:
 
 
 def report_project_ids(report: WorkReport) -> list[int]:
+    # Prefer prefetched M2M to avoid an extra query on detail/actions.
+    cache = getattr(report, "_prefetched_objects_cache", None) or {}
+    if "projects" in cache:
+        ids = [p.id for p in report.projects.all()]
+        if ids:
+            return ids
     ids = list(report.projects.values_list("id", flat=True))
     if ids:
         return ids
@@ -98,39 +104,52 @@ def report_project_ids(report: WorkReport) -> list[int]:
     return []
 
 
-def report_projects_payload(report: WorkReport) -> list[dict]:
-    """Projects → tasks with live hours + task.outcome (no per-report text).
+def _disputed_task_ids(report: WorkReport) -> set[int] | None:
+    if report.status != WorkReport.Status.DISPUTED:
+        return None
+    cache = getattr(report, "_prefetched_objects_cache", None) or {}
+    if "dispute_items" in cache:
+        return {item.task_id for item in report.dispute_items.all()}
+    return set(report.dispute_items.values_list("task_id", flat=True))
 
-    For disputed reports, only tasks the client flagged are included so the
-    agency can focus on the problems.
-    """
-    project_ids = report_project_ids(report)
+
+def _seconds_by_task(project_ids: list[int]) -> dict[int, int]:
     if not project_ids:
-        return []
-
-    disputed_task_ids: set[int] | None = None
-    if report.status == WorkReport.Status.DISPUTED:
-        disputed_task_ids = set(
-            report.dispute_items.values_list("task_id", flat=True)
-        )
-        if not disputed_task_ids:
-            return []
-
-    seconds_by_task = {
+        return {}
+    return {
         row["task_id"]: int(row["total"] or 0)
         for row in TimeEntry.objects.filter(task__project_id__in=project_ids)
         .values("task_id")
         .annotate(total=Sum("duration_seconds"))
     }
 
+
+def _build_projects_detail(
+    project_ids: list[int],
+    seconds_by_task: dict[int, int],
+    disputed_task_ids: set[int] | None,
+) -> list[dict]:
+    if not project_ids:
+        return []
+    if disputed_task_ids is not None and not disputed_task_ids:
+        return []
+
+    projects = list(Project.objects.filter(id__in=project_ids).order_by("name", "id"))
+    tasks_qs = Task.objects.filter(project_id__in=project_ids).order_by("created_at", "id")
+    if disputed_task_ids is not None:
+        tasks_qs = tasks_qs.filter(id__in=disputed_task_ids)
+
+    tasks_by_project: dict[int, list[Task]] = {p.id: [] for p in projects}
+    for task in tasks_qs:
+        bucket = tasks_by_project.get(task.project_id)
+        if bucket is not None:
+            bucket.append(task)
+
     blocks = []
-    for project in Project.objects.filter(id__in=project_ids).order_by("name", "id"):
+    for project in projects:
         tasks = []
         total = 0
-        qs = Task.objects.filter(project=project).order_by("created_at", "id")
-        if disputed_task_ids is not None:
-            qs = qs.filter(id__in=disputed_task_ids)
-        for task in qs:
+        for task in tasks_by_project.get(project.id, []):
             secs = seconds_by_task.get(task.id, 0)
             total += secs
             tasks.append(
@@ -155,6 +174,37 @@ def report_projects_payload(report: WorkReport) -> list[dict]:
         )
     return blocks
 
+
+def report_detail_metrics(report: WorkReport) -> dict:
+    """One-shot metrics for WorkReportSerializer (single TimeEntry scan)."""
+    project_ids = report_project_ids(report)
+    disputed = _disputed_task_ids(report)
+    seconds_by_task = _seconds_by_task(project_ids)
+    projects_detail = _build_projects_detail(project_ids, seconds_by_task, disputed)
+
+    cache = getattr(report, "_prefetched_objects_cache", None) or {}
+    if "projects" in cache:
+        project_names = sorted(p.name for p in report.projects.all())
+    elif project_ids:
+        project_names = list(
+            Project.objects.filter(id__in=project_ids)
+            .order_by("name")
+            .values_list("name", flat=True)
+        )
+    else:
+        project_names = []
+
+    return {
+        "project_ids": project_ids,
+        "project_names": project_names,
+        "projects_detail": projects_detail,
+        "total_tracked_seconds": sum(seconds_by_task.values()),
+    }
+
+
+def report_projects_payload(report: WorkReport) -> list[dict]:
+    """Projects → tasks with live hours + task.outcome (no per-report text)."""
+    return report_detail_metrics(report)["projects_detail"]
 
 def refresh_report(report: WorkReport) -> WorkReport:
     return (

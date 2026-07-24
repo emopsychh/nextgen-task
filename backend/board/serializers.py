@@ -546,32 +546,30 @@ class WorkReportSerializer(serializers.ModelSerializer):
         return ""
 
     def get_project_ids(self, obj):
-        from board.reports import report_project_ids
-
-        return report_project_ids(obj)
+        return self._metrics(obj)["project_ids"]
 
     def get_project_names(self, obj):
-        ids = self.get_project_ids(obj)
-        if not ids:
-            return []
-        return list(
-            Project.objects.filter(id__in=ids).order_by("name").values_list("name", flat=True)
-        )
+        return self._metrics(obj)["project_names"]
 
     def get_created_by_name(self, obj):
         if obj.created_by:
             return obj.created_by.display_name
         return ""
 
-    def get_projects_detail(self, obj):
-        from board.reports import report_projects_payload
+    def _metrics(self, obj):
+        cache = self.context.setdefault("_report_metrics", {})
+        key = obj.pk
+        if key not in cache:
+            from board.reports import report_detail_metrics
 
-        return report_projects_payload(obj)
+            cache[key] = report_detail_metrics(obj)
+        return cache[key]
+
+    def get_projects_detail(self, obj):
+        return self._metrics(obj)["projects_detail"]
 
     def get_total_tracked_seconds(self, obj):
-        from board.reports import live_total_seconds_for_projects, report_project_ids
-
-        return live_total_seconds_for_projects(report_project_ids(obj))
+        return self._metrics(obj)["total_tracked_seconds"]
 
     def get_deal_hours(self, obj):
         from board.reports import deal_hours_for_portal, report_portal_id

@@ -824,7 +824,8 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         except (TypeError, ValueError):
             return Response({"detail": "project_ids invalid"}, status=400)
         report = create_report(portal, ids, self._actor())
-        serializer = WorkReportSerializer(report, context={"request": request})
+        # List payload is enough to navigate; detail page loads the heavy body once.
+        serializer = WorkReportListSerializer(report, context={"request": request})
         return Response(serializer.data, status=201)
 
     def update(self, request, *args, **kwargs):
@@ -894,12 +895,26 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         qs = WorkReport.objects.filter(
             Q(portal_id__in=ids) | Q(project__portal_id__in=ids)
         ).filter(Q(portal_id=portal_id) | Q(project__portal_id=portal_id))
+        from django.db.models import Count
+
+        from board.models import WorkReport as WR
+
+        agg = qs.aggregate(
+            all=Count("id"),
+            current=Count("id", filter=Q(status__in=BUCKET_STATUSES["current"])),
+            review=Count("id", filter=Q(status__in=BUCKET_STATUSES["review"])),
+            paid=Count("id", filter=Q(status__in=BUCKET_STATUSES["paid"])),
+            draft=Count("id", filter=Q(status=WR.Status.DRAFT)),
+            disputed=Count("id", filter=Q(status=WR.Status.DISPUTED)),
+        )
         return Response(
             {
-                "all": qs.count(),
-                "current": qs.filter(status__in=BUCKET_STATUSES["current"]).count(),
-                "review": qs.filter(status__in=BUCKET_STATUSES["review"]).count(),
-                "paid": qs.filter(status__in=BUCKET_STATUSES["paid"]).count(),
+                "all": agg["all"] or 0,
+                "current": agg["current"] or 0,
+                "review": agg["review"] or 0,
+                "paid": agg["paid"] or 0,
+                "draft": agg["draft"] or 0,
+                "disputed": agg["disputed"] or 0,
             }
         )
 

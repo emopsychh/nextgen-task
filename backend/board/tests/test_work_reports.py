@@ -55,10 +55,8 @@ class WorkReportApiTests(TestCase):
         self.assertEqual(res.data["status"], "draft")
         self.assertEqual(sorted(res.data["project_ids"]), sorted([self.project.id, self.project2.id]))
         self.assertEqual(res.data["total_tracked_seconds"], 3600)
-        blocks = res.data["projects_detail"]
-        self.assertEqual(len(blocks), 2)
-        first = next(b for b in blocks if b["id"] == self.project.id)
-        self.assertEqual(first["tasks"][0]["outcome"], "Сверстали главную")
+        # Create returns a list payload; full projects_detail is loaded on detail page.
+        self.assertNotIn("projects_detail", res.data)
 
         bad = self.client_client.post(
             "/api/reports/",

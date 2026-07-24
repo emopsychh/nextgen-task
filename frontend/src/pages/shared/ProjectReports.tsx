@@ -151,7 +151,7 @@ export function ProjectReports() {
     portalId,
     enabled: !!portalId,
     onEvent: (payload) => {
-      if (payload?.kind?.startsWith("report_") || !payload?.kind) {
+      if (payload?.kind?.startsWith("report_")) {
         void loadList().catch(() => undefined);
       }
     },

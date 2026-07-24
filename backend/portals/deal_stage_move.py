@@ -195,20 +195,49 @@ def move_client_deal_stage(portal_id: int, stage_key: str) -> dict:
 
 
 def schedule_deal_stage_move(portal_id: int | None, stage_key: str) -> None:
-    """Fire after the DB transaction commits; swallow all errors."""
+    """Enqueue after commit — never block the HTTP request on Bitrix CRM."""
     if not portal_id:
         return
 
+    pid = int(portal_id)
+    key = str(stage_key)
+
     def _run() -> None:
+        from django.conf import settings
+
         try:
-            move_client_deal_stage(int(portal_id), stage_key)
+            if settings.CELERY_TASK_ALWAYS_EAGER:
+                # Eager Celery would still block the response; fire a daemon thread.
+                import threading
+
+                def _worker() -> None:
+                    try:
+                        move_client_deal_stage(pid, key)
+                    except Exception:
+                        logger.exception(
+                            "deal stage move crashed portal=%s key=%s", pid, key
+                        )
+
+                threading.Thread(target=_worker, daemon=True).start()
+                return
+
+            from board.tasks import move_deal_stage_task
+
+            move_deal_stage_task.delay(pid, key)
         except Exception:
             logger.exception(
-                "deal stage move crashed portal=%s key=%s", portal_id, stage_key
+                "deal stage enqueue failed portal=%s key=%s — running inline thread",
+                pid,
+                key,
             )
+            import threading
+
+            threading.Thread(
+                target=lambda: move_client_deal_stage(pid, key),
+                daemon=True,
+            ).start()
 
     try:
         transaction.on_commit(_run)
     except Exception:
-        # Outside atomic block — run immediately.
         _run()

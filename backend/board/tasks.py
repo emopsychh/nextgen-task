@@ -533,10 +533,13 @@ def sync_comment_to_bitrix(self, comment_id: int):
     except Comment.DoesNotExist:
         return {"ok": False, "reason": "missing"}
 
-    # System lines are app-local only — posting them to Bitrix creates
-    # duplicate activity and can feed comment/deadline loops.
+    # Most system lines stay app-local. Spent-time on completion is the
+    # exception — the team needs it in Bitrix chat (manual Учёт времени).
     if comment.is_system:
-        return {"ok": True, "skipped": "system"}
+        from board.completion import TIME_SPENT_MARKER
+
+        if not (comment.text or "").strip().startswith(TIME_SPENT_MARKER):
+            return {"ok": True, "skipped": "system"}
 
     author_name = comment.author_name or (
         comment.author.display_name if comment.author else "Участник"
@@ -545,7 +548,13 @@ def sync_comment_to_bitrix(self, comment_id: int):
     # File-only comments: Bitrix chat message is created by sync_attachment_to_bitrix
     if not body:
         return {"ok": True, "skipped": "empty_text"}
-    message = f"{author_name}: {body}".strip()
+    # Spent-time line: post as-is (no "Команда:" prefix) for a clean Bitrix status.
+    from board.completion import TIME_SPENT_MARKER
+
+    if comment.is_system and body.startswith(TIME_SPENT_MARKER):
+        message = body
+    else:
+        message = f"{author_name}: {body}".strip()
     if not message:
         return {"ok": False, "reason": "empty"}
 
@@ -899,6 +908,24 @@ def post_time_entry_to_deal(self, entry_id: int):
                 return {"ok": False, "error": str(exc)}
         # Hours already deducted — keep claim; comment may be missing.
         return {"ok": True, "partial": True, "error": str(exc), "deal_id": binding.deal_id}
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=10)
+def move_deal_stage_task(self, portal_id: int, stage_key: str):
+    """Background: move accompaniment deal stage after report send/accept."""
+    from portals.deal_stage_move import move_client_deal_stage
+
+    try:
+        return move_client_deal_stage(int(portal_id), str(stage_key))
+    except Exception as exc:
+        logger = __import__("logging").getLogger(__name__)
+        logger.exception(
+            "move_deal_stage_task failed portal=%s key=%s", portal_id, stage_key
+        )
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": str(exc)}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=5)

@@ -109,9 +109,9 @@ class DealStageMoveOnReportTests(TestCase):
         self.assertEqual(res["reason"], "deal_closed")
         client.update_deal.assert_not_called()
 
-    @patch("portals.deal_stage_move.move_client_deal_stage")
-    def test_send_and_accept_schedule_moves(self, move_mock):
-        move_mock.return_value = {"ok": True}
+    @patch("board.reports.schedule_deal_stage_move")
+    def test_send_and_accept_schedule_moves(self, schedule_mock):
+        schedule_mock.return_value = None
         report = WorkReport.objects.create(
             portal=self.client_portal,
             project=self.project,
@@ -121,8 +121,8 @@ class DealStageMoveOnReportTests(TestCase):
         report.projects.set([self.project])
 
         send_to_client(report, self.agency_user)
-        move_mock.assert_called_with(self.client_portal.id, STAGE_REPORT_REVIEW)
+        schedule_mock.assert_called_with(self.client_portal.id, STAGE_REPORT_REVIEW)
 
         report.refresh_from_db()
         accept_report(report, self.client_user)
-        move_mock.assert_called_with(self.client_portal.id, STAGE_ACT_SIGNING)
+        schedule_mock.assert_called_with(self.client_portal.id, STAGE_ACT_SIGNING)

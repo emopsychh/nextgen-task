@@ -6,7 +6,6 @@ import {
   type Paginated,
   type Project,
   type SupportTicket,
-  type WorkReport,
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePortalLiveSync } from "../hooks/usePortalLiveSync";
@@ -207,30 +206,17 @@ export function ProjectSidebarNav() {
 
     async function loadReports() {
       try {
-        let next = 0;
+        const data = await api<{
+          draft?: number;
+          disputed?: number;
+          review?: number;
+        }>(`/api/reports/counts/?portal=${contextPortalId}`, {}, token!);
+        if (cancelled) return;
         if (isAgency) {
-          const [drafts, disputed] = await Promise.all([
-            api<WorkReport[] | Paginated<WorkReport>>(
-              `/api/reports/?portal=${contextPortalId}&status=draft`,
-              {},
-              token!
-            ),
-            api<WorkReport[] | Paginated<WorkReport>>(
-              `/api/reports/?portal=${contextPortalId}&status=disputed`,
-              {},
-              token!
-            ),
-          ]);
-          next = unwrapList(drafts).length + unwrapList(disputed).length;
+          setReportsAttention((data.draft || 0) + (data.disputed || 0));
         } else {
-          const data = await api<WorkReport[] | Paginated<WorkReport>>(
-            `/api/reports/?portal=${contextPortalId}&bucket=review`,
-            {},
-            token!
-          );
-          next = unwrapList(data).length;
+          setReportsAttention(data.review || 0);
         }
-        if (!cancelled) setReportsAttention(next);
       } catch {
         if (!cancelled) setReportsAttention(0);
       }
@@ -254,33 +240,21 @@ export function ProjectSidebarNav() {
     onEvent: (payload) => {
       if (!token) return;
       const kind = payload?.kind || "";
-      const refreshReports = kind.startsWith("report_") || !kind;
-      const refreshTickets = kind.startsWith("ticket_") || !kind;
+      const refreshReports = kind.startsWith("report_");
+      const refreshTickets = kind.startsWith("ticket_");
       if (!refreshReports && !refreshTickets) return;
       void (async () => {
         try {
           if (refreshReports && contextPortalId && !(isAgency && onTicketsRoute)) {
+            const data = await api<{
+              draft?: number;
+              disputed?: number;
+              review?: number;
+            }>(`/api/reports/counts/?portal=${contextPortalId}`, {}, token);
             if (isAgency) {
-              const [drafts, disputed] = await Promise.all([
-                api<WorkReport[] | Paginated<WorkReport>>(
-                  `/api/reports/?portal=${contextPortalId}&status=draft`,
-                  {},
-                  token
-                ),
-                api<WorkReport[] | Paginated<WorkReport>>(
-                  `/api/reports/?portal=${contextPortalId}&status=disputed`,
-                  {},
-                  token
-                ),
-              ]);
-              setReportsAttention(unwrapList(drafts).length + unwrapList(disputed).length);
+              setReportsAttention((data.draft || 0) + (data.disputed || 0));
             } else {
-              const data = await api<WorkReport[] | Paginated<WorkReport>>(
-                `/api/reports/?portal=${contextPortalId}&bucket=review`,
-                {},
-                token
-              );
-              setReportsAttention(unwrapList(data).length);
+              setReportsAttention(data.review || 0);
             }
           }
           if (refreshTickets && !isAgency && contextPortalId) {

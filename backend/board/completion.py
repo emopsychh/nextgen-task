@@ -1,4 +1,4 @@
-"""Task completion: stop timers + shared chat line with spent time.
+"""Task completion: stop timers + spent-time line in app and Bitrix chat.
 
 Model (locked):
   • Start  ↔ Bitrix (bidirectional status)
@@ -6,7 +6,8 @@ Model (locked):
   • Done   ↔ Bitrix (bidirectional status)
   • Time tracking stays in the app for clients. Bitrix «Учёт времени»
     is filled manually in Bitrix — the app never posts elapsed items.
-  • On done, always write a system chat line with app-tracked time.
+  • On done, write «Затрачено на задачу: …» into the app chat and the
+    agency Bitrix task comment thread.
 """
 
 from __future__ import annotations
@@ -34,7 +35,13 @@ def format_tracked_duration(seconds: int) -> str:
 
 
 def append_time_spent_chat(task, *, author=None) -> bool:
-    """One shared system line in the app chat (agency + client both see it)."""
+    """One shared system line in the app chat (agency + client both see it).
+
+    Also posts the same line into the agency Bitrix task chat so the team
+    sees spent time there (Bitrix «Учёт времени» stays manual).
+    """
+    from django.conf import settings
+
     from board.models import Comment
     from board.timeutils import task_tracked_seconds
 
@@ -51,13 +58,26 @@ def append_time_spent_chat(task, *, author=None) -> bool:
     # Bitrix inbound completion has no local actor — show agency team label.
     if not author_name:
         author_name = "Команда"
-    Comment.objects.create(
+    comment = Comment.objects.create(
         task=task,
         author=author,
         author_name=author_name,
         text=text,
         is_system=True,
     )
+    try:
+        from board.tasks import sync_comment_to_bitrix
+
+        if settings.CELERY_TASK_ALWAYS_EAGER:
+            sync_comment_to_bitrix(comment.id)
+        else:
+            sync_comment_to_bitrix.delay(comment.id)
+    except Exception:
+        logger.exception(
+            "enqueue time-spent Bitrix comment failed task=%s comment=%s",
+            task.id,
+            comment.id,
+        )
     return True
 
 
