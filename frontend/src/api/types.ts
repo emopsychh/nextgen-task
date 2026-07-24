@@ -218,6 +218,36 @@ export type WorkReport = {
   dispute_count?: number;
 };
 
+export type SupportTicketStatus = "open" | "closed";
+
+export type SupportTicketMessage = {
+  id: number;
+  ticket: number;
+  author: number | null;
+  author_name: string;
+  text: string;
+  created_at: string;
+};
+
+export type SupportTicket = {
+  id: number;
+  portal: number;
+  subject: string;
+  body?: string;
+  status: SupportTicketStatus;
+  project: number | null;
+  project_name?: string;
+  task: number | null;
+  task_title?: string;
+  created_by: number | null;
+  created_by_name: string;
+  message_count?: number;
+  messages?: SupportTicketMessage[];
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+};
+
 export type DealBinding = {
   id: number;
   agency_portal: number;

@@ -6,6 +6,7 @@ from .views import (
     AttachmentViewSet,
     CommentViewSet,
     ProjectViewSet,
+    SupportTicketViewSet,
     TaskViewSet,
     WorkReportViewSet,
 )
@@ -17,6 +18,7 @@ router.register("tasks", TaskViewSet, basename="task")
 router.register("comments", CommentViewSet, basename="comment")
 router.register("attachments", AttachmentViewSet, basename="attachment")
 router.register("reports", WorkReportViewSet, basename="report")
+router.register("tickets", SupportTicketViewSet, basename="ticket")
 
 urlpatterns = [
     path("activity/", ActivityFeedView.as_view(), name="activity-feed"),

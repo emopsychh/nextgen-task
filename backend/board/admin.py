@@ -4,6 +4,8 @@ from .models import (
     Attachment,
     Comment,
     Project,
+    SupportTicket,
+    SupportTicketMessage,
     Task,
     TimeEntry,
     WorkReport,
@@ -102,3 +104,17 @@ class WorkReportAdmin(admin.ModelAdmin):
 @admin.register(WorkReportLineAttachment)
 class WorkReportLineAttachmentAdmin(admin.ModelAdmin):
     list_display = ("original_name", "line", "created_at")
+
+
+class SupportTicketMessageInline(admin.TabularInline):
+    model = SupportTicketMessage
+    extra = 0
+    readonly_fields = ("author", "text", "created_at")
+
+
+@admin.register(SupportTicket)
+class SupportTicketAdmin(admin.ModelAdmin):
+    list_display = ("id", "subject", "portal", "status", "created_by", "created_at", "closed_at")
+    list_filter = ("status",)
+    search_fields = ("subject", "body")
+    inlines = [SupportTicketMessageInline]

@@ -10,6 +10,7 @@ import { ClientProjects } from "./pages/client/ClientProjects";
 import { ProjectReports } from "./pages/shared/ProjectReports";
 import { ReportDetail } from "./pages/shared/ReportDetail";
 import { ProjectTasks } from "./pages/shared/ProjectTasks";
+import { SupportTickets } from "./pages/shared/SupportTickets";
 import { TaskDetail } from "./pages/shared/TaskDetail";
 
 function LogoutRail() {
@@ -84,8 +85,12 @@ export default function App() {
         <Route path="portals/:portalId/projects" element={<ClientProjects />} />
         <Route path="portals/:portalId/reports" element={<ProjectReports />} />
         <Route path="portals/:portalId/reports/:reportId" element={<ReportDetail />} />
+        <Route path="portals/:portalId/tickets" element={<SupportTickets />} />
+        <Route path="portals/:portalId/tickets/:ticketId" element={<SupportTickets />} />
         <Route path="reports" element={<ProjectReports />} />
         <Route path="reports/:reportId" element={<ReportDetail />} />
+        <Route path="tickets" element={<SupportTickets />} />
+        <Route path="tickets/:ticketId" element={<SupportTickets />} />
         <Route path="projects/:projectId" element={<ProjectTasks />} />
         <Route path="projects/:projectId/reports" element={<ProjectReports />} />
         <Route path="tasks/:taskId" element={<TaskDetail />} />

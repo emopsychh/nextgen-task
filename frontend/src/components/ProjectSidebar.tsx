@@ -5,6 +5,7 @@ import {
   unwrapList,
   type Paginated,
   type Project,
+  type SupportTicket,
   type WorkReport,
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -23,6 +24,7 @@ export function ProjectSidebarNav() {
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
   const [clientLabel, setClientLabel] = useState("");
   const [reportsAttention, setReportsAttention] = useState(0);
+  const [openTickets, setOpenTickets] = useState(0);
   const lastPortalRef = useRef<number | null>(null);
 
   const contextPortalId = useMemo(() => {
@@ -44,6 +46,7 @@ export function ProjectSidebarNav() {
       setProjects([]);
       setClientLabel("");
       setReportsAttention(0);
+      setOpenTickets(0);
     }
   }, [isAgency, routePortalId, routeProjectId]);
 
@@ -97,6 +100,7 @@ export function ProjectSidebarNav() {
   useEffect(() => {
     if (!token || !contextPortalId) {
       setReportsAttention(0);
+      setOpenTickets(0);
       return;
     }
     let cancelled = false;
@@ -126,9 +130,20 @@ export function ProjectSidebarNav() {
           );
           next = unwrapList(data).length;
         }
-        if (!cancelled) setReportsAttention(next);
+        const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
+          `/api/tickets/?portal=${contextPortalId}&bucket=open`,
+          {},
+          token!
+        );
+        if (!cancelled) {
+          setReportsAttention(next);
+          setOpenTickets(unwrapList(ticketsData).length);
+        }
       } catch {
-        if (!cancelled) setReportsAttention(0);
+        if (!cancelled) {
+          setReportsAttention(0);
+          setOpenTickets(0);
+        }
       }
     }
 
@@ -149,9 +164,13 @@ export function ProjectSidebarNav() {
     enabled: !!contextPortalId,
     onEvent: (payload) => {
       if (!token || !contextPortalId) return;
-      if (payload?.kind?.startsWith("report_") || !payload?.kind) {
-        void (async () => {
-          try {
+      const kind = payload?.kind || "";
+      const refreshReports = kind.startsWith("report_") || !kind;
+      const refreshTickets = kind.startsWith("ticket_") || !kind;
+      if (!refreshReports && !refreshTickets) return;
+      void (async () => {
+        try {
+          if (refreshReports) {
             if (isAgency) {
               const [drafts, disputed] = await Promise.all([
                 api<WorkReport[] | Paginated<WorkReport>>(
@@ -174,11 +193,19 @@ export function ProjectSidebarNav() {
               );
               setReportsAttention(unwrapList(data).length);
             }
-          } catch {
-            // keep previous
           }
-        })();
-      }
+          if (refreshTickets) {
+            const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
+              `/api/tickets/?portal=${contextPortalId}&bucket=open`,
+              {},
+              token
+            );
+            setOpenTickets(unwrapList(ticketsData).length);
+          }
+        } catch {
+          // keep previous
+        }
+      })();
     },
   });
 
@@ -243,6 +270,28 @@ export function ProjectSidebarNav() {
         {reportsAttention > 0 ? (
           <span className="feed-nav-count" aria-label={`${reportsAttention} требуют внимания`}>
             {reportsAttention > 99 ? "99+" : reportsAttention}
+          </span>
+        ) : null}
+      </NavLink>
+      <NavLink
+        to={isAgency ? `/portals/${contextPortalId}/tickets` : "/tickets"}
+        className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
+      >
+        <span className="feed-nav-icon" aria-hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M4 7a2 2 0 0 1 2-2h8l4 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinejoin="round"
+            />
+            <path d="M14 5v4h4M8 13h8M8 17h5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="feed-nav-label">{isAgency ? "Тикеты" : "Поддержка"}</span>
+        {openTickets > 0 ? (
+          <span className="feed-nav-count" aria-label={`${openTickets} открытых тикетов`}>
+            {openTickets > 99 ? "99+" : openTickets}
           </span>
         ) : null}
       </NavLink>

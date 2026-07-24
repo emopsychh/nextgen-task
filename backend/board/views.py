@@ -19,13 +19,18 @@ from portals.models import Portal, PortalLink
 from portals.permissions import IsPortalAuthenticated, can_access_client_portal
 
 from .events import append_task_change_events
-from .models import Attachment, Comment, Project, Task, TimeEntry, WorkReport
+from .models import Attachment, Comment, Project, SupportTicket, Task, TimeEntry, WorkReport
 from .naming import display_attachment_name
 from .serializers import (
     ATTACHMENT_SIGN_SALT,
     AttachmentSerializer,
     CommentSerializer,
     ProjectSerializer,
+    SupportTicketCreateSerializer,
+    SupportTicketListSerializer,
+    SupportTicketMessageCreateSerializer,
+    SupportTicketMessageSerializer,
+    SupportTicketSerializer,
     TaskListSerializer,
     TaskSerializer,
     WorkReportDisputeInputSerializer,
@@ -898,3 +903,164 @@ class WorkReportViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("No access to this portal")
         report = mark_paid(report, self._actor())
         return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+
+class SupportTicketViewSet(viewsets.ModelViewSet):
+    """Support tickets for a client portal (Aeza-style open/closed)."""
+
+    permission_classes = [IsPortalAuthenticated]
+    http_method_names = ["get", "post", "head", "options"]
+
+    def get_queryset(self):
+        from django.db.models import Count
+
+        ids = accessible_portal_ids(self.request.user)
+        qs = (
+            SupportTicket.objects.filter(portal_id__in=ids)
+            .select_related("portal", "project", "task", "created_by")
+            .prefetch_related("messages__author")
+            .annotate(_message_count=Count("messages"))
+        )
+        portal_id = self.request.query_params.get("portal")
+        if portal_id:
+            qs = qs.filter(portal_id=portal_id)
+        bucket = self.request.query_params.get("bucket")
+        if bucket == "closed":
+            qs = qs.filter(status=SupportTicket.Status.CLOSED)
+        elif bucket == "open" or bucket == "current":
+            qs = qs.filter(status=SupportTicket.Status.OPEN)
+        status = self.request.query_params.get("status")
+        if status in (SupportTicket.Status.OPEN, SupportTicket.Status.CLOSED):
+            qs = qs.filter(status=status)
+        return qs.order_by("-updated_at", "-id")
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return SupportTicketListSerializer
+        return SupportTicketSerializer
+
+    def _actor(self):
+        return getattr(self.request.user, "bitrix_user", None)
+
+    def _ensure_access(self, ticket: SupportTicket):
+        if not can_access_client_portal(self.request.user, ticket.portal):
+            raise PermissionDenied("No access to this portal")
+
+    def list(self, request, *args, **kwargs):
+        portal_id = request.query_params.get("portal")
+        if portal_id:
+            try:
+                portal = Portal.objects.get(pk=portal_id)
+            except Portal.DoesNotExist:
+                return Response({"detail": "Portal not found"}, status=404)
+            if not can_access_client_portal(request.user, portal):
+                raise PermissionDenied("No access to this portal")
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        ticket = self.get_object()
+        self._ensure_access(ticket)
+        return Response(SupportTicketSerializer(ticket, context={"request": request}).data)
+
+    def create(self, request, *args, **kwargs):
+        from board.tickets import create_ticket, require_client
+
+        require_client(request.user)
+        ser = SupportTicketCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        try:
+            portal = Portal.objects.get(pk=data["portal"])
+        except Portal.DoesNotExist:
+            return Response({"detail": "Portal not found"}, status=404)
+        if not can_access_client_portal(request.user, portal):
+            raise PermissionDenied("No access to this portal")
+        # Client may only create on their own portal
+        if request.user.portal_id != portal.id:
+            raise PermissionDenied("Клиент может создавать тикеты только в своём портале")
+
+        project = None
+        task = None
+        if data.get("project"):
+            try:
+                project = Project.objects.get(pk=data["project"], portal=portal)
+            except Project.DoesNotExist:
+                return Response({"detail": "Project not found"}, status=404)
+        if data.get("task"):
+            try:
+                task = Task.objects.select_related("project").get(
+                    pk=data["task"], project__portal=portal
+                )
+            except Task.DoesNotExist:
+                return Response({"detail": "Task not found"}, status=404)
+
+        ticket = create_ticket(
+            portal,
+            subject=data["subject"],
+            body=data["body"],
+            actor=self._actor(),
+            project=project,
+            task=task,
+        )
+        ticket = (
+            SupportTicket.objects.select_related("portal", "project", "task", "created_by")
+            .prefetch_related("messages__author")
+            .get(pk=ticket.pk)
+        )
+        return Response(
+            SupportTicketSerializer(ticket, context={"request": request}).data,
+            status=201,
+        )
+
+    def update(self, request, *args, **kwargs):
+        raise PermissionDenied("Тикеты изменяются только через действия")
+
+    def partial_update(self, request, *args, **kwargs):
+        raise PermissionDenied("Тикеты изменяются только через действия")
+
+    def destroy(self, request, *args, **kwargs):
+        raise PermissionDenied("Удаление тикетов отключено")
+
+    @action(detail=True, methods=["post"])
+    def messages(self, request, pk=None):
+        from board.tickets import add_message
+
+        ticket = self.get_object()
+        self._ensure_access(ticket)
+        ser = SupportTicketMessageCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        msg = add_message(ticket, text=ser.validated_data["text"], actor=self._actor())
+        return Response(
+            SupportTicketMessageSerializer(msg, context={"request": request}).data,
+            status=201,
+        )
+
+    @action(detail=True, methods=["post"])
+    def close(self, request, pk=None):
+        from board.tickets import close_ticket, require_agency
+
+        require_agency(request.user)
+        ticket = self.get_object()
+        self._ensure_access(ticket)
+        ticket = close_ticket(ticket, self._actor())
+        ticket = (
+            SupportTicket.objects.select_related("portal", "project", "task", "created_by")
+            .prefetch_related("messages__author")
+            .get(pk=ticket.pk)
+        )
+        return Response(SupportTicketSerializer(ticket, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"])
+    def reopen(self, request, pk=None):
+        from board.tickets import reopen_ticket, require_agency
+
+        require_agency(request.user)
+        ticket = self.get_object()
+        self._ensure_access(ticket)
+        ticket = reopen_ticket(ticket, self._actor())
+        ticket = (
+            SupportTicket.objects.select_related("portal", "project", "task", "created_by")
+            .prefetch_related("messages__author")
+            .get(pk=ticket.pk)
+        )
+        return Response(SupportTicketSerializer(ticket, context={"request": request}).data)

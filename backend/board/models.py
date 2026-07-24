@@ -309,3 +309,69 @@ class WorkReportLineAttachment(models.Model):
 
     def __str__(self):
         return self.original_name or self.file.name
+
+
+class SupportTicket(models.Model):
+    """Client support ticket for a portal — separate from task chat."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+
+    portal = models.ForeignKey(Portal, on_delete=models.CASCADE, related_name="support_tickets")
+    subject = models.CharField(max_length=500)
+    body = models.TextField()
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="support_tickets",
+    )
+    task = models.ForeignKey(
+        Task,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="support_tickets",
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.OPEN, db_index=True
+    )
+    created_by = models.ForeignKey(
+        BitrixUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_support_tickets",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+
+    def __str__(self):
+        return f"SupportTicket#{self.pk} {self.subject[:40]}"
+
+
+class SupportTicketMessage(models.Model):
+    ticket = models.ForeignKey(
+        SupportTicket, on_delete=models.CASCADE, related_name="messages"
+    )
+    author = models.ForeignKey(
+        BitrixUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="support_ticket_messages",
+    )
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return f"SupportTicketMessage#{self.pk} ticket={self.ticket_id}"

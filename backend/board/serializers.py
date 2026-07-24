@@ -4,7 +4,18 @@ from rest_framework import serializers
 from portals.models import Portal
 from portals.permissions import can_access_client_portal
 
-from .models import Attachment, Comment, Project, Task, TimeEntry, WorkReport, WorkReportDisputeItem, WorkReportEvent
+from .models import (
+    Attachment,
+    Comment,
+    Project,
+    SupportTicket,
+    SupportTicketMessage,
+    Task,
+    TimeEntry,
+    WorkReport,
+    WorkReportDisputeItem,
+    WorkReportEvent,
+)
 from .naming import display_attachment_name
 
 
@@ -645,3 +656,112 @@ class WorkReportDisputeInputSerializer(serializers.Serializer):
         child=serializers.CharField(allow_blank=True),
         required=False,
     )
+
+
+class SupportTicketMessageSerializer(serializers.ModelSerializer):
+    author_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SupportTicketMessage
+        fields = ("id", "ticket", "author", "author_name", "text", "created_at")
+        read_only_fields = fields
+
+    def get_author_name(self, obj):
+        if obj.author:
+            return obj.author.display_name
+        return ""
+
+
+class SupportTicketListSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    project_name = serializers.SerializerMethodField()
+    message_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SupportTicket
+        fields = (
+            "id",
+            "portal",
+            "subject",
+            "status",
+            "project",
+            "project_name",
+            "task",
+            "created_by",
+            "created_by_name",
+            "message_count",
+            "created_at",
+            "updated_at",
+            "closed_at",
+        )
+        read_only_fields = fields
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.display_name
+        return ""
+
+    def get_project_name(self, obj):
+        if obj.project_id:
+            return obj.project.name
+        return ""
+
+    def get_message_count(self, obj):
+        if hasattr(obj, "_message_count"):
+            return obj._message_count
+        return obj.messages.count()
+
+
+class SupportTicketSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    project_name = serializers.SerializerMethodField()
+    task_title = serializers.SerializerMethodField()
+    messages = SupportTicketMessageSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SupportTicket
+        fields = (
+            "id",
+            "portal",
+            "subject",
+            "body",
+            "status",
+            "project",
+            "project_name",
+            "task",
+            "task_title",
+            "created_by",
+            "created_by_name",
+            "messages",
+            "created_at",
+            "updated_at",
+            "closed_at",
+        )
+        read_only_fields = fields
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.display_name
+        return ""
+
+    def get_project_name(self, obj):
+        if obj.project_id:
+            return obj.project.name
+        return ""
+
+    def get_task_title(self, obj):
+        if obj.task_id:
+            return obj.task.title
+        return ""
+
+
+class SupportTicketCreateSerializer(serializers.Serializer):
+    portal = serializers.IntegerField(min_value=1)
+    subject = serializers.CharField(max_length=500, trim_whitespace=True)
+    body = serializers.CharField(trim_whitespace=True)
+    project = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    task = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+
+
+class SupportTicketMessageCreateSerializer(serializers.Serializer):
+    text = serializers.CharField(trim_whitespace=True)
