@@ -674,6 +674,7 @@ class SupportTicketMessageSerializer(serializers.ModelSerializer):
 
 class SupportTicketListSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
+    portal_name = serializers.SerializerMethodField()
     project_name = serializers.SerializerMethodField()
     message_count = serializers.SerializerMethodField()
 
@@ -682,6 +683,7 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "portal",
+            "portal_name",
             "subject",
             "status",
             "project",
@@ -701,6 +703,11 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
             return obj.created_by.display_name
         return ""
 
+    def get_portal_name(self, obj):
+        if obj.portal_id:
+            return obj.portal.name or obj.portal.domain
+        return ""
+
     def get_project_name(self, obj):
         if obj.project_id:
             return obj.project.name
@@ -714,6 +721,7 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
 
 class SupportTicketSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
+    portal_name = serializers.SerializerMethodField()
     project_name = serializers.SerializerMethodField()
     task_title = serializers.SerializerMethodField()
     messages = SupportTicketMessageSerializer(many=True, read_only=True)
@@ -723,6 +731,7 @@ class SupportTicketSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "portal",
+            "portal_name",
             "subject",
             "body",
             "status",
@@ -742,6 +751,11 @@ class SupportTicketSerializer(serializers.ModelSerializer):
     def get_created_by_name(self, obj):
         if obj.created_by:
             return obj.created_by.display_name
+        return ""
+
+    def get_portal_name(self, obj):
+        if obj.portal_id:
+            return obj.portal.name or obj.portal.domain
         return ""
 
     def get_project_name(self, obj):

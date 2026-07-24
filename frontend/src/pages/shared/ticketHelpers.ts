@@ -5,22 +5,25 @@ export const TICKET_BUCKETS: { id: TicketBucket; label: string }[] = [
   { id: "closed", label: "Архив" },
 ];
 
-export function ticketsListPath(portalId: number | null, isAgency: boolean): string {
-  if (isAgency && portalId) return `/portals/${portalId}/tickets`;
+/** Agency always uses the global hub; client stays on /tickets. */
+export function ticketsListPath(_portalId: number | null, isAgency: boolean): string {
+  void isAgency;
   return "/tickets";
 }
 
 export function ticketDetailPath(
-  portalId: number | null,
-  isAgency: boolean,
+  _portalId: number | null,
+  _isAgency: boolean,
   ticketId: number
 ): string {
-  if (isAgency && portalId) return `/portals/${portalId}/tickets/${ticketId}`;
   return `/tickets/${ticketId}`;
 }
 
-export function ticketsApiQuery(portalId: number, bucket: TicketBucket): string {
-  return `/api/tickets/?portal=${portalId}&bucket=${bucket}`;
+/** Omit portal for agency-wide list; pass portal for client (or filtered) views. */
+export function ticketsApiQuery(portalId: number | null, bucket: TicketBucket): string {
+  const params = new URLSearchParams({ bucket });
+  if (portalId) params.set("portal", String(portalId));
+  return `/api/tickets/?${params.toString()}`;
 }
 
 export function ticketStatusLabel(status: string): string {

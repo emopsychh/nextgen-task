@@ -228,11 +228,17 @@ a {
 }
 
 .nav-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 12px 14px;
   border-radius: 14px;
   color: var(--ink-muted);
   transition: 0.15s ease;
+}
+
+.nav-item .feed-nav-count {
+  margin-left: auto;
 }
 
 .nav-item:hover,
@@ -5926,9 +5932,44 @@ a.task-card.is-done:hover,
 }
 
 .tickets-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 12px 12px 8px;
   margin: 0;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.tickets-tab {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  border: 1.5px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 650;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: 0.15s ease;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  height: auto;
+  align-self: auto;
+}
+
+.tickets-tab:hover {
+  border-color: #c5d0cc;
+  color: var(--ink);
+}
+
+.tickets-tab.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
 }
 
 .tickets-empty-list {
@@ -5966,6 +6007,14 @@ a.task-card.is-done:hover,
 
 .tickets-list-item.active {
   background: color-mix(in srgb, var(--accent) 12%, #fff);
+}
+
+.tickets-list-client {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
 }
 
 .tickets-list-subject {
@@ -6006,6 +6055,15 @@ a.task-card.is-done:hover,
   align-items: flex-start;
   padding: 16px 18px 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.tickets-detail-client {
+  margin: 0 0 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
 }
 
 .tickets-detail-title {

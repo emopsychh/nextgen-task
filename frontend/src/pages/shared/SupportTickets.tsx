@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import {
   api,
   unwrapList,
@@ -30,11 +30,12 @@ export function SupportTickets() {
   const navigate = useNavigate();
   const toast = useFlashToast();
 
-  const portalId = useMemo(() => {
+  // Agency: global hub (all clients). Client: own portal only.
+  const listPortalId = useMemo(() => {
+    if (isAgency) return null;
     if (routePortalId) return Number(routePortalId);
-    if (!isAgency && portal?.id) return portal.id;
-    return null;
-  }, [routePortalId, isAgency, portal?.id]);
+    return portal?.id ?? null;
+  }, [isAgency, routePortalId, portal?.id]);
 
   const selectedId = routeTicketId ? Number(routeTicketId) : null;
 
@@ -53,17 +54,19 @@ export function SupportTickets() {
   const [draft, setDraft] = useState("");
   const threadRef = useRef<HTMLDivElement>(null);
 
-  const listPath = ticketsListPath(portalId, isAgency);
+  const listPath = ticketsListPath(listPortalId, isAgency);
+  const livePortalId = detail?.portal ?? listPortalId;
 
   const loadList = useCallback(async () => {
-    if (!token || !portalId) return;
+    if (!token) return;
+    if (!isAgency && !listPortalId) return;
     const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
-      ticketsApiQuery(portalId, bucket),
+      ticketsApiQuery(listPortalId, bucket),
       {},
       token
     );
     setTickets(unwrapList(data));
-  }, [token, portalId, bucket]);
+  }, [token, isAgency, listPortalId, bucket]);
 
   const loadDetail = useCallback(async () => {
     if (!token || !selectedId) {
@@ -75,19 +78,20 @@ export function SupportTickets() {
   }, [token, selectedId]);
 
   const loadProjects = useCallback(async () => {
-    if (!token || !portalId) return;
+    if (!token || !listPortalId) return;
     const data = await api<Project[] | Paginated<Project>>(
-      `/api/projects/?portal=${portalId}`,
+      `/api/projects/?portal=${listPortalId}`,
       {},
       token
     );
     setProjects(unwrapList(data));
-  }, [token, portalId]);
+  }, [token, listPortalId]);
 
   useEffect(() => {
-    if (!token || !portalId) return;
+    if (!token) return;
+    if (!isAgency && !listPortalId) return;
     void loadList().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
-  }, [token, portalId, loadList]);
+  }, [token, isAgency, listPortalId, loadList]);
 
   useEffect(() => {
     if (!token) return;
@@ -95,7 +99,7 @@ export function SupportTickets() {
   }, [token, loadDetail]);
 
   useEffect(() => {
-    if (!token || !portalId || !projectId) {
+    if (!token || !listPortalId || !projectId) {
       setTasks([]);
       return;
     }
@@ -110,7 +114,7 @@ export function SupportTickets() {
     return () => {
       cancelled = true;
     };
-  }, [token, portalId, projectId]);
+  }, [token, listPortalId, projectId]);
 
   useEffect(() => {
     const el = threadRef.current;
@@ -120,8 +124,8 @@ export function SupportTickets() {
 
   usePortalLiveSync({
     token,
-    portalId,
-    enabled: !!portalId,
+    portalId: livePortalId,
+    enabled: !!livePortalId,
     onEvent: (payload) => {
       if (payload?.kind?.startsWith("ticket_") || !payload?.kind) {
         void loadList().catch(() => undefined);
@@ -130,13 +134,26 @@ export function SupportTickets() {
     },
   });
 
+  // Agency global: also refresh when tab becomes visible
+  useEffect(() => {
+    if (!isAgency || !token) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void loadList().catch(() => undefined);
+        if (selectedId) void loadDetail().catch(() => undefined);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [isAgency, token, loadList, loadDetail, selectedId]);
+
   async function createTicket() {
-    if (!token || !portalId || !subject.trim() || !body.trim()) return;
+    if (!token || !listPortalId || !subject.trim() || !body.trim()) return;
     setBusy(true);
     setError(null);
     try {
       const payload: Record<string, unknown> = {
-        portal: portalId,
+        portal: listPortalId,
         subject: subject.trim(),
         body: body.trim(),
       };
@@ -154,7 +171,7 @@ export function SupportTickets() {
       setProjectId("");
       setTaskId("");
       setBucket("open");
-      navigate(ticketDetailPath(portalId, isAgency, created.id));
+      navigate(ticketDetailPath(listPortalId, isAgency, created.id));
       void loadList();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось создать тикет");
@@ -220,10 +237,15 @@ export function SupportTickets() {
     }
   }
 
-  if (!portalId) {
+  if (isAgency && routePortalId) {
+    const to = selectedId ? `/tickets/${selectedId}` : "/tickets";
+    return <Navigate to={to} replace />;
+  }
+
+  if (!isAgency && !listPortalId) {
     return (
       <div className="tasks-page">
-        <p className="muted">Выберите клиента, чтобы открыть тикеты.</p>
+        <p className="muted">Нет доступа к порталу.</p>
       </div>
     );
   }
@@ -237,7 +259,7 @@ export function SupportTickets() {
           <h1 className="page-title">{isAgency ? "Тикеты" : "Поддержка"}</h1>
           <p className="page-sub">
             {isAgency
-              ? "Обращения клиента — ответы и закрытие тикетов"
+              ? "Все обращения клиентов — ответы и закрытие тикетов"
               : "Сообщите о проблеме — агентство ответит в этом чате"}
           </p>
         </div>
@@ -344,12 +366,14 @@ export function SupportTickets() {
 
       <div className="tickets-layout">
         <aside className="tickets-pane tickets-list-pane">
-          <div className="task-filters report-filter-row tickets-tabs">
+          <div className="tickets-tabs" role="tablist" aria-label="Фильтр тикетов">
             {TICKET_BUCKETS.map((b) => (
               <button
                 key={b.id}
                 type="button"
-                className={`task-filter-chip${bucket === b.id ? " active" : ""}`}
+                role="tab"
+                aria-selected={bucket === b.id}
+                className={`tickets-tab${bucket === b.id ? " active" : ""}`}
                 onClick={() => {
                   setBucket(b.id);
                   if (selectedId) navigate(listPath);
@@ -372,8 +396,13 @@ export function SupportTickets() {
                     <button
                       type="button"
                       className={`tickets-list-item${active ? " active" : ""}`}
-                      onClick={() => navigate(ticketDetailPath(portalId, isAgency, t.id))}
+                      onClick={() =>
+                        navigate(ticketDetailPath(t.portal, isAgency, t.id))
+                      }
                     >
+                      {isAgency && t.portal_name ? (
+                        <span className="tickets-list-client">{t.portal_name}</span>
+                      ) : null}
                       <span className="tickets-list-subject">{t.subject}</span>
                       <span className="tickets-list-meta">
                         {ticketStatusLabel(t.status)} · {formatDateTime(t.updated_at)}
@@ -398,6 +427,9 @@ export function SupportTickets() {
             <>
               <header className="tickets-detail-head">
                 <div>
+                  {isAgency && detail.portal_name ? (
+                    <p className="tickets-detail-client">{detail.portal_name}</p>
+                  ) : null}
                   <h2 className="tickets-detail-title">{detail.subject}</h2>
                   <p className="tickets-detail-meta">
                     <span

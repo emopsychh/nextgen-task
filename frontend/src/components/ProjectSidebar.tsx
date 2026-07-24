@@ -11,6 +11,25 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { usePortalLiveSync } from "../hooks/usePortalLiveSync";
 
+function TicketsNavIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 7a2 2 0 0 1 2-2h8l4 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14 5v4h4M8 13h8M8 17h5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function ProjectSidebarNav() {
   const { token, portal } = useAuth();
   const params = useParams();
@@ -19,6 +38,7 @@ export function ProjectSidebarNav() {
 
   const routePortalId = params.portalId ? Number(params.portalId) : null;
   const routeProjectId = params.projectId ? Number(params.projectId) : null;
+  const onTicketsRoute = location.pathname.startsWith("/tickets");
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
@@ -40,17 +60,16 @@ export function ProjectSidebarNav() {
   }, [contextPortalId]);
 
   useEffect(() => {
-    if (isAgency && !routePortalId && !routeProjectId) {
+    if (isAgency && !routePortalId && !routeProjectId && !onTicketsRoute) {
       lastPortalRef.current = null;
       setResolvedPortalId(null);
       setProjects([]);
       setClientLabel("");
       setReportsAttention(0);
-      setOpenTickets(0);
     }
-  }, [isAgency, routePortalId, routeProjectId]);
+  }, [isAgency, routePortalId, routeProjectId, onTicketsRoute]);
 
-  const showProjects = Boolean(contextPortalId);
+  const showProjects = Boolean(contextPortalId) && !(isAgency && onTicketsRoute);
 
   useEffect(() => {
     if (!token || !routeProjectId || routePortalId) return;
@@ -70,6 +89,7 @@ export function ProjectSidebarNav() {
 
   useEffect(() => {
     if (!token || !contextPortalId) return;
+    if (isAgency && onTicketsRoute) return;
 
     let cancelled = false;
     async function load() {
@@ -95,17 +115,55 @@ export function ProjectSidebarNav() {
       cancelled = true;
       window.removeEventListener("projects-updated", onUpdate);
     };
-  }, [token, contextPortalId]);
+  }, [token, contextPortalId, isAgency, onTicketsRoute]);
 
+  // Open tickets badge: agency = all clients; client = own portal
   useEffect(() => {
-    if (!token || !contextPortalId) {
-      setReportsAttention(0);
+    if (!token) {
+      setOpenTickets(0);
+      return;
+    }
+    if (!isAgency && !contextPortalId) {
       setOpenTickets(0);
       return;
     }
     let cancelled = false;
 
-    async function loadAttention() {
+    async function loadTickets() {
+      try {
+        const url = isAgency
+          ? `/api/tickets/?bucket=open`
+          : `/api/tickets/?portal=${contextPortalId}&bucket=open`;
+        const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
+          url,
+          {},
+          token!
+        );
+        if (!cancelled) setOpenTickets(unwrapList(ticketsData).length);
+      } catch {
+        if (!cancelled) setOpenTickets(0);
+      }
+    }
+
+    void loadTickets();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void loadTickets();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [token, contextPortalId, isAgency, location.pathname]);
+
+  useEffect(() => {
+    if (!token || !contextPortalId || (isAgency && onTicketsRoute)) {
+      if (!contextPortalId || (isAgency && onTicketsRoute)) setReportsAttention(0);
+      return;
+    }
+    let cancelled = false;
+
+    async function loadReports() {
       try {
         let next = 0;
         if (isAgency) {
@@ -130,47 +188,36 @@ export function ProjectSidebarNav() {
           );
           next = unwrapList(data).length;
         }
-        const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
-          `/api/tickets/?portal=${contextPortalId}&bucket=open`,
-          {},
-          token!
-        );
-        if (!cancelled) {
-          setReportsAttention(next);
-          setOpenTickets(unwrapList(ticketsData).length);
-        }
+        if (!cancelled) setReportsAttention(next);
       } catch {
-        if (!cancelled) {
-          setReportsAttention(0);
-          setOpenTickets(0);
-        }
+        if (!cancelled) setReportsAttention(0);
       }
     }
 
-    void loadAttention();
+    void loadReports();
     const onVisible = () => {
-      if (document.visibilityState === "visible") void loadAttention();
+      if (document.visibilityState === "visible") void loadReports();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [token, contextPortalId, isAgency, location.pathname]);
+  }, [token, contextPortalId, isAgency, location.pathname, onTicketsRoute]);
 
   usePortalLiveSync({
     token,
     portalId: contextPortalId,
     enabled: !!contextPortalId,
     onEvent: (payload) => {
-      if (!token || !contextPortalId) return;
+      if (!token) return;
       const kind = payload?.kind || "";
       const refreshReports = kind.startsWith("report_") || !kind;
       const refreshTickets = kind.startsWith("ticket_") || !kind;
       if (!refreshReports && !refreshTickets) return;
       void (async () => {
         try {
-          if (refreshReports) {
+          if (refreshReports && contextPortalId && !(isAgency && onTicketsRoute)) {
             if (isAgency) {
               const [drafts, disputed] = await Promise.all([
                 api<WorkReport[] | Paginated<WorkReport>>(
@@ -195,12 +242,19 @@ export function ProjectSidebarNav() {
             }
           }
           if (refreshTickets) {
-            const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
-              `/api/tickets/?portal=${contextPortalId}&bucket=open`,
-              {},
-              token
-            );
-            setOpenTickets(unwrapList(ticketsData).length);
+            const url = isAgency
+              ? `/api/tickets/?bucket=open`
+              : contextPortalId
+                ? `/api/tickets/?portal=${contextPortalId}&bucket=open`
+                : null;
+            if (url) {
+              const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
+                url,
+                {},
+                token
+              );
+              setOpenTickets(unwrapList(ticketsData).length);
+            }
           }
         } catch {
           // keep previous
@@ -209,15 +263,41 @@ export function ProjectSidebarNav() {
     },
   });
 
+  const ticketsLink = (
+    <NavLink
+      to="/tickets"
+      className={({ isActive }) =>
+        `${showProjects ? "feed-nav-item" : "nav-item"}${isActive || onTicketsRoute ? " active" : ""}`
+      }
+    >
+      {showProjects ? (
+        <span className="feed-nav-icon" aria-hidden>
+          <TicketsNavIcon />
+        </span>
+      ) : null}
+      <span className={showProjects ? "feed-nav-label" : undefined}>
+        {isAgency ? "Тикеты" : "Поддержка"}
+      </span>
+      {openTickets > 0 ? (
+        <span className="feed-nav-count" aria-label={`${openTickets} открытых тикетов`}>
+          {openTickets > 99 ? "99+" : openTickets}
+        </span>
+      ) : null}
+    </NavLink>
+  );
+
   if (!showProjects) {
     return (
       <nav className="nav-list" data-tour="tour-sidebar">
         <NavLink to="/" end className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
           Обзор
         </NavLink>
-        <p className="sidebar-hint muted">
-          Выберите клиента слева, чтобы открыть проекты и ленту активности.
-        </p>
+        {ticketsLink}
+        {isAgency ? (
+          <p className="sidebar-hint muted">
+            Выберите клиента слева, чтобы открыть проекты и отчёты.
+          </p>
+        ) : null}
       </nav>
     );
   }
@@ -273,28 +353,7 @@ export function ProjectSidebarNav() {
           </span>
         ) : null}
       </NavLink>
-      <NavLink
-        to={isAgency ? `/portals/${contextPortalId}/tickets` : "/tickets"}
-        className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
-      >
-        <span className="feed-nav-icon" aria-hidden>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M4 7a2 2 0 0 1 2-2h8l4 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinejoin="round"
-            />
-            <path d="M14 5v4h4M8 13h8M8 17h5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-        </span>
-        <span className="feed-nav-label">{isAgency ? "Тикеты" : "Поддержка"}</span>
-        {openTickets > 0 ? (
-          <span className="feed-nav-count" aria-label={`${openTickets} открытых тикетов`}>
-            {openTickets > 99 ? "99+" : openTickets}
-          </span>
-        ) : null}
-      </NavLink>
+      {ticketsLink}
       <div className="project-nav-heading">Проекты</div>
       <nav className="project-nav">
         {projects.map((p) => {

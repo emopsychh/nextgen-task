@@ -232,6 +232,7 @@ export type SupportTicketMessage = {
 export type SupportTicket = {
   id: number;
   portal: number;
+  portal_name?: string;
   subject: string;
   body?: string;
   status: SupportTicketStatus;
