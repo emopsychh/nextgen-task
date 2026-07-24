@@ -829,6 +829,21 @@ a {
   animation: workspace-hot-shake 0.55s ease-in-out infinite;
 }
 
+.workspace-hot-heading.is-calm .workspace-hot-pill {
+  background: #d7d7d7;
+  box-shadow: none;
+  color: #6b6b6b;
+}
+
+.workspace-hot-heading.is-calm .workspace-hot-label,
+.workspace-hot-heading.is-calm .workspace-hot-pill svg {
+  animation: none !important;
+}
+
+.workspace-hot-heading.is-calm .workspace-hot-pill svg {
+  filter: none;
+}
+
 @keyframes workspace-hot-shake {
   0%,
   100% {

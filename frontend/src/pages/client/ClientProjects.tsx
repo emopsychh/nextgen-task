@@ -88,7 +88,6 @@ export function ClientProjects() {
     const seen = new Set<number>();
     const out: Task[] = [];
     for (const t of openTasks) {
-      if (isDismissed("task", t.id, t.updated_at)) continue;
       const overdue = isTaskOverdue(t.due_date, t.status);
       const soon = isDueSoon(t.due_date, t.status);
       const important = Boolean(t.is_important);
@@ -99,7 +98,7 @@ export function ClientProjects() {
     }
     out.sort((a, b) => hotPriority(a) - hotPriority(b));
     return out.slice(0, 12);
-  }, [openTasks, isDismissed]);
+  }, [openTasks]);
 
   const visiblePendingReports = useMemo(
     () => pendingReports.filter((r) => !isDismissed("report", r.id, r.updated_at)),
@@ -469,7 +468,7 @@ export function ClientProjects() {
                   <div className="linked-head">
                     <h2
                       className={`workspace-hot-heading${
-                        hotTasks.length > 0 ? " is-shaking" : ""
+                        hotTasks.length > 0 ? " is-shaking" : " is-calm"
                       }`}
                     >
                       <span className="workspace-hot-pill">
@@ -496,7 +495,6 @@ export function ClientProjects() {
                             className={`workspace-attention-card${
                               overdue ? " is-overdue" : soon ? " is-soon" : ""
                             }`}
-                            onClick={() => dismiss("task", t.id, t.updated_at)}
                           >
                             <div className="workspace-attention-top">
                               {overdue ? (
