@@ -1,9 +1,15 @@
-import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { useEffect } from "react";
+import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Brand } from "./components/Brand";
 import { ClientRail } from "./components/ClientRail";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ProjectSidebarNav } from "./components/ProjectSidebar";
+import { ClientSupportWidget } from "./components/support/ClientSupportWidget";
+import {
+  SupportWidgetProvider,
+  useSupportWidget,
+} from "./components/support/SupportWidgetContext";
 import { LoginPage } from "./pages/LoginPage";
 import { AgencyHome } from "./pages/agency/AgencyHome";
 import { ClientProjects } from "./pages/client/ClientProjects";
@@ -41,23 +47,36 @@ function LogoutRail() {
   );
 }
 
+/** Client deep-links /tickets → stay on work, open corner widget. */
+function ClientTicketsRedirect() {
+  const { ticketId } = useParams();
+  const { open } = useSupportWidget();
+  useEffect(() => {
+    open(ticketId ? Number(ticketId) : null);
+  }, [open, ticketId]);
+  return <Navigate to="/" replace />;
+}
+
 function AppLayout() {
   const { portal, error } = useAuth();
   const isAgency = portal?.role === "agency";
 
   return (
-    <div className={`app-shell${isAgency ? " with-client-rail" : " with-logout-rail"}`}>
-      {isAgency ? <ClientRail /> : <LogoutRail />}
-      <aside className="sidebar">
-        <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
-        <ProjectSidebarNav />
-      </aside>
-      <main className="main">
-        {error && <div className="error-banner">{error}</div>}
-        <Outlet />
-      </main>
-      <OnboardingTour />
-    </div>
+    <SupportWidgetProvider>
+      <div className={`app-shell${isAgency ? " with-client-rail" : " with-logout-rail"}`}>
+        {isAgency ? <ClientRail /> : <LogoutRail />}
+        <aside className="sidebar">
+          <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
+          <ProjectSidebarNav />
+        </aside>
+        <main className="main">
+          {error && <div className="error-banner">{error}</div>}
+          <Outlet />
+        </main>
+        <OnboardingTour />
+        {!isAgency ? <ClientSupportWidget /> : null}
+      </div>
+    </SupportWidgetProvider>
   );
 }
 
@@ -89,8 +108,14 @@ export default function App() {
         <Route path="portals/:portalId/tickets/:ticketId" element={<SupportTickets />} />
         <Route path="reports" element={<ProjectReports />} />
         <Route path="reports/:reportId" element={<ReportDetail />} />
-        <Route path="tickets" element={<SupportTickets />} />
-        <Route path="tickets/:ticketId" element={<SupportTickets />} />
+        <Route
+          path="tickets"
+          element={isAgency ? <SupportTickets /> : <ClientTicketsRedirect />}
+        />
+        <Route
+          path="tickets/:ticketId"
+          element={isAgency ? <SupportTickets /> : <ClientTicketsRedirect />}
+        />
         <Route path="projects/:projectId" element={<ProjectTasks />} />
         <Route path="projects/:projectId/reports" element={<ProjectReports />} />
         <Route path="tasks/:taskId" element={<TaskDetail />} />

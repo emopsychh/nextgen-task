@@ -10,6 +10,7 @@ import {
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePortalLiveSync } from "../hooks/usePortalLiveSync";
+import { useSupportWidget } from "./support/SupportWidgetContext";
 
 function TicketsNavIcon() {
   return (
@@ -35,6 +36,7 @@ export function ProjectSidebarNav() {
   const params = useParams();
   const location = useLocation();
   const isAgency = portal?.role === "agency";
+  const supportWidget = useSupportWidget();
 
   const routePortalId = params.portalId ? Number(params.portalId) : null;
   const routeProjectId = params.projectId ? Number(params.projectId) : null;
@@ -263,7 +265,7 @@ export function ProjectSidebarNav() {
     },
   });
 
-  const ticketsLink = (
+  const ticketsLink = isAgency ? (
     <NavLink
       to="/tickets"
       className={({ isActive }) =>
@@ -275,15 +277,31 @@ export function ProjectSidebarNav() {
           <TicketsNavIcon />
         </span>
       ) : null}
-      <span className={showProjects ? "feed-nav-label" : undefined}>
-        {isAgency ? "Тикеты" : "Поддержка"}
-      </span>
+      <span className={showProjects ? "feed-nav-label" : undefined}>Тикеты</span>
       {openTickets > 0 ? (
         <span className="feed-nav-count" aria-label={`${openTickets} открытых тикетов`}>
           {openTickets > 99 ? "99+" : openTickets}
         </span>
       ) : null}
     </NavLink>
+  ) : (
+    <button
+      type="button"
+      className={`${showProjects ? "feed-nav-item" : "nav-item"}${supportWidget.isOpen ? " active" : ""}`}
+      onClick={() => supportWidget.toggle()}
+    >
+      {showProjects ? (
+        <span className="feed-nav-icon" aria-hidden>
+          <TicketsNavIcon />
+        </span>
+      ) : null}
+      <span className={showProjects ? "feed-nav-label" : undefined}>Поддержка</span>
+      {openTickets > 0 ? (
+        <span className="feed-nav-count" aria-label={`${openTickets} открытых тикетов`}>
+          {openTickets > 99 ? "99+" : openTickets}
+        </span>
+      ) : null}
+    </button>
   );
 
   if (!showProjects) {
