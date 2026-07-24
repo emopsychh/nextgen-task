@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, type WorkReport } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
+import { DisputeIcon } from "../../components/icons";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime, formatDuration, formatPackageHours } from "../../lib/format";
@@ -126,6 +127,23 @@ export function ReportDetail() {
     });
   }
 
+  const allDisputeTasks = useMemo(
+    () =>
+      detail?.projects_detail?.flatMap((p) =>
+        p.tasks.map((t) => ({ ...t, projectName: p.name }))
+      ) || [],
+    [detail?.projects_detail]
+  );
+
+  function toggleAllDisputeTasks() {
+    setSelectedTasks((prev) => {
+      if (allDisputeTasks.length > 0 && prev.size === allDisputeTasks.length) {
+        return new Set();
+      }
+      return new Set(allDisputeTasks.map((t) => t.id));
+    });
+  }
+
   async function submitDispute() {
     if (!disputeComment.trim() || selectedTasks.size === 0) {
       setError("Выберите задачи и напишите комментарий");
@@ -141,11 +159,6 @@ export function ReportDetail() {
       "Агентство получит список вопросов"
     );
   }
-
-  const allDisputeTasks =
-    detail?.projects_detail?.flatMap((p) =>
-      p.tasks.map((t) => ({ ...t, projectName: p.name }))
-    ) || [];
 
   if (!reportId) {
     return (
@@ -329,45 +342,104 @@ export function ReportDetail() {
         ) : null}
 
         {showDispute ? (
-          <div className="connect-panel stack report-dispute-form">
-            <h3 className="section-title">Оспорить отчёт</h3>
-            <p className="muted">Выберите задачи с вопросами и опишите претензию.</p>
-            <div className="field">
-              <label>Комментарий</label>
+          <div className="report-dispute-form">
+            <div className="report-dispute-form-head">
+              <span className="report-dispute-form-badge" aria-hidden>
+                <DisputeIcon size={15} />
+              </span>
+              <div>
+                <h3 className="report-dispute-form-title">Оспорить отчёт</h3>
+                <p className="muted report-dispute-form-sub">
+                  Отметьте задачи с вопросами и коротко опишите претензию
+                </p>
+              </div>
+            </div>
+
+            <div className="report-dispute-tasks-head">
+              <span className="report-dispute-tasks-label">
+                Задачи
+                {selectedTasks.size > 0 ? (
+                  <span className="report-dispute-count"> · выбрано {selectedTasks.size}</span>
+                ) : null}
+              </span>
+              {allDisputeTasks.length > 0 ? (
+                <button
+                  type="button"
+                  className="report-dispute-select-all"
+                  onClick={toggleAllDisputeTasks}
+                >
+                  {selectedTasks.size === allDisputeTasks.length
+                    ? "Снять все"
+                    : "Выбрать все"}
+                </button>
+              ) : null}
+            </div>
+
+            {allDisputeTasks.length === 0 ? (
+              <p className="muted report-dispute-empty">В отчёте пока нет задач.</p>
+            ) : (
+              <ul className="report-dispute-task-list">
+                {allDisputeTasks.map((t) => {
+                  const checked = selectedTasks.has(t.id);
+                  return (
+                    <li key={t.id}>
+                      <label
+                        className={`report-dispute-task${checked ? " is-checked" : ""}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleTask(t.id)}
+                        />
+                        <span className="report-dispute-task-body">
+                          <strong>{t.title}</strong>
+                          <span className="muted">{t.projectName}</span>
+                        </span>
+                        <span className="report-dispute-task-time">
+                          {formatDuration(t.tracked_seconds)}
+                        </span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            <div className="field report-dispute-comment">
+              <label htmlFor="dispute-comment">Комментарий</label>
               <textarea
-                rows={3}
+                id="dispute-comment"
+                rows={4}
                 value={disputeComment}
                 onChange={(e) => setDisputeComment(e.target.value)}
-                placeholder="Что не так?"
+                placeholder="Что не так? Что нужно переделать?"
               />
             </div>
-            <ul className="report-task-checkboxes">
-              {allDisputeTasks.map((t) => (
-                <li key={t.id}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={selectedTasks.has(t.id)}
-                      onChange={() => toggleTask(t.id)}
-                    />
-                    <span>
-                      {t.title}
-                      <span className="muted"> · {t.projectName}</span>
-                    </span>
-                    <span className="muted">{formatDuration(t.tracked_seconds)}</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => void submitDispute()}
-              style={{ alignSelf: "start" }}
-            >
-              Отправить спор
-            </button>
+
+            <div className="report-dispute-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={busy}
+                onClick={() => {
+                  setShowDispute(false);
+                  setDisputeComment("");
+                  setSelectedTasks(new Set());
+                }}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={
+                  busy || selectedTasks.size === 0 || !disputeComment.trim()
+                }
+                onClick={() => void submitDispute()}
+              >
+                Отправить спор
+              </button>
+            </div>
           </div>
         ) : null}
 

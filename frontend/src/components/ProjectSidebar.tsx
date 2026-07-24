@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation, useParams } from "react-router-dom";
-import { api, unwrapList, type Project } from "../api/types";
+import {
+  api,
+  unwrapList,
+  type Paginated,
+  type Project,
+  type WorkReport,
+} from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { usePortalLiveSync } from "../hooks/usePortalLiveSync";
 
 export function ProjectSidebarNav() {
   const { token, portal } = useAuth();
@@ -15,9 +22,9 @@ export function ProjectSidebarNav() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
   const [clientLabel, setClientLabel] = useState("");
+  const [reportsAttention, setReportsAttention] = useState(0);
   const lastPortalRef = useRef<number | null>(null);
 
-  // Keep last known portal so /projects/:id doesn't blank the sidebar while resolving.
   const contextPortalId = useMemo(() => {
     if (routePortalId) return routePortalId;
     if (!isAgency && portal?.id) return portal.id;
@@ -36,6 +43,7 @@ export function ProjectSidebarNav() {
       setResolvedPortalId(null);
       setProjects([]);
       setClientLabel("");
+      setReportsAttention(0);
     }
   }, [isAgency, routePortalId, routeProjectId]);
 
@@ -85,6 +93,94 @@ export function ProjectSidebarNav() {
       window.removeEventListener("projects-updated", onUpdate);
     };
   }, [token, contextPortalId]);
+
+  useEffect(() => {
+    if (!token || !contextPortalId) {
+      setReportsAttention(0);
+      return;
+    }
+    let cancelled = false;
+
+    async function loadAttention() {
+      try {
+        let next = 0;
+        if (isAgency) {
+          const [drafts, disputed] = await Promise.all([
+            api<WorkReport[] | Paginated<WorkReport>>(
+              `/api/reports/?portal=${contextPortalId}&status=draft`,
+              {},
+              token!
+            ),
+            api<WorkReport[] | Paginated<WorkReport>>(
+              `/api/reports/?portal=${contextPortalId}&status=disputed`,
+              {},
+              token!
+            ),
+          ]);
+          next = unwrapList(drafts).length + unwrapList(disputed).length;
+        } else {
+          const data = await api<WorkReport[] | Paginated<WorkReport>>(
+            `/api/reports/?portal=${contextPortalId}&bucket=review`,
+            {},
+            token!
+          );
+          next = unwrapList(data).length;
+        }
+        if (!cancelled) setReportsAttention(next);
+      } catch {
+        if (!cancelled) setReportsAttention(0);
+      }
+    }
+
+    void loadAttention();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void loadAttention();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [token, contextPortalId, isAgency, location.pathname]);
+
+  usePortalLiveSync({
+    token,
+    portalId: contextPortalId,
+    enabled: !!contextPortalId,
+    onEvent: (payload) => {
+      if (!token || !contextPortalId) return;
+      if (payload?.kind?.startsWith("report_") || !payload?.kind) {
+        void (async () => {
+          try {
+            if (isAgency) {
+              const [drafts, disputed] = await Promise.all([
+                api<WorkReport[] | Paginated<WorkReport>>(
+                  `/api/reports/?portal=${contextPortalId}&status=draft`,
+                  {},
+                  token
+                ),
+                api<WorkReport[] | Paginated<WorkReport>>(
+                  `/api/reports/?portal=${contextPortalId}&status=disputed`,
+                  {},
+                  token
+                ),
+              ]);
+              setReportsAttention(unwrapList(drafts).length + unwrapList(disputed).length);
+            } else {
+              const data = await api<WorkReport[] | Paginated<WorkReport>>(
+                `/api/reports/?portal=${contextPortalId}&bucket=review`,
+                {},
+                token
+              );
+              setReportsAttention(unwrapList(data).length);
+            }
+          } catch {
+            // keep previous
+          }
+        })();
+      }
+    },
+  });
 
   if (!showProjects) {
     return (
@@ -143,7 +239,12 @@ export function ProjectSidebarNav() {
             <path d="M9 9h6M9 13h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
         </span>
-        Отчёты
+        <span className="feed-nav-label">Отчёты</span>
+        {reportsAttention > 0 ? (
+          <span className="feed-nav-count" aria-label={`${reportsAttention} требуют внимания`}>
+            {reportsAttention > 99 ? "99+" : reportsAttention}
+          </span>
+        ) : null}
       </NavLink>
       <div className="project-nav-heading">Проекты</div>
       <nav className="project-nav">
