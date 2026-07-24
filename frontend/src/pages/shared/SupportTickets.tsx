@@ -18,6 +18,7 @@ import { formatDateTime } from "../../lib/format";
 import {
   TICKET_BUCKETS,
   type TicketBucket,
+  bitrixPortalUrl,
   ticketDetailPath,
   ticketsApiQuery,
   ticketsListPath,
@@ -445,13 +446,19 @@ export function SupportTickets() {
                       }}
                     >
                       {isAgency && t.portal_name ? (
-                        <Link
-                          to={`/portals/${t.portal}`}
-                          className="tickets-list-client"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {t.portal_name}
-                        </Link>
+                        bitrixPortalUrl(t.portal_domain) ? (
+                          <a
+                            href={bitrixPortalUrl(t.portal_domain)!}
+                            className="tickets-list-client"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {t.portal_name}
+                          </a>
+                        ) : (
+                          <span className="tickets-list-client">{t.portal_name}</span>
+                        )
                       ) : null}
                       <span className="tickets-list-subject">{t.subject}</span>
                       {t.task ? (
@@ -465,7 +472,11 @@ export function SupportTickets() {
                         </Link>
                       ) : null}
                       <span className="tickets-list-meta">
-                        {ticketStatusLabel(t.status)} · {formatDateTime(t.updated_at)}
+                        {ticketStatusLabel(t.status, {
+                          isAgency,
+                          awaitingParty: t.awaiting_party,
+                        })}{" "}
+                        · {formatDateTime(t.updated_at)}
                       </span>
                     </div>
                   </li>
@@ -489,7 +500,17 @@ export function SupportTickets() {
                 <div>
                   {isAgency && detail.portal_name ? (
                     <p className="tickets-detail-client">
-                      <Link to={`/portals/${detail.portal}`}>{detail.portal_name}</Link>
+                      {bitrixPortalUrl(detail.portal_domain) ? (
+                        <a
+                          href={bitrixPortalUrl(detail.portal_domain)!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {detail.portal_name}
+                        </a>
+                      ) : (
+                        detail.portal_name
+                      )}
                     </p>
                   ) : null}
                   <h2 className="tickets-detail-title">{detail.subject}</h2>
@@ -497,7 +518,10 @@ export function SupportTickets() {
                     <span
                       className={`ticket-status-pill${detail.status === "closed" ? " is-closed" : ""}`}
                     >
-                      {ticketStatusLabel(detail.status)}
+                      {ticketStatusLabel(detail.status, {
+                        isAgency,
+                        awaitingParty: detail.awaiting_party,
+                      })}
                     </span>
                     <span className="muted">
                       {detail.created_by_name || "—"} · {formatDateTime(detail.created_at)}

@@ -16,6 +16,7 @@ import {
   TICKET_BUCKETS,
   type TicketBucket,
   ticketsApiQuery,
+  ticketStatusLabel,
 } from "../../pages/shared/ticketHelpers";
 import { useSupportWidget } from "./SupportWidgetContext";
 
@@ -260,7 +261,15 @@ export function ClientSupportWidget() {
                         onClick={() => void loadDetail(t.id)}
                       >
                         <span className="support-widget-ticket-title">{t.subject}</span>
-                        <span className="support-widget-ticket-id">#{t.id}</span>
+                        <span className="support-widget-ticket-id">
+                          #{t.id}
+                          {t.status === "open"
+                            ? ` · ${ticketStatusLabel(t.status, {
+                                isAgency: false,
+                                awaitingParty: t.awaiting_party,
+                              })}`
+                            : ""}
+                        </span>
                       </button>
                     </li>
                   ))}
@@ -398,9 +407,14 @@ export function ClientSupportWidget() {
                 <strong>#{detail.id}</strong>
                 <span className="support-widget-chat-subject">{detail.subject}</span>
                 <span
-                  className={`support-widget-status${detail.status === "closed" ? " is-closed" : ""}`}
+                  className={`support-widget-status${detail.status === "closed" ? " is-closed" : ""}${
+                    detail.awaiting_party === "client" ? " is-attention" : ""
+                  }`}
                 >
-                  {detail.status === "closed" ? "закрыт" : "ожидает ответа"}
+                  {ticketStatusLabel(detail.status, {
+                    isAgency: false,
+                    awaitingParty: detail.awaiting_party,
+                  })}
                 </span>
               </div>
               <button

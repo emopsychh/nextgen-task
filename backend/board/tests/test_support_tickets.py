@@ -52,6 +52,19 @@ class SupportTicketApiTests(TestCase):
         self.assertEqual(len(create.data["messages"]), 1)
         self.assertEqual(create.data["messages"][0]["text"], "На главной не кликается CTA")
         self.assertEqual(create.data["messages"][0]["author"], self.client_user.id)
+        self.assertEqual(create.data["awaiting_party"], "agency")
+
+        # Client badge filter: nothing awaiting the client yet
+        client_attn = self.client_client.get(
+            f"/api/tickets/?portal={self.client_portal.id}&bucket=open&awaiting=client"
+        )
+        self.assertEqual(client_attn.status_code, 200)
+        attn_rows = (
+            client_attn.data["results"]
+            if isinstance(client_attn.data, dict)
+            else client_attn.data
+        )
+        self.assertEqual(len(attn_rows), 0)
 
         # Agency cannot create tickets
         agency_create = self.agency_client.post(
@@ -82,6 +95,18 @@ class SupportTicketApiTests(TestCase):
         )
         self.assertEqual(msg.status_code, 201, msg.content)
         self.assertEqual(msg.data["text"], "Смотрим, ответим сегодня")
+
+        after_agency = self.client_client.get(f"/api/tickets/{ticket_id}/")
+        self.assertEqual(after_agency.data["awaiting_party"], "client")
+        client_attn2 = self.client_client.get(
+            f"/api/tickets/?portal={self.client_portal.id}&bucket=open&awaiting=client"
+        )
+        attn_rows2 = (
+            client_attn2.data["results"]
+            if isinstance(client_attn2.data, dict)
+            else client_attn2.data
+        )
+        self.assertEqual(len(attn_rows2), 1)
 
         # Client reply
         msg2 = self.client_client.post(

@@ -6388,8 +6388,8 @@ a.task-card.is-done:hover,
 
 .support-widget {
   pointer-events: auto;
-  width: min(420px, calc(100vw - 32px));
-  max-height: min(720px, calc(100vh - 32px));
+  width: min(480px, calc(100vw - 28px));
+  max-height: min(780px, calc(100vh - 28px));
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -6401,7 +6401,7 @@ a.task-card.is-done:hover,
 }
 
 .support-widget.is-wide {
-  width: min(520px, calc(100vw - 32px));
+  width: min(580px, calc(100vw - 28px));
 }
 
 @keyframes support-widget-in {
@@ -6420,7 +6420,7 @@ a.task-card.is-done:hover,
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: min(720px, calc(100vh - 32px));
+  max-height: min(780px, calc(100vh - 28px));
   flex: 1;
 }
 
@@ -6485,7 +6485,7 @@ a.task-card.is-done:hover,
 .support-widget-scroll {
   flex: 1;
   overflow-y: auto;
-  min-height: 260px;
+  min-height: 320px;
 }
 
 .support-widget-empty {
@@ -6641,6 +6641,10 @@ a.task-card.is-done:hover,
 .support-widget-status {
   font-size: 0.75rem;
   font-weight: 700;
+  color: var(--ink-muted);
+}
+
+.support-widget-status.is-attention {
   color: #c05621;
 }
 
@@ -6758,7 +6762,7 @@ button.nav-item {
   .support-widget,
   .support-widget.is-wide {
     width: 100%;
-    max-height: min(70vh, 560px);
+    max-height: min(78vh, 680px);
   }
 }
 

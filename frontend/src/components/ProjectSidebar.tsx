@@ -177,7 +177,7 @@ export function ProjectSidebarNav() {
     async function loadTickets() {
       try {
         const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
-          `/api/tickets/?portal=${contextPortalId}&bucket=open`,
+          `/api/tickets/?portal=${contextPortalId}&bucket=open&awaiting=client`,
           {},
           token!
         );
@@ -285,7 +285,7 @@ export function ProjectSidebarNav() {
           }
           if (refreshTickets && !isAgency && contextPortalId) {
             const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
-              `/api/tickets/?portal=${contextPortalId}&bucket=open`,
+              `/api/tickets/?portal=${contextPortalId}&bucket=open&awaiting=client`,
               {},
               token
             );

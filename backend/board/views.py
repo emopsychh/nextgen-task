@@ -19,7 +19,7 @@ from portals.models import Portal, PortalLink
 from portals.permissions import IsPortalAuthenticated, can_access_client_portal
 
 from .events import append_task_change_events
-from .models import Attachment, Comment, Project, SupportTicket, Task, TimeEntry, WorkReport
+from .models import Attachment, Comment, Project, SupportTicket, SupportTicketMessage, Task, TimeEntry, WorkReport
 from .naming import display_attachment_name
 from .serializers import (
     ATTACHMENT_SIGN_SALT,
@@ -986,17 +986,25 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        from django.db.models import Count
+        from django.db.models import Count, OuterRef, Subquery
 
         ids = accessible_portal_ids(self.request.user)
+        last_author_role = (
+            SupportTicketMessage.objects.filter(ticket_id=OuterRef("pk"))
+            .order_by("-id")
+            .values("author__portal__role")[:1]
+        )
         qs = (
             SupportTicket.objects.filter(portal_id__in=ids)
-            .select_related("portal", "project", "task", "created_by")
-            .annotate(_message_count=Count("messages"))
+            .select_related("portal", "project", "task", "created_by", "created_by__portal")
+            .annotate(
+                _message_count=Count("messages"),
+                _last_author_role=Subquery(last_author_role),
+            )
         )
         # Messages are only needed on retrieve / message actions — annotate covers list count.
         if self.action != "list":
-            qs = qs.prefetch_related("messages__author")
+            qs = qs.prefetch_related("messages__author__portal")
         portal_id = self.request.query_params.get("portal")
         if portal_id:
             qs = qs.filter(portal_id=portal_id)
@@ -1008,6 +1016,20 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         status = self.request.query_params.get("status")
         if status in (SupportTicket.Status.OPEN, SupportTicket.Status.CLOSED):
             qs = qs.filter(status=status)
+
+        awaiting = (self.request.query_params.get("awaiting") or "").strip().lower()
+        if awaiting in ("agency", "client") and (
+            bucket in ("open", "current") or status == SupportTicket.Status.OPEN or not bucket
+        ):
+            from portals.models import Portal
+
+            # Last writer is the opposite party.
+            if awaiting == "agency":
+                # Waiting for agency ⇒ last message was NOT from agency (client/null).
+                qs = qs.exclude(_last_author_role=Portal.Role.AGENCY)
+            else:
+                qs = qs.filter(_last_author_role=Portal.Role.AGENCY)
+
         return qs.order_by("-updated_at", "-id")
 
     def get_serializer_class(self):

@@ -220,6 +220,8 @@ export type WorkReport = {
 
 export type SupportTicketStatus = "open" | "closed";
 
+export type TicketAwaitingParty = "agency" | "client";
+
 export type SupportTicketMessage = {
   id: number;
   ticket: number;
@@ -233,9 +235,11 @@ export type SupportTicket = {
   id: number;
   portal: number;
   portal_name?: string;
+  portal_domain?: string;
   subject: string;
   body?: string;
   status: SupportTicketStatus;
+  awaiting_party?: TicketAwaitingParty | null;
   project: number | null;
   project_name?: string;
   task: number | null;

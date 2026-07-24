@@ -27,6 +27,31 @@ def _author_name(user: BitrixUser | None) -> str:
     return user.display_name or f"#{user.bitrix_id}"
 
 
+def ticket_awaiting_party(ticket: SupportTicket) -> str | None:
+    """Who should reply next: 'agency' | 'client'. None if closed."""
+    from portals.models import Portal
+
+    if ticket.status == SupportTicket.Status.CLOSED:
+        return None
+
+    role = getattr(ticket, "_last_author_role", None)
+    if role is None:
+        last = (
+            ticket.messages.select_related("author__portal").order_by("-id").first()
+        )
+        if last and last.author_id and getattr(last.author, "portal", None):
+            role = last.author.portal.role
+        elif ticket.created_by_id:
+            creator = ticket.created_by
+            if creator is not None and getattr(creator, "portal", None) is not None:
+                role = creator.portal.role
+
+    if role == Portal.Role.AGENCY:
+        return "client"
+    # Client wrote last (or unknown) → support should reply.
+    return "agency"
+
+
 def ticket_payload(ticket: SupportTicket, **extra) -> dict:
     return {
         "kind": extra.pop("kind", "ticket"),

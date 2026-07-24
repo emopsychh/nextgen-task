@@ -697,9 +697,11 @@ class SupportTicketMessageSerializer(serializers.ModelSerializer):
 class SupportTicketListSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     portal_name = serializers.SerializerMethodField()
+    portal_domain = serializers.SerializerMethodField()
     project_name = serializers.SerializerMethodField()
     task_title = serializers.SerializerMethodField()
     message_count = serializers.SerializerMethodField()
+    awaiting_party = serializers.SerializerMethodField()
 
     class Meta:
         model = SupportTicket
@@ -707,8 +709,10 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
             "id",
             "portal",
             "portal_name",
+            "portal_domain",
             "subject",
             "status",
+            "awaiting_party",
             "project",
             "project_name",
             "task",
@@ -732,6 +736,11 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
             return obj.portal.name or obj.portal.domain
         return ""
 
+    def get_portal_domain(self, obj):
+        if obj.portal_id:
+            return (obj.portal.domain or "").strip()
+        return ""
+
     def get_project_name(self, obj):
         if obj.project_id:
             return obj.project.name
@@ -747,12 +756,19 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
             return obj._message_count
         return obj.messages.count()
 
+    def get_awaiting_party(self, obj):
+        from board.tickets import ticket_awaiting_party
+
+        return ticket_awaiting_party(obj)
+
 
 class SupportTicketSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     portal_name = serializers.SerializerMethodField()
+    portal_domain = serializers.SerializerMethodField()
     project_name = serializers.SerializerMethodField()
     task_title = serializers.SerializerMethodField()
+    awaiting_party = serializers.SerializerMethodField()
     messages = SupportTicketMessageSerializer(many=True, read_only=True)
 
     class Meta:
@@ -761,9 +777,11 @@ class SupportTicketSerializer(serializers.ModelSerializer):
             "id",
             "portal",
             "portal_name",
+            "portal_domain",
             "subject",
             "body",
             "status",
+            "awaiting_party",
             "project",
             "project_name",
             "task",
@@ -787,6 +805,11 @@ class SupportTicketSerializer(serializers.ModelSerializer):
             return obj.portal.name or obj.portal.domain
         return ""
 
+    def get_portal_domain(self, obj):
+        if obj.portal_id:
+            return (obj.portal.domain or "").strip()
+        return ""
+
     def get_project_name(self, obj):
         if obj.project_id:
             return obj.project.name
@@ -797,6 +820,10 @@ class SupportTicketSerializer(serializers.ModelSerializer):
             return obj.task.title
         return ""
 
+    def get_awaiting_party(self, obj):
+        from board.tickets import ticket_awaiting_party
+
+        return ticket_awaiting_party(obj)
 
 class SupportTicketCreateSerializer(serializers.Serializer):
     portal = serializers.IntegerField(min_value=1)

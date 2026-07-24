@@ -162,7 +162,7 @@ export function ClientRail() {
     async function loadTickets() {
       try {
         const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
-          "/api/tickets/?bucket=open",
+          "/api/tickets/?bucket=open&awaiting=agency",
           {},
           token!
         );
