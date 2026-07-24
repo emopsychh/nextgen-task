@@ -691,12 +691,26 @@ export function TaskDetail() {
         <section className="messenger task-chat-pane">
           <div className="task-chat-header">
             <strong>Чат задачи</strong>
+            <span className="task-chat-header-sub">
+              {items.length > 0
+                ? `${items.length}${hasMore ? "+" : ""} в ленте`
+                : "переписка и файлы"}
+            </span>
           </div>
 
           <div className="messenger-thread" ref={threadRef}>
             {hasMore ? (
               <div className="chat-load-older muted">
                 {loadingOlder ? "Загрузка истории…" : "Прокрутите вверх для истории"}
+              </div>
+            ) : null}
+
+            {items.length === 0 && !loadingOlder ? (
+              <div className="task-chat-empty">
+                <p>Пока тихо</p>
+                <span className="muted">
+                  Напишите сообщение или прикрепите файл — обсуждение появится здесь
+                </span>
               </div>
             ) : null}
 
