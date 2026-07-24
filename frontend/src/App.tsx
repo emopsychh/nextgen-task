@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Brand } from "./components/Brand";
 import { ClientRail } from "./components/ClientRail";
@@ -60,16 +60,23 @@ function ClientTicketsRedirect() {
 
 function AppLayout() {
   const { portal, error } = useAuth();
+  const location = useLocation();
   const isAgency = portal?.role === "agency";
+  // Task detail: hide the Обзор/projects sidebar — back via «К задачам».
+  const taskFocus = /^\/tasks\/[^/]+\/?$/.test(location.pathname);
 
   return (
     <SupportWidgetProvider>
-      <div className={`app-shell${isAgency ? " with-client-rail" : " with-logout-rail"}`}>
+      <div
+        className={`app-shell${isAgency ? " with-client-rail" : " with-logout-rail"}${taskFocus ? " task-focus" : ""}`}
+      >
         {isAgency ? <ClientRail /> : <LogoutRail />}
-        <aside className="sidebar">
-          <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
-          <ProjectSidebarNav />
-        </aside>
+        {!taskFocus ? (
+          <aside className="sidebar">
+            <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
+            <ProjectSidebarNav />
+          </aside>
+        ) : null}
         <main className="main">
           {error && <div className="error-banner">{error}</div>}
           <Outlet />
