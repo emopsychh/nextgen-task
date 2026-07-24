@@ -164,8 +164,6 @@ export function TaskSummaryCard({
               closedSeconds={task.total_tracked_seconds || 0}
               activeStartedAt={task.active_timer?.started_at || null}
               isWorking={task.status === "in_progress"}
-              paidHours={task.deal_paid_hours}
-              remainingHours={task.deal_remaining_hours}
             />
           </dd>
         </div>
