@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
+  isAbortError,
   unwrapList,
   type Paginated,
   type Project,
@@ -28,6 +29,7 @@ export function ClientSupportWidget() {
   const [view, setView] = useState<View>("list");
   const [bucket, setBucket] = useState<TicketBucket>("open");
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [listLoading, setListLoading] = useState(true);
   const [detail, setDetail] = useState<SupportTicket | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -40,15 +42,24 @@ export function ClientSupportWidget() {
   const [draft, setDraft] = useState("");
   const threadRef = useRef<HTMLDivElement>(null);
 
-  const loadList = useCallback(async () => {
-    if (!token || !portalId) return;
-    const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
-      ticketsApiQuery(portalId, bucket),
-      {},
-      token
-    );
-    setTickets(unwrapList(data));
-  }, [token, portalId, bucket]);
+  const loadList = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!token || !portalId) return;
+      setListLoading(true);
+      try {
+        const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
+          ticketsApiQuery(portalId, bucket),
+          { signal },
+          token
+        );
+        if (signal?.aborted) return;
+        setTickets(unwrapList(data));
+      } finally {
+        if (!signal?.aborted) setListLoading(false);
+      }
+    },
+    [token, portalId, bucket]
+  );
 
   const loadDetail = useCallback(
     async (id: number) => {
@@ -75,7 +86,14 @@ export function ClientSupportWidget() {
 
   useEffect(() => {
     if (!isOpen || !token || !portalId) return;
-    void loadList().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
+    setTickets([]);
+    setListLoading(true);
+    const ac = new AbortController();
+    void loadList(ac.signal).catch((e) => {
+      if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+      else if (!ac.signal.aborted) setListLoading(false);
+    });
+    return () => ac.abort();
   }, [isOpen, token, portalId, loadList]);
 
   useEffect(() => {
@@ -226,7 +244,9 @@ export function ClientSupportWidget() {
             {error ? <div className="support-widget-error">{error}</div> : null}
 
             <div className="support-widget-scroll">
-              {tickets.length === 0 ? (
+              {listLoading ? (
+                <p className="support-widget-empty muted">Загрузка…</p>
+              ) : tickets.length === 0 ? (
                 <p className="support-widget-empty muted">
                   {bucket === "open" ? "Нет открытых тикетов" : "Архив пуст"}
                 </p>

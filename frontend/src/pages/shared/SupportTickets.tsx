@@ -42,6 +42,7 @@ export function SupportTickets() {
 
   const [bucket, setBucket] = useState<TicketBucket>("open");
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [listLoading, setListLoading] = useState(true);
   const [detail, setDetail] = useState<SupportTicket | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -62,13 +63,18 @@ export function SupportTickets() {
     async (signal?: AbortSignal) => {
       if (!token) return;
       if (!isAgency && !listPortalId) return;
-      const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
-        ticketsApiQuery(listPortalId, bucket),
-        { signal },
-        token
-      );
-      if (signal?.aborted) return;
-      setTickets(unwrapList(data));
+      setListLoading(true);
+      try {
+        const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
+          ticketsApiQuery(listPortalId, bucket),
+          { signal },
+          token
+        );
+        if (signal?.aborted) return;
+        setTickets(unwrapList(data));
+      } finally {
+        if (!signal?.aborted) setListLoading(false);
+      }
     },
     [token, isAgency, listPortalId, bucket]
   );
@@ -107,9 +113,13 @@ export function SupportTickets() {
   useEffect(() => {
     if (!token) return;
     if (!isAgency && !listPortalId) return;
+    // Don't flash the previous bucket (or a false "empty") while the next list loads.
+    setTickets([]);
+    setListLoading(true);
     const ac = new AbortController();
     void loadList(ac.signal).catch((e) => {
       if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+      else if (!ac.signal.aborted) setListLoading(false);
     });
     return () => ac.abort();
   }, [token, isAgency, listPortalId, loadList]);
@@ -408,7 +418,9 @@ export function SupportTickets() {
               </button>
             ))}
           </div>
-          {tickets.length === 0 ? (
+          {listLoading ? (
+            <p className="muted tickets-empty-list">Загрузка…</p>
+          ) : tickets.length === 0 ? (
             <p className="muted tickets-empty-list">
               {bucket === "open" ? "Нет открытых тикетов" : "Архив пуст"}
             </p>
