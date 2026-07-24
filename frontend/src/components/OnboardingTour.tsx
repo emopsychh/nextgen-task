@@ -75,7 +75,7 @@ async function resolveClientWorkspace(token: string): Promise<string | null> {
   try {
     const data = await api<LinkRow[] | { results: LinkRow[] }>("/api/portal-links/", {}, token);
     const first = unwrapList(data)[0];
-    if (first?.client_portal?.id) return `/portals/${first.client_portal.id}/projects`;
+    if (first?.client_portal?.id) return `/portals/${first.client_portal.id}`;
   } catch {
     /* ignore */
   }

@@ -315,4 +315,11 @@ def pull_attachments_from_bitrix(task) -> int:
             att.file.save(client_filename(name), ContentFile(content), save=False)
             att.save()
             created += 1
+    if created:
+        try:
+            from board.realtime import publish_task_event
+
+            publish_task_event(task, kind="task_update")
+        except Exception:
+            logger.exception("publish after Bitrix file pull failed task=%s", task.id)
     return created

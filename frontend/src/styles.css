@@ -863,6 +863,15 @@ a {
   background: #f3e8d4;
 }
 
+.workspace-chip.tone-project {
+  background: color-mix(in srgb, var(--accent) 16%, #edf1f0);
+  color: color-mix(in srgb, var(--accent) 55%, var(--ink));
+}
+
+.workspace-attention-card.is-project {
+  background: color-mix(in srgb, var(--accent) 5%, #fff);
+}
+
 .workspace-attention-card.is-soon {
   border-color: color-mix(in srgb, #e67a2e 30%, var(--line));
 }
@@ -1139,6 +1148,74 @@ a {
 .create-project-panel {
   margin-bottom: 24px;
   animation: linked-card-in 0.35s ease;
+}
+
+.projects-hub-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.projects-hub-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: #fff;
+  text-decoration: none;
+  color: inherit;
+  box-shadow: var(--shadow);
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.projects-hub-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  box-shadow: 0 8px 22px rgba(18, 30, 24, 0.06);
+}
+
+.projects-hub-card.is-entering {
+  animation: linked-card-in 0.55s cubic-bezier(0.34, 1.35, 0.64, 1);
+}
+
+.projects-hub-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.projects-hub-card-title {
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.projects-hub-card-pct {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--accent) 70%, var(--ink));
+}
+
+.projects-hub-card-bar {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: #edf1f0;
+  overflow: hidden;
+}
+
+.projects-hub-card-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent, #1aa58a);
 }
 
 .recent-project-card {

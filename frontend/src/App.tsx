@@ -14,6 +14,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { AgencyHome } from "./pages/agency/AgencyHome";
 import { ClientProjects } from "./pages/client/ClientProjects";
 import { ProjectReports } from "./pages/shared/ProjectReports";
+import { ProjectsList } from "./pages/shared/ProjectsList";
 import { ReportDetail } from "./pages/shared/ReportDetail";
 import { ProjectTasks } from "./pages/shared/ProjectTasks";
 import { SupportTickets } from "./pages/shared/SupportTickets";
@@ -101,7 +102,9 @@ export default function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route index element={isAgency ? <AgencyHome /> : <ClientProjects />} />
-        <Route path="portals/:portalId/projects" element={<ClientProjects />} />
+        <Route path="portals/:portalId" element={<ClientProjects />} />
+        <Route path="portals/:portalId/projects" element={<ProjectsList />} />
+        <Route path="projects" element={isAgency ? <Navigate to="/" replace /> : <ProjectsList />} />
         <Route path="portals/:portalId/reports" element={<ProjectReports />} />
         <Route path="portals/:portalId/reports/:reportId" element={<ReportDetail />} />
         <Route path="portals/:portalId/tickets" element={<SupportTickets />} />

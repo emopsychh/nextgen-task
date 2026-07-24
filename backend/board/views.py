@@ -554,7 +554,8 @@ class TaskViewSet(viewsets.ModelViewSet):
           * ?after=<iso>   → all items strictly newer than the cursor
                              (for live delta after new activity)
           * ?pull=1        → pull fresh comments from Bitrix first
-          * ?files=1       → also download missing Bitrix attachments (slow)
+          * ?files=1       → download missing Bitrix attachments (slow; safe alone
+                             or combined with ?pull=1)
         """
         from django.utils.dateparse import parse_datetime
 
@@ -562,13 +563,15 @@ class TaskViewSet(viewsets.ModelViewSet):
         if not can_access_client_portal(request.user, task.project.portal):
             raise PermissionDenied("No access")
 
-        if request.query_params.get("pull") in ("1", "true", "yes"):
+        want_pull = request.query_params.get("pull") in ("1", "true", "yes")
+        want_files = request.query_params.get("files") in ("1", "true", "yes")
+        if want_pull or want_files:
             try:
-                from board.comment_sync import pull_comments_from_bitrix
+                if want_pull:
+                    from board.comment_sync import pull_comments_from_bitrix
 
-                pull_comments_from_bitrix(task)
-                # File downloads are optional — they block the request on Bitrix disk.
-                if request.query_params.get("files") in ("1", "true", "yes"):
+                    pull_comments_from_bitrix(task)
+                if want_files:
                     from board.file_sync import pull_attachments_from_bitrix
 
                     pull_attachments_from_bitrix(task)

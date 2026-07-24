@@ -7,6 +7,7 @@ import {
   type DealBinding,
   type Paginated,
   type Portal,
+  type Project,
   type Task,
   type WorkReport,
 } from "../../api/types";
@@ -27,15 +28,13 @@ import {
 } from "../../lib/portalLabelCache";
 import {
   CACHE_DEAL_HOURS,
+  CACHE_PROJECTS,
   readPortalCache,
   writePortalCache,
 } from "../../lib/portalSessionCache";
+import { isProjectInProgress, projectProgress } from "../../lib/projectProgress";
 import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
-import {
-  reportDetailPath,
-  reportTitle,
-  STATUS_LABEL_RU,
-} from "../shared/reportHelpers";
+import { reportDetailPath } from "../shared/reportHelpers";
 
 const RECENT_DONE_MS = 7 * 24 * 60 * 60 * 1000;
 const HOT_DUE_DAYS = 2;
@@ -73,27 +72,18 @@ export function ClientProjects() {
 
   const [portalInfo, setPortalInfo] = useState<Portal | null>(null);
   const [dealHours, setDealHours] = useState<DealBinding | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [openTasks, setOpenTasks] = useState<Task[]>([]);
   const [recentDone, setRecentDone] = useState<Task[]>([]);
-  const [pendingReports, setPendingReports] = useState<WorkReport[]>([]);
   const [disputedReports, setDisputedReports] = useState<WorkReport[]>([]);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [showCreate, setShowCreate] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const { dismiss, isDismissed } = useWorkspaceDismissals(
     Number.isFinite(portalId) && portalId > 0 ? portalId : null
   );
 
-  const clientTasks = useMemo(
-    () =>
-      openTasks.filter(
-        (t) =>
-          t.created_by_role === "client" &&
-          !isDismissed("task", t.id, t.updated_at)
-      ),
-    [openTasks, isDismissed]
+  const activeProjects = useMemo(
+    () => projects.filter(isProjectInProgress).slice(0, 12),
+    [projects]
   );
 
   const hotTasks = useMemo(() => {
@@ -119,7 +109,6 @@ export function ClientProjects() {
   const loadGenRef = useRef(0);
   const loadInFlightRef = useRef(false);
 
-  // Paint portal title immediately — don't wait for tasks Promise.all
   useEffect(() => {
     if (!portalId) {
       setPortalInfo(null);
@@ -179,11 +168,9 @@ export function ClientProjects() {
       writePortalCache(CACHE_DEAL_HOURS, portalId, updated);
     } catch (e) {
       if (!isAbortError(e)) undefined;
-      // keep cached hours
     }
   }
 
-  // Instant hours card from last visit (then network + optional Bitrix refresh)
   useEffect(() => {
     if (!portalId) {
       setDealHours(null);
@@ -193,13 +180,22 @@ export function ClientProjects() {
     if (cached) setDealHours(cached);
   }, [portalId]);
 
+  useEffect(() => {
+    if (!portalId) {
+      setProjects([]);
+      return;
+    }
+    const cached = readPortalCache<Project[]>(CACHE_PROJECTS, portalId);
+    if (cached?.length) setProjects(cached);
+  }, [portalId]);
+
   async function load(signal?: AbortSignal) {
     if (!token || !portalId) return;
     if (loadInFlightRef.current) return;
     const gen = loadGenRef.current;
     loadInFlightRef.current = true;
     try {
-      const [openData, doneData, hoursData, reportsData, disputedData] = await Promise.all([
+      const [openData, doneData, hoursData, disputedData, projectsData] = await Promise.all([
         api<Task[] | Paginated<Task>>(
           `/api/tasks/?portal=${portalId}&open=1`,
           { signal },
@@ -225,13 +221,6 @@ export function ClientProjects() {
               if (isAbortError(e)) throw e;
               return null;
             }),
-        !isAgency
-          ? api<WorkReport[] | Paginated<WorkReport>>(
-              `/api/reports/?portal=${portalId}&bucket=review`,
-              { signal },
-              token
-            )
-          : Promise.resolve([] as WorkReport[]),
         isAgency
           ? api<WorkReport[] | Paginated<WorkReport>>(
               `/api/reports/?portal=${portalId}&status=disputed`,
@@ -239,10 +228,18 @@ export function ClientProjects() {
               token
             )
           : Promise.resolve([] as WorkReport[]),
+        api<Project[] | Paginated<Project>>(
+          `/api/projects/?portal=${portalId}`,
+          { signal },
+          token
+        ),
       ]);
       if (gen !== loadGenRef.current || signal?.aborted) return;
 
       setOpenTasks(unwrapList(openData));
+      const projectList = unwrapList(projectsData);
+      setProjects(projectList);
+      writePortalCache(CACHE_PROJECTS, portalId, projectList);
 
       if (!isAgency) {
         const cutoff = Date.now() - RECENT_DONE_MS;
@@ -251,7 +248,6 @@ export function ClientProjects() {
             .filter((t) => new Date(t.updated_at).getTime() >= cutoff)
             .slice(0, 6)
         );
-        setPendingReports(unwrapList(reportsData as WorkReport[] | Paginated<WorkReport>));
         setDisputedReports([]);
         const mine = hoursData as DealBinding | null;
         setDealHours(mine);
@@ -264,7 +260,6 @@ export function ClientProjects() {
         setDealHours(binding);
         if (binding) writePortalCache(CACHE_DEAL_HOURS, portalId, binding);
         setRecentDone([]);
-        setPendingReports([]);
         setDisputedReports(unwrapList(disputedData as WorkReport[] | Paginated<WorkReport>));
         const fromBinding = binding?.client_portal;
         if (fromBinding) {
@@ -316,7 +311,6 @@ export function ClientProjects() {
     onEvent: () => reloadRef.current(),
   });
 
-  // Soft refresh on tab focus only — SSE covers live updates; avoid 15s mine/tasks fan-out
   useEffect(() => {
     if (!token || !portalId) return;
     const onVisible = () => {
@@ -326,38 +320,10 @@ export function ClientProjects() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [token, portalId]);
 
-  async function createProject(e: React.FormEvent) {
-    e.preventDefault();
-    if (!token || !portalId || !isAgency) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api(
-        "/api/projects/",
-        {
-          method: "POST",
-          body: JSON.stringify({ portal: portalId, name, description }),
-        },
-        token
-      );
-      setName("");
-      setDescription("");
-      setShowCreate(false);
-      toast.show("Он появился в панели слева", "Проект создан");
-      await load();
-      window.dispatchEvent(new Event("projects-updated"));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось создать проект");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const titleName = portalInfo?.name || portalInfo?.domain || "Клиент";
   const agencyNeedsAttention =
-    disputedReports.length > 0 ||
-    clientTasks.length > 0 ||
-    hotTasks.length > 0;
+    disputedReports.length > 0 || activeProjects.length > 0 || hotTasks.length > 0;
+  const projectsListPath = isAgency ? `/portals/${portalId}/projects` : "/projects";
 
   return (
     <div className="workspace-page">
@@ -366,24 +332,16 @@ export function ClientProjects() {
           <h1 className="page-title">{isAgency ? titleName : "Рабочее пространство"}</h1>
           <p className="page-sub">
             {isAgency
-              ? "Часы, споры по отчётам, задачи клиента и сроки"
-              : "Часы и то, что ждёт вашего ответа"}
+              ? "Часы, споры, активные проекты и горящие сроки"
+              : "Часы, проекты в работе и недавно завершённое"}
           </p>
         </div>
-        {isAgency ? (
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setShowCreate((v) => !v)}
-            data-tour="tour-new-project"
-          >
-            {showCreate ? "Закрыть" : "Новый проект"}
-          </button>
-        ) : null}
+        <Link to={projectsListPath} className="btn btn-primary" data-tour="tour-new-project">
+          Все проекты
+        </Link>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
-
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
       {dealHours ? (
@@ -392,67 +350,39 @@ export function ClientProjects() {
         </div>
       ) : null}
 
-      {isAgency && showCreate && (
-        <form className="connect-panel create-project-panel stack" onSubmit={createProject}>
-          <div>
-            <h2 className="section-title">Новый проект</h2>
-            <p className="muted">
-              В Bitrix это задача внутри проекта компании; внутри — подзадачи.
-            </p>
-          </div>
-          <div className="field">
-            <label>Название</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Например, Интеграция оплаты"
-              required
-            />
-          </div>
-          <div className="field">
-            <label>Описание</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Кратко, что входит в модуль"
-            />
-          </div>
-          <button className="btn btn-accent" disabled={busy} style={{ alignSelf: "start" }}>
-            {busy ? "Создаём…" : "Создать проект"}
-          </button>
-        </form>
-      )}
-
       {!isAgency ? (
         <div className="workspace-focus" data-tour="tour-waiting-for-you">
           <div className="workspace-split-focus">
             <section className="workspace-focus-block">
               <div className="linked-head">
-                <h2 className="section-title">Отчёты на согласовании</h2>
-                <p className="muted">Нужно согласовать или оспорить</p>
+                <h2 className="section-title">Проекты в работе</h2>
+                <p className="muted">Модули, которые ещё не закрыты на 100%</p>
               </div>
-              {pendingReports.length === 0 ? (
+              {activeProjects.length === 0 ? (
                 <div className="empty-linked workspace-empty">
-                  <p className="muted">Сейчас нет отчётов, ожидающих вашего ответа.</p>
+                  <p className="muted">Сейчас нет проектов в работе.</p>
                 </div>
               ) : (
                 <div className="workspace-attention-list">
-                  {pendingReports.map((r) => (
-                    <Link
-                      key={`report-${r.id}`}
-                      to={reportDetailPath(portalId, false, r.id)}
-                      className="workspace-attention-card is-report"
-                    >
-                      <div className="workspace-attention-top">
-                        <span className={`report-status-pill status-${r.status}`}>
-                          {STATUS_LABEL_RU[r.status]}
-                        </span>
-                        <span className="muted">Отчёт</span>
-                      </div>
-                      <strong>{reportTitle(r)}</strong>
-                      <span className="muted">Открыть и ответить</span>
-                    </Link>
-                  ))}
+                  {activeProjects.map((p) => {
+                    const { done, total, pct } = projectProgress(p);
+                    return (
+                      <Link
+                        key={`project-${p.id}`}
+                        to={`/projects/${p.id}`}
+                        className="workspace-attention-card is-project"
+                      >
+                        <div className="workspace-attention-top">
+                          <span className="workspace-chip tone-project">{pct}%</span>
+                          <span className="muted">
+                            {done}/{total} задач
+                          </span>
+                        </div>
+                        <strong>{p.name}</strong>
+                        <span className="muted">Открыть проект</span>
+                      </Link>
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -493,7 +423,8 @@ export function ClientProjects() {
           {!agencyNeedsAttention ? (
             <div className="empty-linked workspace-empty">
               <p className="muted">
-                Нет споров, клиентских задач и горящих сроков. Проекты — в панели слева.
+                Нет споров, активных проектов и горящих сроков. Полный список — во вкладке
+                «Проекты».
               </p>
             </div>
           ) : (
@@ -532,33 +463,34 @@ export function ClientProjects() {
               <div className="workspace-split-focus">
                 <section className="workspace-focus-block">
                   <div className="linked-head">
-                    <h2 className="section-title">От клиента</h2>
-                    <p className="muted">Задачи, которые поставил клиент</p>
+                    <h2 className="section-title">Проекты в работе</h2>
+                    <p className="muted">Модули клиента, которые ещё не на 100%</p>
                   </div>
-                  {clientTasks.length === 0 ? (
+                  {activeProjects.length === 0 ? (
                     <div className="empty-linked workspace-empty">
-                      <p className="muted">Пока нет открытых задач от клиента.</p>
+                      <p className="muted">Все проекты закрыты или ещё не созданы.</p>
                     </div>
                   ) : (
                     <div className="workspace-attention-list">
-                      {clientTasks.slice(0, 12).map((t) => (
-                        <Link
-                          key={t.id}
-                          to={`/tasks/${t.id}`}
-                          className="workspace-attention-card"
-                          onClick={() => dismiss("task", t.id, t.updated_at)}
-                        >
-                          <div className="workspace-attention-top">
-                            <span className="workspace-chip tone-client">Клиент</span>
-                            <span className="muted">{STATUS_LABEL[t.status]}</span>
-                          </div>
-                          <strong>{t.title}</strong>
-                          <span className="muted">
-                            {t.project_name}
-                            {t.created_by_name ? ` · ${t.created_by_name}` : ""}
-                          </span>
-                        </Link>
-                      ))}
+                      {activeProjects.map((p) => {
+                        const { done, total, pct } = projectProgress(p);
+                        return (
+                          <Link
+                            key={p.id}
+                            to={`/projects/${p.id}`}
+                            className="workspace-attention-card is-project"
+                          >
+                            <div className="workspace-attention-top">
+                              <span className="workspace-chip tone-project">{pct}%</span>
+                              <span className="muted">
+                                {done}/{total} задач
+                              </span>
+                            </div>
+                            <strong>{p.name}</strong>
+                            <span className="muted">Открыть проект</span>
+                          </Link>
+                        );
+                      })}
                     </div>
                   )}
                 </section>

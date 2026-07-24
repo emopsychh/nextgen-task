@@ -138,7 +138,7 @@ export function TaskDetail() {
 
   async function loadInitialThread(signal?: AbortSignal) {
     const gen = genRef.current;
-    // Paint from DB immediately; Bitrix comments catch up in the background.
+    // Paint from DB immediately; Bitrix comments then files catch up in background.
     const page = await fetchThread("?limit=30", signal);
     if (!page || gen !== genRef.current || signal?.aborted) return;
     setItems(page.items);
@@ -146,16 +146,26 @@ export function TaskDetail() {
     scrollToBottom(false);
 
     setThreadSyncing(true);
-    void fetchThread("?pull=1&limit=30", signal)
-      .then((pulled) => {
-        if (!pulled || gen !== genRef.current || signal?.aborted) return;
-        setItems(pulled.items);
-        setHasMore(pulled.has_more);
+    try {
+      const pulled = await fetchThread("?pull=1&limit=30", signal);
+      if (!pulled || gen !== genRef.current || signal?.aborted) return;
+      setItems(pulled.items);
+      setHasMore(pulled.has_more);
+    } catch {
+      // comments pull is best-effort
+    } finally {
+      if (gen === genRef.current) setThreadSyncing(false);
+    }
+
+    // Files are slower (Bitrix disk download) — never block chat paint/sync hint.
+    void fetchThread("?files=1&limit=30", signal)
+      .then((withFiles) => {
+        if (!withFiles || gen !== genRef.current || signal?.aborted) return;
+        setItems(withFiles.items);
+        setHasMore(withFiles.has_more);
+        if (isNearBottom()) scrollToBottom(true);
       })
-      .catch(() => undefined)
-      .finally(() => {
-        if (gen === genRef.current) setThreadSyncing(false);
-      });
+      .catch(() => undefined);
   }
 
   async function reloadLatestThread() {
@@ -272,6 +282,39 @@ export function TaskDetail() {
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
+
+  // Soft catch-up for Bitrix task files while the detail page stays open.
+  useEffect(() => {
+    if (!token || !taskId || !task) return;
+    let cancelled = false;
+    const ac = new AbortController();
+
+    async function softPullFiles() {
+      if (cancelled || document.visibilityState === "hidden") return;
+      const gen = genRef.current;
+      try {
+        const page = await fetchThread("?files=1&limit=30", ac.signal);
+        if (!page || cancelled || gen !== genRef.current) return;
+        setItems(page.items);
+        setHasMore(page.has_more);
+      } catch {
+        // next interval retries
+      }
+    }
+
+    const interval = window.setInterval(() => void softPullFiles(), 45000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void softPullFiles();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      ac.abort();
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, taskId, task?.id]);
 
   useTaskLiveSync({
     token,

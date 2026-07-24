@@ -193,7 +193,7 @@ export function ClientRail() {
           return (
             <NavLink
               key={link.id}
-              to={`/portals/${p.id}/projects`}
+              to={`/portals/${p.id}`}
               className={`client-avatar${active ? " active" : ""}${entering ? " is-entering" : ""}`}
               title={p.name || p.domain}
               style={{ ["--avatar-bg" as string]: hueFromId(p.id) }}

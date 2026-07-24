@@ -323,7 +323,7 @@ export function AgencyHome() {
                   className={`linked-card${enteringPortalId === p.id ? " is-entering" : ""}${hasDeal ? " has-deal" : ""}`}
                 >
                   <header className="linked-card-top">
-                    <Link to={`/portals/${p.id}/projects`} className="linked-card-main">
+                    <Link to={`/portals/${p.id}`} className="linked-card-main">
                       <span
                         className="linked-avatar"
                         style={{ background: hueFromId(p.id) }}

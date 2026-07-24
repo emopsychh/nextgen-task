@@ -107,7 +107,7 @@ export function ProjectSidebarNav() {
     }
   }, [isAgency, routePortalId, routeProjectId, onTicketsRoute]);
 
-  const showProjects = Boolean(contextPortalId) && !(isAgency && onTicketsRoute);
+  const showClientNav = Boolean(contextPortalId) && !(isAgency && onTicketsRoute);
 
   useEffect(() => {
     if (!token || !routeProjectId || routePortalId) return;
@@ -132,7 +132,6 @@ export function ProjectSidebarNav() {
     if (!token || !contextPortalId) return;
     if (isAgency && onTicketsRoute) return;
 
-    // Paint last known project list immediately
     const cached = readPortalCache<Project[]>(CACHE_PROJECTS, contextPortalId);
     if (cached?.length) setProjects(cached);
 
@@ -302,15 +301,15 @@ export function ProjectSidebarNav() {
   const ticketsLink = !isAgency ? (
     <button
       type="button"
-      className={`${showProjects ? "feed-nav-item" : "nav-item"}${supportWidget.isOpen ? " active" : ""}`}
+      className={`${showClientNav ? "feed-nav-item" : "nav-item"}${supportWidget.isOpen ? " active" : ""}`}
       onClick={() => supportWidget.toggle()}
     >
-      {showProjects ? (
+      {showClientNav ? (
         <span className="feed-nav-icon" aria-hidden>
           <TicketsNavIcon />
         </span>
       ) : null}
-      <span className={showProjects ? "feed-nav-label" : undefined}>Поддержка</span>
+      <span className={showClientNav ? "feed-nav-label" : undefined}>Поддержка</span>
       {openTickets > 0 ? (
         <span className="feed-nav-count" aria-label={`${openTickets} открытых тикетов`}>
           {openTickets > 99 ? "99+" : openTickets}
@@ -319,7 +318,7 @@ export function ProjectSidebarNav() {
     </button>
   ) : null;
 
-  if (!showProjects) {
+  if (!showClientNav) {
     return (
       <nav className="nav-list" data-tour="tour-sidebar">
         <NavLink to="/" end className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
@@ -337,17 +336,20 @@ export function ProjectSidebarNav() {
     );
   }
 
-  const feedTo = isAgency ? `/portals/${contextPortalId}/projects` : "/";
+  const feedTo = isAgency ? `/portals/${contextPortalId}` : "/";
+  const projectsTo = isAgency ? `/portals/${contextPortalId}/projects` : "/projects";
   const onFeed =
-    !routeProjectId &&
-    (location.pathname === feedTo ||
-      location.pathname === `/portals/${contextPortalId}/projects` ||
-      (!isAgency && location.pathname === "/"));
+    location.pathname === feedTo ||
+    (!isAgency && location.pathname === "/") ||
+    (isAgency && location.pathname === `/portals/${contextPortalId}`);
+  const onProjectsList =
+    location.pathname === projectsTo ||
+    location.pathname === `/portals/${contextPortalId}/projects`;
 
   return (
     <div className="project-sidebar" data-tour="tour-sidebar">
       <div className="sidebar-section-label">
-        {clientLabel || (isAgency ? "Проекты клиента" : "Ваши проекты")}
+        {clientLabel || (isAgency ? "Кабинет клиента" : "Ваш кабинет")}
       </div>
       <NavLink
         to={feedTo}
@@ -365,6 +367,30 @@ export function ProjectSidebarNav() {
           </svg>
         </span>
         Обзор
+      </NavLink>
+      <NavLink
+        to={projectsTo}
+        end
+        className={({ isActive }) =>
+          `feed-nav-item${isActive || onProjectsList ? " active" : ""}`
+        }
+      >
+        <span className="feed-nav-icon" aria-hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+        <span className="feed-nav-label">Проекты</span>
+        {projects.length > 0 ? (
+          <span className="feed-nav-count" aria-label={`${projects.length} проектов`}>
+            {projects.length > 99 ? "99+" : projects.length}
+          </span>
+        ) : null}
       </NavLink>
       <NavLink
         to={isAgency ? `/portals/${contextPortalId}/reports` : "/reports"}
@@ -389,33 +415,6 @@ export function ProjectSidebarNav() {
         ) : null}
       </NavLink>
       {ticketsLink}
-      <div className="project-nav-heading">Проекты</div>
-      <nav className="project-nav">
-        {projects.map((p) => {
-          const total = p.tasks_count || 0;
-          const done = p.done_count || 0;
-          const pct = total ? Math.round((done / total) * 100) : 0;
-          return (
-            <NavLink
-              key={p.id}
-              to={`/projects/${p.id}`}
-              className={({ isActive }) => `project-nav-item${isActive ? " active" : ""}`}
-            >
-              <span className="project-nav-top">
-                <span className="project-nav-name">{p.name}</span>
-                <span className="project-nav-pct">{pct}%</span>
-              </span>
-              <span className="project-nav-meta">
-                {done}/{total} задач
-              </span>
-              <span className="project-nav-bar" aria-hidden>
-                <span style={{ width: `${pct}%` }} />
-              </span>
-            </NavLink>
-          );
-        })}
-        {projects.length === 0 && <div className="project-nav-empty">Пока нет проектов</div>}
-      </nav>
     </div>
   );
 }
