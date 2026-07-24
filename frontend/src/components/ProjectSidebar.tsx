@@ -3,7 +3,6 @@ import { NavLink, useLocation, useParams } from "react-router-dom";
 import {
   api,
   unwrapList,
-  type Paginated,
   type Project,
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
