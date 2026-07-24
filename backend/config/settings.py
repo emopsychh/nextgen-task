@@ -203,6 +203,9 @@ BITRIX_DEAL_PORTAL_LINK_FIELD = os.getenv("BITRIX_DEAL_PORTAL_LINK_FIELD", "").s
 BITRIX_COMPANY_PROJECT_ID_FIELD = os.getenv("BITRIX_COMPANY_PROJECT_ID_FIELD", "").strip()
 # CRM category (funnel) id for «Сопровождение»
 BITRIX_ACCOMPANIMENT_CATEGORY_ID = os.getenv("BITRIX_ACCOMPANIMENT_CATEGORY_ID", "").strip()
+# Optional STAGE_ID overrides in that funnel (else matched by stage NAME)
+BITRIX_DEAL_STAGE_REPORT_REVIEW = os.getenv("BITRIX_DEAL_STAGE_REPORT_REVIEW", "").strip()
+BITRIX_DEAL_STAGE_ACT_SIGNING = os.getenv("BITRIX_DEAL_STAGE_ACT_SIGNING", "").strip()
 PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "http://localhost:8000").rstrip("/")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 DEV_AUTH_BYPASS = os.getenv("DEV_AUTH_BYPASS", "0") == "1"

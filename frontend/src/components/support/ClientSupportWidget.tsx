@@ -211,7 +211,7 @@ export function ClientSupportWidget() {
 
   const myAuthorId = user?.id ?? null;
   const showChat = view === "chat" && detail;
-  const panelWide = view === "create" || showChat;
+  const panelWide = true;
 
   return (
     <div className="support-widget-root" role="dialog" aria-label="Поддержка">

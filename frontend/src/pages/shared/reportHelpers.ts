@@ -5,7 +5,7 @@ export type ReportBucket = "all" | "current" | "review" | "paid";
 export const STATUS_LABEL_RU: Record<WorkReportStatus, string> = {
   draft: "На рассмотрении руководителя",
   pending_client: "Требует рассмотрения",
-  disputed: "Оспорен",
+  disputed: "Связь с менеджером",
   accepted: "Согласован",
   paid: "Оплачен",
 };
@@ -14,7 +14,7 @@ export const EVENT_LABEL: Record<string, string> = {
   created: "Создан",
   sent: "Отправлен клиенту",
   accepted: "Клиент согласился",
-  disputed: "Клиент оспорил",
+  disputed: "Клиент связался с менеджером",
   paid: "Отмечен оплаченным",
   reopened: "Вернут на рассмотрение руководителя",
 };

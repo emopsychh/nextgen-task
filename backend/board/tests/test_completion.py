@@ -1,9 +1,9 @@
-"""Completion artifacts: chat line + Bitrix Учёт времени from app time."""
+"""Completion artifacts: stop timers + spent-time system chat line."""
 
 from __future__ import annotations
 
 from datetime import timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
@@ -54,9 +54,8 @@ class CompletionHelpersTests(TestCase):
         self.assertEqual(row.author_name, "Команда")
         self.assertIsNone(row.author_id)
 
-    @patch("board.completion.post_app_elapsed_to_bitrix", return_value={"agency": True})
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
-    def test_finalize_stops_timer_and_chats(self, _post):
+    def test_finalize_stops_timer_and_chats(self):
         task = make_task(
             self.project, created_by=self.user, status=Task.Status.DONE
         )
@@ -71,4 +70,3 @@ class CompletionHelpersTests(TestCase):
                 task=task, is_system=True, text__startswith=TIME_SPENT_MARKER
             ).exists()
         )
-        _post.assert_called_once()

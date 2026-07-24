@@ -1,11 +1,12 @@
-"""Task completion: app time → Bitrix «Учёт времени» + shared chat line.
+"""Task completion: stop timers + shared chat line with spent time.
 
 Model (locked):
-  • Start  ↔ Bitrix (bidirectional)
+  • Start  ↔ Bitrix (bidirectional status)
   • Pause  → app only (Bitrix stays «in progress»)
-  • Done   ↔ Bitrix (bidirectional)
-  • Elapsed time always comes from the app and is written into Bitrix
-    time tracking on both copies when the task becomes done.
+  • Done   ↔ Bitrix (bidirectional status)
+  • Time tracking stays in the app for clients. Bitrix «Учёт времени»
+    is filled manually in Bitrix — the app never posts elapsed items.
+  • On done, always write a system chat line with app-tracked time.
 """
 
 from __future__ import annotations
@@ -30,17 +31,6 @@ def format_tracked_duration(seconds: int) -> str:
     if minutes:
         return f"{minutes} мин"
     return f"{total} сек"
-
-
-def _ensure_time_tracking(client, bitrix_task_id: str) -> None:
-    from portals.bitrix import BitrixAPIError
-
-    try:
-        client.update_task(bitrix_task_id, {"ALLOW_TIME_TRACKING": "Y"})
-    except BitrixAPIError as exc:
-        logger.info(
-            "ALLOW_TIME_TRACKING enable failed task=%s: %s", bitrix_task_id, exc
-        )
 
 
 def append_time_spent_chat(task, *, author=None) -> bool:
@@ -71,40 +61,10 @@ def append_time_spent_chat(task, *, author=None) -> bool:
     return True
 
 
-def post_app_elapsed_to_bitrix(task) -> dict:
-    """
-    Push closed TimeEntry rows into Bitrix «Учёт времени» on the agency subtask.
-
-    Enables ALLOW_TIME_TRACKING if it was off. Idempotent via bitrix_elapsed_id.
-    Client Bitrix tasks are not used.
-    """
-    from board.status_sync import resolve_all_bitrix_task_sources
-    from board.tasks import _post_time_entries_elapsed
-    from portals.bitrix import BitrixAPIError, BitrixClient
-
-    posted = {"agency": False}
-    for portal, bitrix_id in resolve_all_bitrix_task_sources(task):
-        client = BitrixClient(portal)
-        _ensure_time_tracking(client, bitrix_id)
-        try:
-            _post_time_entries_elapsed(
-                client, str(bitrix_id), task, portal, id_attr="bitrix_elapsed_id"
-            )
-            posted["agency"] = True
-        except BitrixAPIError as exc:
-            logger.info(
-                "post elapsed failed task=%s portal=%s: %s",
-                task.id,
-                portal.id,
-                exc,
-            )
-    return posted
-
-
 def finalize_task_completion(task, *, author=None) -> dict:
     """
-    After a task becomes done (from app or Bitrix): stop timers, chat line,
-    push app time into Bitrix Учёт времени.
+    After a task becomes done (from app or Bitrix): stop timers and post
+    the spent-time system line in the shared app chat.
     Safe to call more than once.
     """
     from board.realtime import publish_task_event
@@ -119,15 +79,9 @@ def finalize_task_completion(task, *, author=None) -> dict:
 
         chat = append_time_spent_chat(task, author=author)
 
-    elapsed = {}
-    try:
-        elapsed = post_app_elapsed_to_bitrix(task)
-    except Exception:
-        logger.exception("post_app_elapsed_to_bitrix failed task=%s", task.id)
-
     try:
         publish_task_event(task, kind="task_update")
     except Exception:
         pass
 
-    return {"chat": chat, "elapsed": elapsed}
+    return {"chat": chat}

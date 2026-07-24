@@ -430,21 +430,44 @@ export function SupportTickets() {
                 const active = t.id === selectedId;
                 return (
                   <li key={t.id}>
-                    <button
-                      type="button"
+                    <div
                       className={`tickets-list-item${active ? " active" : ""}`}
+                      role="button"
+                      tabIndex={0}
                       onClick={() =>
                         navigate(ticketDetailPath(t.portal, isAgency, t.id))
                       }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          navigate(ticketDetailPath(t.portal, isAgency, t.id));
+                        }
+                      }}
                     >
                       {isAgency && t.portal_name ? (
-                        <span className="tickets-list-client">{t.portal_name}</span>
+                        <Link
+                          to={`/portals/${t.portal}`}
+                          className="tickets-list-client"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {t.portal_name}
+                        </Link>
                       ) : null}
                       <span className="tickets-list-subject">{t.subject}</span>
+                      {t.task ? (
+                        <Link
+                          to={`/tasks/${t.task}`}
+                          className="tickets-list-task"
+                          onClick={(e) => e.stopPropagation()}
+                          title={t.task_title || undefined}
+                        >
+                          Задача: {t.task_title || `#${t.task}`}
+                        </Link>
+                      ) : null}
                       <span className="tickets-list-meta">
                         {ticketStatusLabel(t.status)} · {formatDateTime(t.updated_at)}
                       </span>
-                    </button>
+                    </div>
                   </li>
                 );
               })}
@@ -465,7 +488,9 @@ export function SupportTickets() {
               <header className="tickets-detail-head">
                 <div>
                   {isAgency && detail.portal_name ? (
-                    <p className="tickets-detail-client">{detail.portal_name}</p>
+                    <p className="tickets-detail-client">
+                      <Link to={`/portals/${detail.portal}`}>{detail.portal_name}</Link>
+                    </p>
                   ) : null}
                   <h2 className="tickets-detail-title">{detail.subject}</h2>
                   <p className="tickets-detail-meta">
@@ -478,14 +503,18 @@ export function SupportTickets() {
                       {detail.created_by_name || "—"} · {formatDateTime(detail.created_at)}
                     </span>
                   </p>
-                  {(detail.project_name || detail.task_title) && (
+                  {(detail.project || detail.task) && (
                     <p className="tickets-detail-links">
                       {detail.project ? (
-                        <Link to={`/projects/${detail.project}`}>{detail.project_name}</Link>
+                        <Link to={`/projects/${detail.project}`}>
+                          Проект: {detail.project_name || `#${detail.project}`}
+                        </Link>
                       ) : null}
                       {detail.project && detail.task ? " · " : null}
                       {detail.task ? (
-                        <Link to={`/tasks/${detail.task}`}>{detail.task_title}</Link>
+                        <Link to={`/tasks/${detail.task}`}>
+                          Задача: {detail.task_title || `#${detail.task}`}
+                        </Link>
                       ) : null}
                     </p>
                   )}

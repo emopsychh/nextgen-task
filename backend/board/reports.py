@@ -1,4 +1,4 @@
-"""Work report lifecycle helpers (agency → client agree/dispute)."""
+"""Work report lifecycle helpers (agency → client agree / contact manager)."""
 
 from __future__ import annotations
 
@@ -232,6 +232,9 @@ def send_to_client(report: WorkReport, actor: BitrixUser | None) -> WorkReport:
     report.save(update_fields=["status", "sent_at", "updated_at"])
     append_event(report, WorkReportEvent.Kind.SENT, actor)
     publish_report_event(report, "report_sent")
+    from portals.deal_stage_move import STAGE_REPORT_REVIEW, schedule_deal_stage_move
+
+    schedule_deal_stage_move(report_portal_id(report), STAGE_REPORT_REVIEW)
     return refresh_report(report)
 
 
@@ -246,6 +249,9 @@ def accept_report(report: WorkReport, actor: BitrixUser | None) -> WorkReport:
     WorkReportDisputeItem.objects.filter(report=report).delete()
     append_event(report, WorkReportEvent.Kind.ACCEPTED, actor)
     publish_report_event(report, "report_accepted")
+    from portals.deal_stage_move import STAGE_ACT_SIGNING, schedule_deal_stage_move
+
+    schedule_deal_stage_move(report_portal_id(report), STAGE_ACT_SIGNING)
     return refresh_report(report)
 
 
@@ -259,10 +265,12 @@ def dispute_report(
     notes_by_task: dict[int, str] | None = None,
 ) -> WorkReport:
     if report.status != WorkReport.Status.PENDING_CLIENT:
-        raise ValidationError({"detail": "Оспорить можно только отчёт на согласовании."})
+        raise ValidationError(
+            {"detail": "Связаться с менеджером можно только по отчёту на согласовании."}
+        )
     comment = (comment or "").strip()
     if not comment:
-        raise ValidationError({"client_comment": "Укажите комментарий к спору."})
+        raise ValidationError({"client_comment": "Напишите сообщение менеджеру."})
     if not task_ids:
         raise ValidationError({"task_ids": "Выберите хотя бы одну задачу."})
 
@@ -298,6 +306,7 @@ def dispute_report(
         payload={"task_ids": task_ids, "comment": comment},
     )
     publish_report_event(report, "report_disputed")
+    # Deal stays on «Согласование отчёта» — no stage move.
     return refresh_report(report)
 
 
@@ -305,7 +314,10 @@ def dispute_report(
 def reopen_to_draft(report: WorkReport, actor: BitrixUser | None) -> WorkReport:
     if report.status != WorkReport.Status.DISPUTED:
         raise ValidationError(
-            {"detail": "Вернуть на рассмотрение руководителя можно только оспоренный отчёт."}
+            {
+                "detail": "Вернуть на рассмотрение руководителя можно только отчёт "
+                "после обращения к менеджеру."
+            }
         )
     report.status = WorkReport.Status.DRAFT
     report.save(update_fields=["status", "updated_at"])

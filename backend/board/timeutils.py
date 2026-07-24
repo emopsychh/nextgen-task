@@ -33,7 +33,7 @@ def enqueue_time_entry_billing(entry_id: int) -> None:
 
 
 def enqueue_timer_bitrix_sync(entry_id: int, action: str) -> None:
-    """Mirror timer start/stop onto Bitrix «Учёт времени» (agency subtask)."""
+    """Deprecated: Bitrix «Учёт времени» is filled manually; kept for old callers."""
     from board.tasks import sync_timer_to_bitrix
 
     if settings.CELERY_TASK_ALWAYS_EAGER:
@@ -51,9 +51,9 @@ def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: boo
     entry.ended_at = end
     entry.duration_seconds = duration
     entry.save(update_fields=["ended_at", "duration_seconds", "updated_at"])
-    # No live Bitrix timer sync here: elapsed time is posted to Bitrix «Учёт
-    # времени» only when the task is completed (board.tasks._post_time_entries_elapsed).
-    # `sync_bitrix` is kept for call-site compatibility but no longer pushes a timer.
+    # App-only time: never push elapsed items to Bitrix. Spent time is shown
+    # to clients in the app and posted as a system chat line on completion.
+    # `sync_bitrix` kept for call-site compatibility.
     _ = sync_bitrix
     if bill and duration > 0 and getattr(entry, "billed_to_deal_at", None) is None:
         enqueue_time_entry_billing(entry.id)

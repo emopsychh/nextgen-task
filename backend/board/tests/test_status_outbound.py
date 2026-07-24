@@ -72,6 +72,7 @@ class OutboundStatusPushTests(TestCase):
         self.assertTrue(res["ok"])
         client.complete_task.assert_called_once()
         client.pause_task_timer.assert_called()
+        client.add_elapsed_item.assert_not_called()
 
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
     def test_start_calls_bitrix_start_when_pending(self):
@@ -87,40 +88,6 @@ class OutboundStatusPushTests(TestCase):
             res = board_tasks.sync_task_to_bitrix(task.id)
         self.assertTrue(res["ok"])
         client.start_task.assert_called()
-
-    def test_post_elapsed_is_idempotent(self):
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        from board.models import TimeEntry
-
-        task = make_task(
-            self.project,
-            created_by=self.user,
-            status=Task.Status.DONE,
-            agency_bitrix_task_id="108",
-        )
-        start = timezone.now() - timedelta(seconds=120)
-        TimeEntry.objects.create(
-            task=task,
-            author=self.user,
-            started_at=start,
-            ended_at=start + timedelta(seconds=120),
-            duration_seconds=120,
-        )
-        client = MagicMock()
-        client.add_elapsed_item.return_value = "555"
-
-        board_tasks._post_time_entries_elapsed(client, "108", task, self.agency)
-        client.add_elapsed_item.assert_called_once()
-        args, kwargs = client.add_elapsed_item.call_args
-        self.assertEqual(args[0], "108")
-        self.assertEqual(args[1], 120)
-        self.assertEqual(kwargs.get("comment"), "")
-
-        board_tasks._post_time_entries_elapsed(client, "108", task, self.agency)
-        client.add_elapsed_item.assert_called_once()
 
     def test_agency_responsible_is_agency_oauth_user_not_client_author(self):
         task = make_task(

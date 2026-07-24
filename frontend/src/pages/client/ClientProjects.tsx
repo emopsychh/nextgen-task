@@ -332,7 +332,7 @@ export function ClientProjects() {
           <h1 className="page-title">{isAgency ? titleName : "Рабочее пространство"}</h1>
           <p className="page-sub">
             {isAgency
-              ? "Часы, споры, активные проекты и горящие сроки"
+              ? "Часы, обращения по отчётам, активные проекты и горящие сроки"
               : "Часы, проекты в работе и недавно завершённое"}
           </p>
         </div>
@@ -423,8 +423,8 @@ export function ClientProjects() {
           {!agencyNeedsAttention ? (
             <div className="empty-linked workspace-empty">
               <p className="muted">
-                Нет споров, активных проектов и горящих сроков. Полный список — во вкладке
-                «Проекты».
+                Нет обращений по отчётам, активных проектов и горящих сроков. Полный список — во
+                вкладке «Проекты».
               </p>
             </div>
           ) : (
@@ -437,10 +437,10 @@ export function ClientProjects() {
                         <span className="workspace-dispute-badge" aria-hidden>
                           <DisputeIcon size={15} />
                         </span>
-                        <span>На споре</span>
+                        <span>Связь с менеджером</span>
                       </h2>
                     </div>
-                    <p className="muted">Клиент оспорил отчёт — нужно разобрать</p>
+                    <p className="muted">Клиент написал по отчёту — нужно разобрать</p>
                   </div>
                   <div className="workspace-attention-list">
                     {disputedReports.map((r) => (
@@ -450,7 +450,7 @@ export function ClientProjects() {
                         className="workspace-attention-card is-dispute"
                       >
                         <div className="workspace-attention-top">
-                          <span className="workspace-dispute-pill">Оспорен</span>
+                          <span className="workspace-dispute-pill">Обсуждение</span>
                           <span className="muted">Отчёт №{r.id}</span>
                         </div>
                         <span className="muted">Открыть и разобрать</span>

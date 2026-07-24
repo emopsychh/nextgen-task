@@ -493,7 +493,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             author=author,
             started_at=timezone.now(),
         )
-        # No live Bitrix timer — elapsed time is posted on completion.
+        # App-only timer — Bitrix «Учёт времени» is filled manually.
         task.refresh_from_db()
         return Response(TaskSerializer(task, context={"request": request}).data)
 

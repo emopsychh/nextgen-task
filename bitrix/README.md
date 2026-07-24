@@ -31,9 +31,16 @@ BITRIX_DEAL_REMAINING_HOURS_FIELD=UF_CRM_…
 BITRIX_DEAL_PORTAL_LINK_FIELD=UF_CRM_1784732110930
 BITRIX_COMPANY_PROJECT_ID_FIELD=UF_CRM_1784732577491
 BITRIX_ACCOMPANIMENT_CATEGORY_ID=…
+BITRIX_DEAL_STAGE_REPORT_REVIEW=…   # «Согласование отчёта» (или пусто — поиск по имени)
+BITRIX_DEAL_STAGE_ACT_SIGNING=…     # «Подписание акта» (или пусто — поиск по имени)
 ```
 
 `CATEGORY_ID` воронки смотрите в URL CRM или через `crm.category.list` / настройки воронки.
+`STAGE_ID` стадий — в настройках воронки или через `crm.status.list` (`ENTITY_ID=DEAL_STAGE_{category}`).
+
+При **отправке отчёта клиенту** сделка переходит на «Согласование отчёта»;
+когда клиент **согласен** — на «Подписание акта».
+Обращение к менеджеру по отчёту стадию не меняет.
 
 При паузе/завершении задачи (закрытии сессии таймера) остаток уменьшается; оплаченные не трогаем.  
 Сделка находится автоматически по полю **«Ссылка на портал Битрикс24»** (`BITRIX_DEAL_PORTAL_LINK_FIELD`).  

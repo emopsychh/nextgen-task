@@ -155,8 +155,8 @@ export function ReportDetail() {
         client_comment: disputeComment.trim(),
         task_ids: Array.from(selectedTasks),
       },
-      "Отчёт оспорен",
-      "Агентство получит список вопросов"
+      "Сообщение отправлено",
+      "Менеджер увидит задачи и комментарий"
     );
   }
 
@@ -286,7 +286,7 @@ export function ReportDetail() {
                   disabled={busy}
                   onClick={() => setShowDispute((v) => !v)}
                 >
-                  {showDispute ? "Отмена" : "Оспорить"}
+                  {showDispute ? "Отмена" : "Связаться с менеджером"}
                 </button>
               </>
             ) : null}
@@ -348,9 +348,9 @@ export function ReportDetail() {
                 <DisputeIcon size={15} />
               </span>
               <div>
-                <h3 className="report-dispute-form-title">Оспорить отчёт</h3>
+                <h3 className="report-dispute-form-title">Связаться с менеджером</h3>
                 <p className="muted report-dispute-form-sub">
-                  Отметьте задачи с вопросами и коротко опишите претензию
+                  Отметьте задачи для обсуждения и коротко опишите вопрос
                 </p>
               </div>
             </div>
@@ -412,7 +412,7 @@ export function ReportDetail() {
                 rows={4}
                 value={disputeComment}
                 onChange={(e) => setDisputeComment(e.target.value)}
-                placeholder="Что не так? Что нужно переделать?"
+                placeholder="Что обсудить? Какой вопрос по задачам?"
               />
             </div>
 
@@ -437,7 +437,7 @@ export function ReportDetail() {
                 }
                 onClick={() => void submitDispute()}
               >
-                Отправить спор
+                Отправить менеджеру
               </button>
             </div>
           </div>
@@ -446,11 +446,11 @@ export function ReportDetail() {
         <div className="report-section">
           <div className="report-section-head">
             <h2 className="report-section-title">
-              {detail.status === "disputed" ? "Оспоренные задачи" : "Проекты и итоги"}
+              {detail.status === "disputed" ? "Задачи к обсуждению" : "Проекты и итоги"}
             </h2>
             {detail.status === "disputed" ? (
               <p className="muted report-dispute-scope-hint">
-                Показаны только задачи, которые клиент отметил в споре
+                Показаны только задачи, которые клиент отметил для обсуждения
               </p>
             ) : (
               <div className="report-task-filters" role="group" aria-label="Фильтр задач">

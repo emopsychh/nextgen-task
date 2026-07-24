@@ -6153,8 +6153,9 @@ a.task-card.is-done:hover,
   transition: background 0.12s ease;
 }
 
-.tickets-list-item:hover {
-  background: rgba(0, 0, 0, 0.04);
+.tickets-list-item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
 }
 
 .tickets-list-item.active {
@@ -6167,6 +6168,12 @@ a.task-card.is-done:hover,
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--accent);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.tickets-list-client:hover {
+  text-decoration: underline;
 }
 
 .tickets-list-subject {
@@ -6178,6 +6185,22 @@ a.task-card.is-done:hover,
 .tickets-list-meta {
   font-size: 0.78rem;
   color: var(--ink-muted);
+}
+
+.tickets-list-task {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tickets-list-task:hover {
+  text-decoration: underline;
 }
 
 .tickets-detail-pane {
@@ -6215,7 +6238,15 @@ a.task-card.is-done:hover,
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.tickets-detail-client a {
   color: var(--accent);
+  text-decoration: none;
+}
+
+.tickets-detail-client a:hover {
+  text-decoration: underline;
 }
 
 .tickets-detail-title {
@@ -6357,8 +6388,8 @@ a.task-card.is-done:hover,
 
 .support-widget {
   pointer-events: auto;
-  width: min(340px, calc(100vw - 40px));
-  max-height: min(560px, calc(100vh - 40px));
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 32px));
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -6370,7 +6401,7 @@ a.task-card.is-done:hover,
 }
 
 .support-widget.is-wide {
-  width: min(420px, calc(100vw - 40px));
+  width: min(520px, calc(100vw - 32px));
 }
 
 @keyframes support-widget-in {
@@ -6389,7 +6420,7 @@ a.task-card.is-done:hover,
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: min(560px, calc(100vh - 40px));
+  max-height: min(720px, calc(100vh - 32px));
   flex: 1;
 }
 
@@ -6454,7 +6485,7 @@ a.task-card.is-done:hover,
 .support-widget-scroll {
   flex: 1;
   overflow-y: auto;
-  min-height: 180px;
+  min-height: 260px;
 }
 
 .support-widget-empty {

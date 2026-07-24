@@ -241,10 +241,10 @@ class BitrixClient:
         comment: str = "",
         user_id: str | None = None,
     ) -> dict | str | int:
-        """Post a closed time record into Bitrix task elapsed items.
+        """Unused by the app: Bitrix «Учёт времени» is filled manually.
 
-        Keep COMMENT_TEXT empty by default — a non-empty comment makes Bitrix
-        spam the task chat with «вручную добавил время…».
+        Kept on the client for ad-hoc/admin use. Prefer empty COMMENT_TEXT —
+        a non-empty comment makes Bitrix spam the task chat.
         """
         fields: dict = {
             "SECONDS": max(0, int(seconds)),

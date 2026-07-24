@@ -698,6 +698,7 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     portal_name = serializers.SerializerMethodField()
     project_name = serializers.SerializerMethodField()
+    task_title = serializers.SerializerMethodField()
     message_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -711,6 +712,7 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
             "project",
             "project_name",
             "task",
+            "task_title",
             "created_by",
             "created_by_name",
             "message_count",
@@ -733,6 +735,11 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
     def get_project_name(self, obj):
         if obj.project_id:
             return obj.project.name
+        return ""
+
+    def get_task_title(self, obj):
+        if obj.task_id:
+            return obj.task.title
         return ""
 
     def get_message_count(self, obj):

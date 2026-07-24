@@ -126,7 +126,7 @@ def _task_fields(
         fields["GROUP_ID"] = group_id
     if parent_id:
         fields["PARENT_ID"] = parent_id
-    # Enable Bitrix «Учёт времени» so startTimer/pauseTimer work in the UI
+    # Keep Bitrix «Учёт времени» enabled so the team can enter time manually there.
     fields["ALLOW_TIME_TRACKING"] = "Y"
     # Bitrix PRIORITY: 2 = High («важная»), 1 = Normal. Mirror the local flag.
     fields["PRIORITY"] = "2" if getattr(task, "is_important", False) else "1"
@@ -171,7 +171,7 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
       • todo (pause)     → no-op. Bitrix stays «in progress»; pause is app-only.
       • in_progress      → start Bitrix if not already in progress (resume after
                            local pause is a no-op when Bitrix is already running).
-      • done             → complete Bitrix (elapsed time is posted by the caller).
+      • done             → complete Bitrix (app never posts «Учёт времени»).
 
     Never push pause/todo — that was the source of status ping-pong.
     """
@@ -211,94 +211,6 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         client.start_task(bitrix_task_id)
     except BitrixAPIError:
         pass
-
-
-def _extract_elapsed_id(result) -> str:
-    if isinstance(result, bool):
-        return ""
-    if isinstance(result, (int, float)):
-        return str(int(result))
-    if isinstance(result, str) and result.isdigit():
-        return result
-    if isinstance(result, dict):
-        for key in ("id", "ID", "result"):
-            val = result.get(key)
-            if isinstance(val, (int, float)):
-                return str(int(val))
-            if isinstance(val, str) and val.isdigit():
-                return val
-    return ""
-
-
-def _post_time_entries_elapsed(
-    client: BitrixClient,
-    bitrix_task_id: str,
-    task,
-    portal,
-    *,
-    id_attr: str = "bitrix_elapsed_id",
-) -> None:
-    """Post local time into Bitrix «Учёт времени» as ONE rollup record.
-
-    One add → one Bitrix activity line at most (and with empty COMMENT_TEXT so
-    the chat is not spammed with «вручную добавил время… Nextgen: …»).
-    Idempotent via `id_attr` on TimeEntry rows.
-    """
-    from django.db.models import Q
-
-    if id_attr not in ("bitrix_elapsed_id", "client_bitrix_elapsed_id"):
-        id_attr = "bitrix_elapsed_id"
-
-    try:
-        client.update_task(bitrix_task_id, {"ALLOW_TIME_TRACKING": "Y"})
-    except BitrixAPIError:
-        pass
-
-    entries = list(
-        task.time_entries.filter(ended_at__isnull=False)
-        .filter(Q(**{id_attr: ""}) | Q(**{f"{id_attr}__isnull": True}))
-        .order_by("id")
-    )
-    if not entries:
-        return
-
-    total = 0
-    user_id = ""
-    for entry in entries:
-        seconds = int(entry.duration_seconds or 0)
-        if seconds <= 0 and entry.ended_at and entry.started_at:
-            seconds = max(0, int((entry.ended_at - entry.started_at).total_seconds()))
-        total += max(0, seconds)
-        if (
-            not user_id
-            and entry.author
-            and entry.author.portal_id == portal.id
-            and entry.author.bitrix_id
-        ):
-            user_id = str(entry.author.bitrix_id)
-
-    if total <= 0:
-        # Nothing billable — mark as synced so we don't retry forever.
-        for entry in entries:
-            setattr(entry, id_attr, "0")
-            entry.save(update_fields=[id_attr, "updated_at"])
-        return
-
-    try:
-        result = client.add_elapsed_item(
-            bitrix_task_id,
-            total,
-            comment="",  # empty → no «Nextgen: …» in Bitrix task chat
-            user_id=user_id or None,
-        )
-    except BitrixAPIError as exc:
-        logger.info("elapsed add failed task=%s: %s", task.id, exc)
-        return
-
-    eid = _extract_elapsed_id(result) or "posted"
-    for entry in entries:
-        setattr(entry, id_attr, eid)
-        entry.save(update_fields=[id_attr, "updated_at"])
 
 
 def _ensure_project_agency_parent(project) -> tuple[str, str]:
@@ -362,12 +274,6 @@ def _sync_one_portal(
         task.title = title
         task.save(update_fields=["title", "updated_at"])
 
-    elapsed_attr = (
-        "client_bitrix_elapsed_id"
-        if portal.id == task.project.portal_id
-        else "bitrix_elapsed_id"
-    )
-
     if existing_id:
         push_deadline = _deadline_needs_push(client, existing_id, task.due_date)
         fields = _task_fields(
@@ -388,11 +294,8 @@ def _sync_one_portal(
         )
         client.update_task(existing_id, fields)
         # Only push status on explicit local→Bitrix sync (PENDING).
+        # Time tracking is app-only; Bitrix «Учёт времени» is filled manually.
         if task.sync_status == task.SyncStatus.PENDING:
-            if task.status == "done":
-                _post_time_entries_elapsed(
-                    client, existing_id, task, portal, id_attr=elapsed_attr
-                )
             try:
                 apply_bitrix_status(client, existing_id, task.status)
             except BitrixAPIError as exc:
@@ -411,10 +314,6 @@ def _sync_one_portal(
     result = client.create_task(fields)
     bitrix_id = _extract_bitrix_id(result)
     if bitrix_id and task.status != "todo":
-        if task.status == "done":
-            _post_time_entries_elapsed(
-                client, bitrix_id, task, portal, id_attr=elapsed_attr
-            )
         try:
             apply_bitrix_status(client, bitrix_id, task.status)
         except BitrixAPIError as exc:
@@ -1004,123 +903,13 @@ def post_time_entry_to_deal(self, entry_id: int):
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=5)
 def sync_timer_to_bitrix(self, entry_id: int, action: str):
-    """
-    Mirror app timer onto Bitrix task «Учёт времени» (agency subtask).
-    action: start | stop
-    """
-    from board.models import TimeEntry
-
-    try:
-        entry = TimeEntry.objects.select_related(
-            "task",
-            "task__project",
-            "task__project__portal",
-            "author",
-        ).get(pk=entry_id)
-    except TimeEntry.DoesNotExist:
-        return {"ok": False, "reason": "missing"}
-
-    task = entry.task
-    agency = _agency_portal_for_client(task.project.portal)
-    bitrix_id = task.agency_bitrix_task_id or ""
-    if not agency or not agency.access_token or not bitrix_id:
-        # Ensure agency Bitrix task exists, then retry
-        if agency and agency.access_token:
-            try:
-                parent_id, group_id = _ensure_project_agency_parent(task.project)
-                bx = _sync_one_portal(
-                    task,
-                    agency,
-                    existing_id=task.agency_bitrix_task_id or "",
-                    group_id=group_id,
-                    parent_id=parent_id,
-                    crm_bindings=_crm_deal_uf_bindings(task.project.portal) or None,
-                )
-                if bx and bx != task.agency_bitrix_task_id:
-                    task.agency_bitrix_task_id = bx
-                    task.save(update_fields=["agency_bitrix_task_id", "updated_at"])
-                    bitrix_id = bx
-            except Exception as exc:
-                try:
-                    raise self.retry(exc=exc)
-                except self.MaxRetriesExceededError:
-                    return {"ok": False, "reason": "no_agency_task", "error": str(exc)}
-        if not bitrix_id:
-            return {"ok": False, "reason": "no_agency_task"}
-
-    client = BitrixClient(agency)
-    try:
-        # Keep time tracking enabled on the Bitrix task
-        try:
-            client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
-        except BitrixAPIError:
-            pass
-
-        if action == "start":
-            # Status is applied by sync_task_to_bitrix — only drive Учёт времени here.
-            client.start_task_timer(bitrix_id)
-            return {"ok": True, "action": "start", "bitrix_task_id": bitrix_id}
-
-        if action == "stop":
-            paused_ok = False
-            try:
-                client.pause_task_timer(bitrix_id)
-                paused_ok = True
-            except BitrixAPIError as exc:
-                logger = __import__("logging").getLogger(__name__)
-                logger.info(
-                    "pauseTimer failed task=%s: %s — will post elapseditem", bitrix_id, exc
-                )
-
-            seconds = int(entry.duration_seconds or 0)
-            if seconds <= 0 and entry.ended_at and entry.started_at:
-                seconds = max(0, int((entry.ended_at - entry.started_at).total_seconds()))
-            # If live Bitrix timer couldn't be paused, post a closed elapsed record
-            if (not paused_ok) and seconds > 0 and not entry.bitrix_elapsed_id:
-                user_id = ""
-                if entry.author and entry.author.portal_id == agency.id:
-                    user_id = str(entry.author.bitrix_id or "")
-                if not user_id:
-                    user_id = _bitrix_user_id(client.get_current_user())
-                result = client.add_elapsed_item(
-                    bitrix_id,
-                    seconds,
-                    comment="",
-                    user_id=user_id or None,
-                )
-                eid = ""
-                if isinstance(result, (int, float)):
-                    eid = str(int(result))
-                elif isinstance(result, str) and result.isdigit():
-                    eid = result
-                elif isinstance(result, dict):
-                    for key in ("id", "ID", "result"):
-                        val = result.get(key)
-                        if isinstance(val, (int, float)):
-                            eid = str(int(val))
-                            break
-                        if isinstance(val, str) and val.isdigit():
-                            eid = val
-                            break
-                if eid:
-                    entry.bitrix_elapsed_id = eid
-                    entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
-            # Do not pause_task here — status sync owns start/pause/complete.
-            return {
-                "ok": True,
-                "action": "stop",
-                "bitrix_task_id": bitrix_id,
-                "seconds": seconds,
-                "timer_paused": paused_ok,
-                "elapsed_id": entry.bitrix_elapsed_id,
-            }
-
-        return {"ok": False, "reason": "unknown_action", "action": action}
-    except BitrixAPIError as exc:
-        try:
-            raise self.retry(exc=exc)
-        except self.MaxRetriesExceededError:
-            return {"ok": False, "error": str(exc)}
+    """Deprecated no-op: Bitrix «Учёт времени» is filled manually, not from the app."""
+    return {
+        "ok": True,
+        "skipped": "bitrix_time_manual",
+        "entry_id": entry_id,
+        "action": action,
+    }
 
 
 # Backwards-compatible alias (no longer used for hour deduction)
