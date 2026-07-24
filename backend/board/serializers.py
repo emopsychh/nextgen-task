@@ -307,6 +307,21 @@ class TaskSerializer(serializers.ModelSerializer):
             return None
         return float(binding.remaining_hours)
 
+    def validate(self, attrs):
+        instance = self.instance
+        new_status = attrs.get("status", instance.status if instance else None)
+        if new_status == Task.Status.DONE:
+            old_status = instance.status if instance else None
+            if old_status != Task.Status.DONE:
+                outcome = attrs.get("outcome", None)
+                if outcome is None and instance is not None:
+                    outcome = instance.outcome
+                if not (outcome or "").strip():
+                    raise serializers.ValidationError(
+                        {"outcome": "Укажите итог работы перед завершением задачи."}
+                    )
+        return attrs
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["title"] = _clean_task_title(instance)

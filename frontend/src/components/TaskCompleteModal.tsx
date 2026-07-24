@@ -53,7 +53,9 @@ export function TaskCompleteModal({
           Краткий итог по «{taskTitle}». Он сохранится в задаче и попадёт в отчёт.
         </p>
         <div className="field">
-          <label htmlFor="complete-outcome-text">Итог</label>
+          <label htmlFor="complete-outcome-text">
+            Итог <span className="complete-outcome-required">обязательно</span>
+          </label>
           <textarea
             id="complete-outcome-text"
             rows={5}
@@ -61,8 +63,13 @@ export function TaskCompleteModal({
             onChange={(e) => setOutcome(e.target.value)}
             placeholder="Например: настроили оплату, проверили на стенде, отдали клиенту…"
             autoFocus
+            required
+            aria-required="true"
             disabled={busy}
           />
+          {!trimmed ? (
+            <p className="complete-outcome-hint muted">Без итога задачу завершить нельзя</p>
+          ) : null}
         </div>
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
@@ -72,7 +79,10 @@ export function TaskCompleteModal({
             type="button"
             className="btn btn-accent"
             disabled={busy || !trimmed}
-            onClick={() => onConfirm(trimmed)}
+            onClick={() => {
+              if (!trimmed) return;
+              onConfirm(trimmed);
+            }}
           >
             {busy ? "Сохраняем…" : "Завершить"}
           </button>

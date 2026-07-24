@@ -5548,6 +5548,20 @@ a.task-card.is-done:hover,
   text-align: left;
 }
 
+.complete-outcome-required {
+  margin-left: 6px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: #9a4a2e;
+  letter-spacing: 0.01em;
+  text-transform: lowercase;
+}
+
+.complete-outcome-hint {
+  margin: 6px 0 0;
+  font-size: 0.84rem;
+}
+
 .complete-outcome-modal textarea {
   resize: none;
   min-height: 120px;

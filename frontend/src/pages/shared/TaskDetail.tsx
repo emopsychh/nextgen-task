@@ -404,16 +404,21 @@ export function TaskDetail() {
 
   async function completeWithOutcome(outcome: string) {
     if (!token || !task || !canChangeStatus) return;
+    const trimmed = outcome.trim();
+    if (!trimmed) {
+      setError("Укажите итог работы перед завершением");
+      return;
+    }
     const prev = task;
     const optimisticAt = new Date().toISOString();
-    setTask({ ...task, status: "done", outcome, updated_at: optimisticAt });
-    setDraftOutcome(outcome);
+    setTask({ ...task, status: "done", outcome: trimmed, updated_at: optimisticAt });
+    setDraftOutcome(trimmed);
     setSaveBusy(true);
     setError(null);
     try {
       const updated = await api<Task>(
         `/api/tasks/${task.id}/`,
-        { method: "PATCH", body: JSON.stringify({ status: "done", outcome }) },
+        { method: "PATCH", body: JSON.stringify({ status: "done", outcome: trimmed }) },
         token
       );
       setTask(updated);

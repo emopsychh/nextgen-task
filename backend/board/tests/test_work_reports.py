@@ -182,3 +182,20 @@ class WorkReportApiTests(TestCase):
         self.assertEqual(res.data["outcome"], "Сделали интеграцию")
         task.refresh_from_db()
         self.assertEqual(task.outcome, "Сделали интеграцию")
+
+    def test_complete_requires_outcome(self):
+        from unittest.mock import patch
+
+        task = make_task(self.project, title="Без итога", status="in_progress")
+        with patch("board.views.enqueue_bitrix_sync"), patch(
+            "board.views.append_task_change_events"
+        ), patch("board.completion.finalize_task_completion"):
+            res = self.agency_client.patch(
+                f"/api/tasks/{task.id}/",
+                {"status": "done", "outcome": ""},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 400, res.content)
+        task.refresh_from_db()
+        self.assertEqual(task.status, "in_progress")
+        self.assertFalse((task.outcome or "").strip())
