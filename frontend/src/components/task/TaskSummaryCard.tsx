@@ -2,9 +2,10 @@ import { Link } from "react-router-dom";
 import type { Task, TaskStatus } from "../../api/types";
 import { DueDatePicker } from "../DueDatePicker";
 import { FlameIcon } from "../icons";
-import { formatClock, formatDateTime, formatDueFull } from "../../lib/format";
+import { formatDateTime, formatDueFull } from "../../lib/format";
 import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import type { DueTone } from "../../lib/dates";
+import { AutoGrowTextarea } from "./AutoGrowTextarea";
 import { TaskTimer } from "./TaskTimer";
 
 type Props = {
@@ -103,15 +104,23 @@ export function TaskSummaryCard({
         ) : null}
       </div>
 
+      <div className="task-meta-status-line">
+        <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
+          {STATUS_LABEL[task.status]}
+        </span>
+        {overdue ? <span className="task-status-pill status-overdue">Опаздывает</span> : null}
+      </div>
+
       <div className="task-meta-section">
         <div className="task-meta-section-label">Описание</div>
         {canManage ? (
-          <textarea
+          <AutoGrowTextarea
             className={`task-meta-desc-input${!draftDescription.trim() ? " is-empty" : ""}`}
             value={draftDescription}
             onChange={(e) => onDraftDescription(e.target.value)}
             onBlur={() => onCommitDescription()}
-            rows={3}
+            minRows={2}
+            maxHeight={180}
             placeholder="Добавить описание…"
             disabled={saveBusy}
             aria-label="Описание задачи"
@@ -131,7 +140,7 @@ export function TaskSummaryCard({
           </dd>
         </div>
         <div className="task-meta-row task-meta-row-due">
-          <dt>Крайний срок</dt>
+          <dt>Срок</dt>
           <dd>
             {canEditDueDate ? (
               <DueDatePicker
@@ -148,8 +157,8 @@ export function TaskSummaryCard({
             )}
           </dd>
         </div>
-        <div className="task-meta-row">
-          <dt>Учёт времени</dt>
+        <div className="task-meta-row task-meta-row-timer">
+          <dt>Время</dt>
           <dd className="task-meta-timer">
             <TaskTimer
               closedSeconds={task.total_tracked_seconds || 0}
@@ -161,19 +170,6 @@ export function TaskSummaryCard({
           </dd>
         </div>
         <div className="task-meta-row">
-          <dt>Статус</dt>
-          <dd>
-            <div className="task-status-group">
-              <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
-                {STATUS_LABEL[task.status]}
-              </span>
-              {overdue ? (
-                <span className="task-status-pill status-overdue">Опаздывает</span>
-              ) : null}
-            </div>
-          </dd>
-        </div>
-        <div className="task-meta-row">
           <dt>Проект</dt>
           <dd>
             <Link to={`/projects/${task.project}`} className="task-meta-link">
@@ -182,7 +178,7 @@ export function TaskSummaryCard({
           </dd>
         </div>
         <div className="task-meta-row">
-          <dt>Дата создания</dt>
+          <dt>Создана</dt>
           <dd>
             {formatDateTime(task.created_at)}
             <span className="task-meta-id muted"> · #{task.id}</span>
@@ -192,14 +188,15 @@ export function TaskSummaryCard({
 
       {task.status === "done" || draftOutcome.trim() || task.outcome?.trim() ? (
         <div className="task-meta-section">
-          <div className="task-meta-section-label">Итог работы</div>
+          <div className="task-meta-section-label">Итог</div>
           {canManage && onDraftOutcome && onCommitOutcome ? (
-            <textarea
+            <AutoGrowTextarea
               className={`task-meta-desc-input${!draftOutcome.trim() ? " is-empty" : ""}`}
               value={draftOutcome}
               onChange={(e) => onDraftOutcome(e.target.value)}
               onBlur={() => onCommitOutcome()}
-              rows={3}
+              minRows={2}
+              maxHeight={180}
               placeholder="Что сделано по задаче…"
               disabled={saveBusy}
               aria-label="Итог работы"
@@ -266,8 +263,6 @@ export function TaskSummaryCard({
           )}
         </div>
       ) : null}
-
-      <time className="task-meta-time muted">{formatClock(task.created_at)}</time>
     </aside>
   );
 }

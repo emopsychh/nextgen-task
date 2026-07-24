@@ -4225,9 +4225,10 @@ a.task-card.is-done:hover,
   font-style: italic;
 }
 
-.task-meta-desc-input {
+.task-meta-desc-input,
+.auto-grow-textarea.task-meta-desc-input {
   width: 100%;
-  min-height: 72px;
+  min-height: 0;
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -4235,8 +4236,11 @@ a.task-card.is-done:hover,
   font: inherit;
   font-size: 0.9rem;
   line-height: 1.4;
-  resize: vertical;
+  resize: none;
+  overflow: hidden;
+  field-sizing: content;
   color: inherit;
+  box-sizing: border-box;
 }
 
 .task-meta-desc-input.is-empty {
@@ -4255,6 +4259,14 @@ a.task-card.is-done:hover,
 
 .task-meta-desc-input:disabled {
   opacity: 0.65;
+}
+
+.task-meta-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -4px;
 }
 
 .task-meta-fields {
@@ -4303,6 +4315,10 @@ a.task-card.is-done:hover,
   margin: 0;
 }
 
+.task-meta-row-timer {
+  align-items: center;
+}
+
 .task-meta-link {
   color: inherit;
   font-weight: 650;
@@ -4323,12 +4339,14 @@ a.task-card.is-done:hover,
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 2px;
+  padding-top: 4px;
 }
 
-.task-meta-time {
-  margin-top: auto;
-  font-size: 0.75rem;
+.task-meta-actions .btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
 }
 
 .task-chat-pane {
@@ -4728,83 +4746,93 @@ a.task-card.is-done:hover,
 }
 
 .task-timer-scale {
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: linear-gradient(180deg, #f4faf8 0%, #eef6f3 100%);
-  border: 1px solid #d7e8e2;
-}
-
-.task-timer-scale.is-running {
-  border-color: #b7dfd3;
-  background: linear-gradient(180deg, #e9f7f2 0%, #dff3ec 100%);
-}
-
-.task-timer-scale.is-over {
-  border-color: #e8c9c9;
-  background: linear-gradient(180deg, #fdf6f6 0%, #f8eeee 100%);
-}
-
-.task-timer-scale-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 8px 16px;
-  margin-bottom: 12px;
-}
-
-.task-timer-scale-main {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.task-timer-scale.is-running,
+.task-timer-scale.is-over {
+  border: none;
+  background: transparent;
+}
+
+.task-timer-scale-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
 }
 
 .task-timer-scale-clock {
   font-family: var(--display);
-  font-size: 1.35rem;
-  font-weight: 700;
-  letter-spacing: -0.03em;
+  font-size: 0.98rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
-  line-height: 1.1;
+  line-height: 1.15;
+  flex-shrink: 0;
 }
 
 .task-timer-scale.is-running .task-timer-scale-clock {
   color: #0c6b58;
 }
 
-.task-timer-scale-status {
-  font-size: 0.78rem;
-  color: var(--ink-muted);
+.task-timer-scale.is-over .task-timer-scale-clock {
+  color: #b42318;
 }
 
 .task-timer-scale-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  font-size: 0.78rem;
+  min-width: 0;
+  font-size: 0.72rem;
   font-weight: 650;
   color: #3d5c54;
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.task-timer-scale-remain {
-  font-weight: 600;
+.task-timer-scale-meta.is-muted {
+  font-weight: 550;
   color: var(--ink-muted);
 }
 
+.task-timer-scale-meta.is-live {
+  color: #0c6b58;
+}
+
+.task-timer-scale-sep {
+  margin: 0 2px;
+  opacity: 0.55;
+  font-weight: 550;
+}
+
+.task-timer-scale-remain {
+  font-weight: 550;
+  color: var(--ink-muted);
+}
+
+.task-timer-scale.is-over .task-timer-scale-remain {
+  color: #b42318;
+}
+
 .task-timer-track {
-  height: 8px;
+  height: 5px;
   border-radius: 999px;
   background: rgba(15, 109, 93, 0.12);
   overflow: hidden;
 }
 
 .task-timer-track.is-empty {
-  background: rgba(18, 20, 22, 0.06);
+  background: rgba(18, 20, 22, 0.07);
 }
 
 .task-timer-fill {
@@ -4816,11 +4844,11 @@ a.task-card.is-done:hover,
 }
 
 .task-timer-scale.is-running .task-timer-fill {
-  box-shadow: 0 0 12px rgba(31, 158, 138, 0.45);
+  box-shadow: 0 0 8px rgba(31, 158, 138, 0.35);
 }
 
 .task-timer-fill.is-soft {
-  background: rgba(18, 20, 22, 0.18);
+  background: rgba(18, 20, 22, 0.2);
 }
 
 .task-timer-scale.is-over .task-timer-fill {
