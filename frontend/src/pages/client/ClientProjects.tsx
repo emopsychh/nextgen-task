@@ -18,6 +18,17 @@ import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { useWorkspaceDismissals } from "../../hooks/useWorkspaceDismissals";
 import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
 import { formatDueFull } from "../../lib/format";
+import {
+  getPortalLabel,
+  PORTAL_LABEL_EVENT,
+  portalDisplayName,
+  setPortalLabel,
+} from "../../lib/portalLabelCache";
+import {
+  CACHE_DEAL_HOURS,
+  readPortalCache,
+  writePortalCache,
+} from "../../lib/portalSessionCache";
 import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
 import {
   reportDetailPath,
@@ -117,19 +128,86 @@ export function ClientProjects() {
   const loadGenRef = useRef(0);
   const loadInFlightRef = useRef(false);
 
+  // Paint portal title immediately — don't wait for tasks Promise.all
+  useEffect(() => {
+    if (!portalId) {
+      setPortalInfo(null);
+      return;
+    }
+    if (!isAgency && portal) {
+      setPortalInfo(portal);
+      const label = portalDisplayName(portal);
+      if (label) setPortalLabel(portal.id, label);
+      return;
+    }
+    const cached = getPortalLabel(portalId);
+    if (cached) {
+      setPortalInfo({
+        id: portalId,
+        name: cached,
+        domain: "",
+        role: "client",
+        member_id: "",
+        is_active: true,
+      } as Portal);
+    }
+  }, [portalId, isAgency, portal]);
+
+  useEffect(() => {
+    if (!isAgency || !portalId) return;
+    const onLabel = (event: Event) => {
+      const detail = (event as CustomEvent<{ portalId: number; label: string }>).detail;
+      if (!detail || detail.portalId !== portalId) return;
+      setPortalInfo((prev) =>
+        prev && prev.id === portalId
+          ? { ...prev, name: detail.label }
+          : ({
+              id: portalId,
+              name: detail.label,
+              domain: "",
+              role: "client",
+              member_id: "",
+              is_active: true,
+            } as Portal)
+      );
+    };
+    window.addEventListener(PORTAL_LABEL_EVENT, onLabel);
+    return () => window.removeEventListener(PORTAL_LABEL_EVENT, onLabel);
+  }, [isAgency, portalId]);
+
+  async function refreshDealHoursInBackground(bindingId: number) {
+    if (!token || !portalId) return;
+    try {
+      const updated = await api<DealBinding>(
+        `/api/deal-bindings/${bindingId}/refresh-hours/`,
+        { method: "POST" },
+        token
+      );
+      setDealHours(updated);
+      writePortalCache(CACHE_DEAL_HOURS, portalId, updated);
+    } catch {
+      // keep cached hours
+    }
+  }
+
+  // Instant hours card from last visit (then network + optional Bitrix refresh)
+  useEffect(() => {
+    if (!portalId) {
+      setDealHours(null);
+      return;
+    }
+    const cached = readPortalCache<DealBinding>(CACHE_DEAL_HOURS, portalId);
+    if (cached) setDealHours(cached);
+  }, [portalId]);
+
   async function load() {
     if (!token || !portalId) return;
     if (loadInFlightRef.current) return;
     const gen = loadGenRef.current;
     loadInFlightRef.current = true;
     try {
-      const [openData, doneData, portalsData, hoursData, reportsData, disputedData] =
-        await Promise.all([
-        api<Task[] | Paginated<Task>>(
-          `/api/tasks/?portal=${portalId}&open=1`,
-          {},
-          token
-        ),
+      const [openData, doneData, hoursData, reportsData, disputedData] = await Promise.all([
+        api<Task[] | Paginated<Task>>(`/api/tasks/?portal=${portalId}&open=1`, {}, token),
         !isAgency
           ? api<Task[] | Paginated<Task>>(
               `/api/tasks/?portal=${portalId}&status=done&ordering=-updated_at`,
@@ -137,9 +215,6 @@ export function ClientProjects() {
               token
             )
           : Promise.resolve([] as Task[]),
-        isAgency
-          ? api<Portal[] | Paginated<Portal>>("/api/portals/", {}, token)
-          : Promise.resolve([] as Portal[]),
         isAgency
           ? api<DealBinding[] | Paginated<DealBinding>>(
               `/api/deal-bindings/?client_portal=${portalId}&is_active=true`,
@@ -175,18 +250,43 @@ export function ClientProjects() {
         );
         setPendingReports(unwrapList(reportsData as WorkReport[] | Paginated<WorkReport>));
         setDisputedReports([]);
-        setDealHours(hoursData as DealBinding | null);
-        setPortalInfo(portal);
+        const mine = hoursData as DealBinding | null;
+        setDealHours(mine);
+        if (mine) writePortalCache(CACHE_DEAL_HOURS, portalId, mine);
+        if (portal) setPortalInfo(portal);
+        if (mine?.id) void refreshDealHoursInBackground(mine.id);
       } else {
         const bindings = unwrapList(hoursData as DealBinding[] | Paginated<DealBinding>);
-        setDealHours(bindings[0] || null);
+        const binding = bindings[0] || null;
+        setDealHours(binding);
+        if (binding) writePortalCache(CACHE_DEAL_HOURS, portalId, binding);
         setRecentDone([]);
         setPendingReports([]);
         setDisputedReports(unwrapList(disputedData as WorkReport[] | Paginated<WorkReport>));
-        const found = unwrapList(portalsData as Portal[] | Paginated<Portal>).find(
-          (p) => p.id === portalId
-        );
-        setPortalInfo(found || null);
+        const fromBinding = binding?.client_portal;
+        if (fromBinding) {
+          const label = portalDisplayName(fromBinding);
+          if (label) {
+            setPortalLabel(portalId, label);
+            setPortalInfo(fromBinding);
+          }
+        } else {
+          const cached = getPortalLabel(portalId);
+          if (cached) {
+            setPortalInfo((prev) =>
+              prev?.id === portalId
+                ? prev
+                : ({
+                    id: portalId,
+                    name: cached,
+                    domain: "",
+                    role: "client",
+                    member_id: "",
+                    is_active: true,
+                  } as Portal)
+            );
+          }
+        }
       }
     } finally {
       loadInFlightRef.current = false;
@@ -209,20 +309,14 @@ export function ClientProjects() {
     onEvent: () => reloadRef.current(),
   });
 
+  // Soft refresh on tab focus only — SSE covers live updates; avoid 15s mine/tasks fan-out
   useEffect(() => {
     if (!token || !portalId) return;
-    const id = window.setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      reloadRef.current();
-    }, 15000);
     const onVisible = () => {
       if (document.visibilityState === "visible") reloadRef.current();
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [token, portalId]);
 
   async function createProject(e: React.FormEvent) {

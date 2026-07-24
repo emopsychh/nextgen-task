@@ -421,9 +421,12 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
     filterset_fields = ["client_portal", "is_active"]
 
     def get_queryset(self):
-        return PortalDealBinding.objects.filter(
-            agency_portal=self.request.user.portal
-        ).select_related("client_portal", "agency_portal")
+        user = self.request.user
+        qs = PortalDealBinding.objects.select_related("client_portal", "agency_portal")
+        if getattr(user, "is_agency", False):
+            return qs.filter(agency_portal=user.portal)
+        # Client may read/refresh their own accompaniment binding
+        return qs.filter(client_portal=user.portal)
 
     def _client_portal_from_request(self, request):
         client_id = request.data.get("client_portal_id")
@@ -438,6 +441,8 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         return client_portal, None
 
     def create(self, request, *args, **kwargs):
+        if not getattr(request.user, "is_agency", False):
+            return Response({"detail": "Только для агентства"}, status=403)
         client_portal, err = self._client_portal_from_request(request)
         if err:
             return err
@@ -562,36 +567,21 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         )
         if not binding:
             return Response({"detail": "Сделка не найдена"}, status=404)
-        # Best-effort refresh via agency token
-        agency = binding.agency_portal
-        if agency and agency.access_token:
-            try:
-                binding = resolve_or_refresh_binding(
-                    agency_portal=agency,
-                    client_portal=portal,
-                ) or binding
-            except BitrixAPIError:
-                try:
-                    from portals.deal_resolve import refresh_binding_from_deal
-
-                    binding = refresh_binding_from_deal(
-                        agency_portal=agency,
-                        client_portal=portal,
-                        binding=binding,
-                    )
-                except BitrixAPIError:
-                    pass
+        # Return cached DB row immediately — Bitrix refresh is via POST refresh-hours
         return Response(PortalDealBindingSerializer(binding).data)
 
     @action(detail=True, methods=["post"], url_path="refresh-hours")
     def refresh_hours(self, request, pk=None):
         binding = self.get_object()
-        if not request.user.portal.access_token:
+        agency = binding.agency_portal
+        if not agency or not agency.access_token:
             return Response({"detail": "Agency portal has no Bitrix token"}, status=400)
+        if not can_access_client_portal(request.user, binding.client_portal):
+            return Response({"detail": "No access"}, status=403)
 
         try:
             binding = resolve_or_refresh_binding(
-                agency_portal=request.user.portal,
+                agency_portal=agency,
                 client_portal=binding.client_portal,
             )
         except BitrixAPIError:
@@ -600,7 +590,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                 from portals.deal_resolve import refresh_binding_from_deal
 
                 binding = refresh_binding_from_deal(
-                    agency_portal=request.user.portal,
+                    agency_portal=agency,
                     client_portal=binding.client_portal,
                     binding=binding,
                 )

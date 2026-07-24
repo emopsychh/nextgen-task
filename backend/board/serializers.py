@@ -342,7 +342,7 @@ class TaskSerializer(serializers.ModelSerializer):
 class TaskListSerializer(serializers.ModelSerializer):
     project_name = serializers.CharField(source="project.name", read_only=True)
     portal_id = serializers.IntegerField(source="project.portal_id", read_only=True)
-    comments_count = serializers.IntegerField(source="comments.count", read_only=True)
+    comments_count = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
     created_by_role = serializers.SerializerMethodField()
     total_tracked_seconds = serializers.SerializerMethodField()
@@ -384,6 +384,12 @@ class TaskListSerializer(serializers.ModelSerializer):
             "updated_at",
         )
 
+    def get_comments_count(self, obj):
+        annotated = getattr(obj, "_comments_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return obj.comments.count()
+
     def get_created_by_name(self, obj):
         if obj.created_by:
             return obj.created_by.display_name
@@ -395,6 +401,9 @@ class TaskListSerializer(serializers.ModelSerializer):
         return None
 
     def get_total_tracked_seconds(self, obj):
+        annotated = getattr(obj, "_tracked_seconds", None)
+        if annotated is not None:
+            return int(annotated)
         from .timeutils import task_tracked_seconds
 
         return task_tracked_seconds(obj, include_running=False)

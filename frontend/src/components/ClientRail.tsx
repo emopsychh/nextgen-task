@@ -10,6 +10,7 @@ import {
   type Task,
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { portalDisplayName, setPortalLabel } from "../lib/portalLabelCache";
 import { hueFromId, initialsFromLabel } from "../lib/portalUi";
 
 type LinkRow = {
@@ -120,7 +121,14 @@ export function ClientRail() {
           {},
           token
         );
-        if (!cancelled) setLinks(unwrapList(data));
+        if (cancelled) return;
+        const list = unwrapList(data);
+        setLinks(list);
+        for (const link of list) {
+          const p = link.client_portal;
+          const label = portalDisplayName(p);
+          if (label) setPortalLabel(p.id, label);
+        }
       } catch {
         if (!cancelled) setLinks([]);
       }

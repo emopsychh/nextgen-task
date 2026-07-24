@@ -312,10 +312,25 @@ class TaskViewSet(viewsets.ModelViewSet):
         return TaskSerializer
 
     def get_queryset(self):
+        from django.db.models import Count, IntegerField, Q, Sum, Value
+        from django.db.models.functions import Coalesce
+
         ids = accessible_portal_ids(self.request.user)
         qs = Task.objects.filter(project__portal_id__in=ids).select_related(
             "project", "project__portal", "created_by", "created_by__portal"
         )
+        if self.action == "list":
+            qs = qs.annotate(
+                _comments_count=Count("comments", distinct=True),
+                _tracked_seconds=Coalesce(
+                    Sum(
+                        "time_entries__duration_seconds",
+                        filter=Q(time_entries__ended_at__isnull=False),
+                    ),
+                    Value(0),
+                    output_field=IntegerField(),
+                ),
+            )
         if self.action == "retrieve":
             # Comments/attachments are loaded lazily via the `thread` action,
             # so we only prefetch what the task payload itself needs.

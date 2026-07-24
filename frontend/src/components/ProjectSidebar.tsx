@@ -10,6 +10,17 @@ import {
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePortalLiveSync } from "../hooks/usePortalLiveSync";
+import {
+  getPortalLabel,
+  PORTAL_LABEL_EVENT,
+  portalDisplayName,
+  setPortalLabel,
+} from "../lib/portalLabelCache";
+import {
+  CACHE_PROJECTS,
+  readPortalCache,
+  writePortalCache,
+} from "../lib/portalSessionCache";
 import { useSupportWidget } from "./support/SupportWidgetContext";
 
 function TicketsNavIcon() {
@@ -61,6 +72,31 @@ export function ProjectSidebarNav() {
     if (contextPortalId) lastPortalRef.current = contextPortalId;
   }, [contextPortalId]);
 
+  // Instant label from auth / ClientRail cache — don't wait for projects list
+  useEffect(() => {
+    if (!contextPortalId) return;
+    if (!isAgency && portal?.id === contextPortalId) {
+      const label = portalDisplayName(portal);
+      if (label) {
+        setPortalLabel(contextPortalId, label);
+        setClientLabel(label);
+        return;
+      }
+    }
+    const cached = getPortalLabel(contextPortalId);
+    if (cached) setClientLabel(cached);
+  }, [contextPortalId, isAgency, portal]);
+
+  useEffect(() => {
+    const onLabel = (event: Event) => {
+      const detail = (event as CustomEvent<{ portalId: number; label: string }>).detail;
+      if (!detail || detail.portalId !== contextPortalId) return;
+      setClientLabel(detail.label);
+    };
+    window.addEventListener(PORTAL_LABEL_EVENT, onLabel);
+    return () => window.removeEventListener(PORTAL_LABEL_EVENT, onLabel);
+  }, [contextPortalId]);
+
   useEffect(() => {
     if (isAgency && !routePortalId && !routeProjectId && !onTicketsRoute) {
       lastPortalRef.current = null;
@@ -81,7 +117,10 @@ export function ProjectSidebarNav() {
         if (cancelled) return;
         setResolvedPortalId(p.portal);
         lastPortalRef.current = p.portal;
-        if (p.portal_name) setClientLabel(p.portal_name);
+        if (p.portal_name) {
+          setPortalLabel(p.portal, p.portal_name);
+          setClientLabel(p.portal_name);
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -92,6 +131,10 @@ export function ProjectSidebarNav() {
   useEffect(() => {
     if (!token || !contextPortalId) return;
     if (isAgency && onTicketsRoute) return;
+
+    // Paint last known project list immediately
+    const cached = readPortalCache<Project[]>(CACHE_PROJECTS, contextPortalId);
+    if (cached?.length) setProjects(cached);
 
     let cancelled = false;
     async function load() {
@@ -104,9 +147,13 @@ export function ProjectSidebarNav() {
         if (cancelled) return;
         const list = unwrapList(data);
         setProjects(list);
-        if (list[0]?.portal_name) setClientLabel(list[0].portal_name);
+        writePortalCache(CACHE_PROJECTS, contextPortalId!, list);
+        if (list[0]?.portal_name) {
+          setPortalLabel(contextPortalId!, list[0].portal_name);
+          setClientLabel(list[0].portal_name);
+        }
       } catch {
-        if (!cancelled) setProjects([]);
+        if (!cancelled && !cached?.length) setProjects([]);
       }
     }
 
