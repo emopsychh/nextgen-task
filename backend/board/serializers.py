@@ -624,17 +624,21 @@ class WorkReportListSerializer(serializers.ModelSerializer):
         return ""
 
     def get_project_ids(self, obj):
-        from board.reports import report_project_ids
-
-        return report_project_ids(obj)
+        # Prefer prefetched M2M to avoid per-row queries on list.
+        projects = list(obj.projects.all())
+        if projects:
+            return [p.id for p in projects]
+        if obj.project_id:
+            return [obj.project_id]
+        return []
 
     def get_project_names(self, obj):
-        ids = self.get_project_ids(obj)
-        if not ids:
-            return []
-        return list(
-            Project.objects.filter(id__in=ids).order_by("name").values_list("name", flat=True)
-        )
+        projects = list(obj.projects.all())
+        if projects:
+            return sorted(p.name for p in projects)
+        if obj.project_id and getattr(obj, "project", None):
+            return [obj.project.name]
+        return []
 
     def get_projects_count(self, obj):
         return len(self.get_project_ids(obj))
@@ -645,9 +649,13 @@ class WorkReportListSerializer(serializers.ModelSerializer):
         return ""
 
     def get_total_tracked_seconds(self, obj):
-        from board.reports import live_total_seconds_for_projects, report_project_ids
+        by_project = self.context.get("seconds_by_project")
+        ids = self.get_project_ids(obj)
+        if by_project is not None:
+            return sum(int(by_project.get(pid, 0)) for pid in ids)
+        from board.reports import live_total_seconds_for_projects
 
-        return live_total_seconds_for_projects(report_project_ids(obj))
+        return live_total_seconds_for_projects(ids)
 
     def get_dispute_count(self, obj):
         if hasattr(obj, "_dispute_count"):

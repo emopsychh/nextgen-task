@@ -67,23 +67,21 @@ export function ProjectReports() {
 
   const loadCounts = useCallback(async () => {
     if (!token || !portalId) return;
-    const next: Record<ReportBucket, number> = {
-      all: 0,
-      current: 0,
-      review: 0,
-      paid: 0,
-    };
-    await Promise.all(
-      (["all", "current", "review", "paid"] as ReportBucket[]).map(async (b) => {
-        const data = await api<WorkReport[] | Paginated<WorkReport>>(
-          reportsApiQuery(portalId, b),
-          {},
-          token
-        );
-        next[b] = unwrapList(data).length;
-      })
-    );
-    setCounts(next);
+    try {
+      const next = await api<Record<ReportBucket, number>>(
+        `/api/reports/counts/?portal=${portalId}`,
+        {},
+        token
+      );
+      setCounts({
+        all: next.all ?? 0,
+        current: next.current ?? 0,
+        review: next.review ?? 0,
+        paid: next.paid ?? 0,
+      });
+    } catch {
+      // non-critical
+    }
   }, [token, portalId]);
 
   const loadList = useCallback(async () => {

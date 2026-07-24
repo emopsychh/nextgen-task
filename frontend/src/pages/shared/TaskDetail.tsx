@@ -135,11 +135,20 @@ export function TaskDetail() {
 
   async function loadInitialThread() {
     const gen = genRef.current;
-    const page = await fetchThread("?pull=1&limit=30");
+    // Paint from DB immediately; Bitrix comments catch up in the background.
+    const page = await fetchThread("?limit=30");
     if (!page || gen !== genRef.current) return;
     setItems(page.items);
     setHasMore(page.has_more);
     scrollToBottom(false);
+
+    void fetchThread("?pull=1&limit=30")
+      .then((pulled) => {
+        if (!pulled || gen !== genRef.current) return;
+        setItems(pulled.items);
+        setHasMore(pulled.has_more);
+      })
+      .catch(() => undefined);
   }
 
   async function reloadLatestThread() {

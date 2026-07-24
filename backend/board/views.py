@@ -354,10 +354,11 @@ class TaskViewSet(viewsets.ModelViewSet):
                 try:
                     from board.status_sync import pull_task_status_from_bitrix
 
+                    # Cap per request so board paint stays responsive; FE soft-polls.
                     qs = (
                         self.filter_queryset(self.get_queryset())
                         .filter(project_id=project_id)
-                        .exclude(agency_bitrix_task_id="")[:40]
+                        .exclude(agency_bitrix_task_id="")[:20]
                     )
                     for task in qs:
                         try:
@@ -370,23 +371,15 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
-        # Soft pull from Bitrix (status/deadline/comments). Live sync uses ?pull=1
-        # every ~12s; force=True inside pull so PENDING outbound does not block.
+        # Live sync ?pull=1: status + comments only (no file downloads / deal CRM).
         if request.query_params.get("pull") in ("1", "true", "yes"):
             try:
                 from board.comment_sync import pull_comments_from_bitrix
-                from board.file_sync import pull_attachments_from_bitrix
                 from board.status_sync import pull_task_status_from_bitrix
-                from portals.deal_resolve import refresh_deal_hours_for_portal
 
                 changed = pull_task_status_from_bitrix(instance)
                 pulled = pull_comments_from_bitrix(instance)
-                files = pull_attachments_from_bitrix(instance)
-                try:
-                    refresh_deal_hours_for_portal(instance.project.portal)
-                except Exception:
-                    pass
-                if changed or pulled or files:
+                if changed or pulled:
                     instance.refresh_from_db()
             except Exception:
                 logger.exception("Bitrix status pull failed for task %s", instance.id)
@@ -560,8 +553,8 @@ class TaskViewSet(viewsets.ModelViewSet):
                              (for infinite scroll upward)
           * ?after=<iso>   → all items strictly newer than the cursor
                              (for live delta after new activity)
-          * ?pull=1        → also pull fresh comments/files from Bitrix first
-                             (used on the initial open only)
+          * ?pull=1        → pull fresh comments from Bitrix first
+          * ?files=1       → also download missing Bitrix attachments (slow)
         """
         from django.utils.dateparse import parse_datetime
 
@@ -572,10 +565,13 @@ class TaskViewSet(viewsets.ModelViewSet):
         if request.query_params.get("pull") in ("1", "true", "yes"):
             try:
                 from board.comment_sync import pull_comments_from_bitrix
-                from board.file_sync import pull_attachments_from_bitrix
 
                 pull_comments_from_bitrix(task)
-                pull_attachments_from_bitrix(task)
+                # File downloads are optional — they block the request on Bitrix disk.
+                if request.query_params.get("files") in ("1", "true", "yes"):
+                    from board.file_sync import pull_attachments_from_bitrix
+
+                    pull_attachments_from_bitrix(task)
             except Exception:
                 logger.exception("Bitrix thread pull failed for task %s", task.id)
 
@@ -771,10 +767,13 @@ class WorkReportViewSet(viewsets.ModelViewSet):
                 Q(portal_id__in=ids) | Q(project__portal_id__in=ids)
             )
             .select_related("portal", "project", "project__portal", "created_by")
-            .prefetch_related("projects", "events__actor", "dispute_items__task")
             .annotate(_dispute_count=Count("dispute_items", distinct=True))
             .distinct()
         )
+        if self.action == "list":
+            qs = qs.prefetch_related("projects")
+        else:
+            qs = qs.prefetch_related("projects", "events__actor", "dispute_items__task")
         portal_id = self.request.query_params.get("portal")
         if portal_id:
             qs = qs.filter(Q(portal_id=portal_id) | Q(project__portal_id=portal_id))
@@ -842,7 +841,64 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         return Response(WorkReportSerializer(report, context={"request": request}).data)
 
     def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
+        from django.db.models import Sum
+
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        reports = list(page) if page is not None else list(queryset)
+
+        all_pids: set[int] = set()
+        for report in reports:
+            projects = list(report.projects.all())
+            if projects:
+                all_pids.update(p.id for p in projects)
+            elif report.project_id:
+                all_pids.add(report.project_id)
+        seconds_by_project: dict[int, int] = {}
+        if all_pids:
+            seconds_by_project = {
+                int(row["task__project_id"]): int(row["total"] or 0)
+                for row in TimeEntry.objects.filter(task__project_id__in=all_pids)
+                .values("task__project_id")
+                .annotate(total=Sum("duration_seconds"))
+            }
+
+        context = self.get_serializer_context()
+        context["seconds_by_project"] = seconds_by_project
+        serializer = self.get_serializer(reports, many=True, context=context)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def counts(self, request):
+        """Lightweight bucket counts for the reports hub (one round-trip)."""
+        from django.db.models import Q
+
+        from board.reports import BUCKET_STATUSES
+
+        portal_id = request.query_params.get("portal")
+        if not portal_id:
+            return Response({"detail": "portal required"}, status=400)
+        try:
+            portal = Portal.objects.get(pk=portal_id)
+        except Portal.DoesNotExist:
+            return Response({"detail": "Portal not found"}, status=404)
+        if not can_access_client_portal(request.user, portal):
+            raise PermissionDenied("No access to this portal")
+
+        ids = accessible_portal_ids(request.user)
+        qs = WorkReport.objects.filter(
+            Q(portal_id__in=ids) | Q(project__portal_id__in=ids)
+        ).filter(Q(portal_id=portal_id) | Q(project__portal_id=portal_id))
+        return Response(
+            {
+                "all": qs.count(),
+                "current": qs.filter(status__in=BUCKET_STATUSES["current"]).count(),
+                "review": qs.filter(status__in=BUCKET_STATUSES["review"]).count(),
+                "paid": qs.filter(status__in=BUCKET_STATUSES["paid"]).count(),
+            }
+        )
 
     @action(detail=True, methods=["post"])
     def send(self, request, pk=None):
@@ -933,9 +989,11 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         qs = (
             SupportTicket.objects.filter(portal_id__in=ids)
             .select_related("portal", "project", "task", "created_by")
-            .prefetch_related("messages__author")
             .annotate(_message_count=Count("messages"))
         )
+        # Messages are only needed on retrieve / message actions — annotate covers list count.
+        if self.action != "list":
+            qs = qs.prefetch_related("messages__author")
         portal_id = self.request.query_params.get("portal")
         if portal_id:
             qs = qs.filter(portal_id=portal_id)

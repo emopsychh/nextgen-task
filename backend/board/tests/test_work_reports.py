@@ -124,6 +124,11 @@ class WorkReportApiTests(TestCase):
         self.assertEqual(current.status_code, 200)
         self.assertTrue(any(r["id"] == report_id for r in current.data["results"]))
 
+        counts = self.agency_client.get(f"/api/reports/counts/?portal={self.client_portal.id}")
+        self.assertEqual(counts.status_code, 200, counts.content)
+        self.assertGreaterEqual(counts.data["all"], 1)
+        self.assertGreaterEqual(counts.data["current"], 1)
+
         self.agency_client.post(f"/api/reports/{report_id}/send/", {}, format="json")
         review = self.agency_client.get(
             f"/api/reports/?portal={self.client_portal.id}&bucket=review"
@@ -133,6 +138,9 @@ class WorkReportApiTests(TestCase):
             f"/api/reports/?portal={self.client_portal.id}&bucket=current"
         )
         self.assertFalse(any(r["id"] == report_id for r in current2.data["results"]))
+        counts2 = self.agency_client.get(f"/api/reports/counts/?portal={self.client_portal.id}")
+        self.assertEqual(counts2.data["review"], 1)
+        self.assertEqual(counts2.data["current"], 0)
 
     def test_dispute_shows_only_flagged_tasks(self):
         other = make_task(self.project, title="Ок задача", status="done", outcome="Всё ок")

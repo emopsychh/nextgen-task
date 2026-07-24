@@ -33,5 +33,43 @@ export function clearPortalCache(kind: string, portalId: number): void {
   }
 }
 
+function boardKey(projectId: number, filter: string, query: string): string {
+  return `nextgen:swr:board:${projectId}:${filter}:${query}`;
+}
+
+export type BoardTasksCache = {
+  tasks: unknown[];
+  hasMore: boolean;
+};
+
+export function readBoardTasksCache(
+  projectId: number,
+  filter: string,
+  query: string
+): BoardTasksCache | null {
+  if (!projectId || typeof sessionStorage === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(boardKey(projectId, filter, query));
+    if (!raw) return null;
+    return JSON.parse(raw) as BoardTasksCache;
+  } catch {
+    return null;
+  }
+}
+
+export function writeBoardTasksCache(
+  projectId: number,
+  filter: string,
+  query: string,
+  value: BoardTasksCache
+): void {
+  if (!projectId || typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(boardKey(projectId, filter, query), JSON.stringify(value));
+  } catch {
+    // ignore
+  }
+}
+
 export const CACHE_PROJECTS = "projects";
 export const CACHE_DEAL_HOURS = "deal-hours";

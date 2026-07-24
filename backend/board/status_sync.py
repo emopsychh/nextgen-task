@@ -912,14 +912,17 @@ def _inbound_work_status(task) -> str | None:
 def pull_task_status_from_bitrix(task) -> bool:
     """
     Fetch Bitrix status + deadline + title/description from agency+client copies.
+
+    Single resolve path (no second Bitrix scan). Only start/done are applied —
+    pause/todo never wins inbound status, matching prior work-status semantics.
     """
     from board.titles import strip_portal_title_prefix
 
-    work = _inbound_work_status(task)
-    _, data, portal, bitrix_id = resolve_inbound_status_from_sources(task)
+    status, data, portal, bitrix_id = resolve_inbound_status_from_sources(task)
+    work = status if status in ("in_progress", "done") else None
     if not data or not portal or not bitrix_id:
         # Still apply work status if we could read it from a partial scan
-        if work in ("in_progress", "done") and task.status != work:
+        if work and task.status != work:
             prev = task.status
             applied = apply_inbound_status(task, work, force=True)
             if applied and work == "done" and prev != "done":
@@ -932,7 +935,7 @@ def pull_task_status_from_bitrix(task) -> bool:
             return applied
         return False
 
-    local = work if work in ("in_progress", "done") else None
+    local = work
 
     changed = False
     if local and task.status != local:

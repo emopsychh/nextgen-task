@@ -14,6 +14,10 @@ import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { dueMeta } from "../../lib/dates";
+import {
+  readBoardTasksCache,
+  writeBoardTasksCache,
+} from "../../lib/portalSessionCache";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import { CalendarGlyph, FlameIcon } from "../../components/icons";
 
@@ -77,6 +81,19 @@ export function ProjectTasks() {
     return list.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)));
   }
 
+  /** Replace page-1 rows in place; keep any extra pages already scrolled into view. */
+  function mergePage1(prev: Task[], page1: Task[]): Task[] {
+    const page1Ids = new Set(page1.map((t) => t.id));
+    const rest = prev.filter((t) => !page1Ids.has(t.id));
+    return dedupeById([...page1, ...rest]);
+  }
+
+  function cacheKeyParts(): [number, string, string] | null {
+    const id = Number(projectId);
+    if (!id) return null;
+    return [id, filter, debouncedQuery.trim()];
+  }
+
   async function loadCounts() {
     if (!token || !projectId) return;
     try {
@@ -90,16 +107,41 @@ export function ProjectTasks() {
   async function loadFirst() {
     if (!token || !projectId) return;
     const gen = genRef.current;
+    const parts = cacheKeyParts();
+
+    // Paint from DB first; Bitrix soft-pull runs in the background.
     const [projectData, taskData] = await Promise.all([
       api<Project>(`/api/projects/${projectId}/`, {}, token),
-      fetchPage(1, true),
+      fetchPage(1, false),
     ]);
     if (gen !== genRef.current) return;
     setProject(projectData);
     setTasks(taskData.results);
     setHasMore(Boolean(taskData.next));
     loadedPagesRef.current = 1;
+    if (parts) {
+      writeBoardTasksCache(parts[0], parts[1], parts[2], {
+        tasks: taskData.results,
+        hasMore: Boolean(taskData.next),
+      });
+    }
     void loadCounts();
+
+    // Background Bitrix status pull — merge when ready.
+    void fetchPage(1, true)
+      .then((pulled) => {
+        if (gen !== genRef.current) return;
+        setTasks((prev) => mergePage1(prev, pulled.results));
+        setHasMore(Boolean(pulled.next) || loadedPagesRef.current > 1);
+        if (parts) {
+          writeBoardTasksCache(parts[0], parts[1], parts[2], {
+            tasks: pulled.results,
+            hasMore: Boolean(pulled.next),
+          });
+        }
+        void loadCounts();
+      })
+      .catch(() => undefined);
   }
 
   async function loadMore() {
@@ -130,9 +172,19 @@ export function ProjectTasks() {
   useEffect(() => {
     if (!token || !projectId) return;
     genRef.current += 1;
-    setInitialLoading(true);
-    setTasks([]);
-    setHasMore(false);
+    const parts = cacheKeyParts();
+    const cached = parts
+      ? readBoardTasksCache(parts[0], parts[1], parts[2])
+      : null;
+    if (cached?.tasks?.length) {
+      setTasks(cached.tasks as Task[]);
+      setHasMore(Boolean(cached.hasMore));
+      setInitialLoading(false);
+    } else {
+      setInitialLoading(true);
+      setTasks([]);
+      setHasMore(false);
+    }
     loadedPagesRef.current = 1;
     void loadFirst()
       .catch((e) => setError(e instanceof Error ? e.message : "Ошибка"))
@@ -165,8 +217,7 @@ export function ProjectTasks() {
     },
   });
 
-  // Soft realtime: refresh only the pages already loaded (bounded by scroll);
-  // Bitrix pull only on page 1 and only every ~12s (or on SSE).
+  // Soft realtime: refresh page 1 + merge; Bitrix pull every ~12s (or on SSE).
   useEffect(() => {
     if (!token || !projectId) return;
     let cancelled = false;
@@ -181,20 +232,13 @@ export function ProjectTasks() {
       try {
         const wantPull = pullNowRef.current || tickCount % 5 === 0;
         pullNowRef.current = false;
-        const pages = loadedPagesRef.current;
-        const acc: Task[] = [];
-        let lastNext: string | null = null;
-        for (let p = 1; p <= pages; p++) {
-          const data = await fetchPage(p, wantPull && p === 1);
-          if (cancelled) return;
-          acc.push(...data.results);
-          if (p === pages) lastNext = data.next;
+        const data = await fetchPage(1, wantPull);
+        if (cancelled) return;
+        setTasks((prev) => mergePage1(prev, data.results));
+        if (loadedPagesRef.current <= 1) {
+          setHasMore(Boolean(data.next));
         }
-        if (!cancelled) {
-          setTasks(dedupeById(acc));
-          setHasMore(Boolean(lastNext));
-          void loadCounts();
-        }
+        void loadCounts();
       } catch {
         // next tick retries
       } finally {

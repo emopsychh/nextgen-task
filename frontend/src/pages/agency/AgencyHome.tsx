@@ -63,21 +63,28 @@ export function AgencyHome() {
     setBindings(unwrapList(dealData));
   }, [token]);
 
-  const refreshAllDealHours = useCallback(async () => {
+  const refreshAllDealHours = useCallback(async (signal?: { cancelled: boolean }) => {
     if (!token) return;
     const active = bindingsRef.current.filter((b) => b.is_active);
     if (!active.length) return;
-    await Promise.allSettled(
-      active.map((b) =>
-        api(`/api/deal-bindings/${b.id}/refresh-hours/`, { method: "POST" }, token)
-      )
-    );
+    // Stagger CRM calls so the home page does not storm Bitrix.
+    for (const b of active) {
+      if (signal?.cancelled) return;
+      try {
+        await api(`/api/deal-bindings/${b.id}/refresh-hours/`, { method: "POST" }, token);
+      } catch {
+        // ignore per-binding errors
+      }
+      if (signal?.cancelled) return;
+      await new Promise((r) => window.setTimeout(r, 450));
+    }
+    if (signal?.cancelled) return;
     const dealData = await api<DealBinding[] | { results: DealBinding[] }>(
       "/api/deal-bindings/",
       {},
       token
     );
-    setBindings(unwrapList(dealData));
+    if (!signal?.cancelled) setBindings(unwrapList(dealData));
   }, [token]);
 
   useEffect(() => {
@@ -86,26 +93,32 @@ export function AgencyHome() {
 
   useEffect(() => {
     if (!token) return;
-    let cancelled = false;
+    const signal = { cancelled: false };
+    let lastRefreshAt = 0;
+    const COOLDOWN_MS = 20000;
 
-    async function tick() {
-      if (cancelled || document.visibilityState === "hidden") return;
+    async function tick(force = false) {
+      if (signal.cancelled || document.visibilityState === "hidden") return;
       if (!bindingsRef.current.some((b) => b.is_active)) return;
+      const now = Date.now();
+      if (!force && now - lastRefreshAt < COOLDOWN_MS) return;
+      lastRefreshAt = now;
       try {
-        await refreshAllDealHours();
+        await refreshAllDealHours(signal);
       } catch {
         // ignore background refresh errors
       }
     }
 
-    const interval = window.setInterval(() => void tick(), 45000);
-    const onFocus = () => void tick();
+    const interval = window.setInterval(() => void tick(true), 45000);
+    const onFocus = () => void tick(false);
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
-    const first = window.setTimeout(() => void tick(), 2500);
+    // First refresh after paint — not immediately on mount.
+    const first = window.setTimeout(() => void tick(true), 6000);
 
     return () => {
-      cancelled = true;
+      signal.cancelled = true;
       window.clearInterval(interval);
       window.clearTimeout(first);
       window.removeEventListener("focus", onFocus);
