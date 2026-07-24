@@ -5,7 +5,6 @@ import {
   unwrapList,
   type Paginated,
   type Project,
-  type SupportTicket,
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePortalLiveSync } from "../hooks/usePortalLiveSync";
@@ -175,12 +174,12 @@ export function ProjectSidebarNav() {
 
     async function loadTickets() {
       try {
-        const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
-          `/api/tickets/?portal=${contextPortalId}&bucket=open&awaiting=client`,
+        const data = await api<{ awaiting_client?: number }>(
+          `/api/tickets/counts/?portal=${contextPortalId}`,
           {},
           token!
         );
-        if (!cancelled) setOpenTickets(unwrapList(ticketsData).length);
+        if (!cancelled) setOpenTickets(data.awaiting_client || 0);
       } catch {
         if (!cancelled) setOpenTickets(0);
       }
@@ -258,12 +257,12 @@ export function ProjectSidebarNav() {
             }
           }
           if (refreshTickets && !isAgency && contextPortalId) {
-            const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
-              `/api/tickets/?portal=${contextPortalId}&bucket=open&awaiting=client`,
+            const data = await api<{ awaiting_client?: number }>(
+              `/api/tickets/counts/?portal=${contextPortalId}`,
               {},
               token
             );
-            setOpenTickets(unwrapList(ticketsData).length);
+            setOpenTickets(data.awaiting_client || 0);
           }
         } catch {
           // keep previous

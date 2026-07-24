@@ -752,7 +752,8 @@ class SupportTicketListSerializer(serializers.ModelSerializer):
     def get_message_count(self, obj):
         if hasattr(obj, "_message_count"):
             return obj._message_count
-        return obj.messages.count()
+        # List path skips Count() annotate for speed — UI does not show this yet.
+        return 0
 
     def get_awaiting_party(self, obj):
         from board.tickets import ticket_awaiting_party

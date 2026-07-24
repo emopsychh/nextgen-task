@@ -114,8 +114,7 @@ export function SupportTickets() {
   useEffect(() => {
     if (!token) return;
     if (!isAgency && !listPortalId) return;
-    // Don't flash the previous bucket (or a false "empty") while the next list loads.
-    setTickets([]);
+    // Keep previous rows while the next list loads (no empty flash).
     setListLoading(true);
     const ac = new AbortController();
     void loadList(ac.signal).catch((e) => {
@@ -163,7 +162,7 @@ export function SupportTickets() {
     portalId: livePortalId,
     enabled: !!livePortalId,
     onEvent: (payload) => {
-      if (payload?.kind?.startsWith("ticket_") || !payload?.kind) {
+      if (payload?.kind?.startsWith("ticket_")) {
         void loadList().catch(() => undefined);
         if (selectedId) void loadDetail().catch(() => undefined);
       }

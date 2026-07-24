@@ -1001,7 +1001,7 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        from django.db.models import Count, OuterRef, Subquery
+        from django.db.models import OuterRef, Subquery
 
         ids = accessible_portal_ids(self.request.user)
         last_author_role = (
@@ -1012,13 +1012,10 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
         qs = (
             SupportTicket.objects.filter(portal_id__in=ids)
             .select_related("portal", "project", "task", "created_by", "created_by__portal")
-            .annotate(
-                _message_count=Count("messages"),
-                _last_author_role=Subquery(last_author_role),
-            )
+            .annotate(_last_author_role=Subquery(last_author_role))
         )
-        # Messages are only needed on retrieve / message actions — annotate covers list count.
-        if self.action != "list":
+        # Messages only on retrieve / message actions — list stays light.
+        if self.action != "list" and self.action != "counts":
             qs = qs.prefetch_related("messages__author__portal")
         portal_id = self.request.query_params.get("portal")
         if portal_id:
@@ -1070,6 +1067,57 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
                 raise PermissionDenied("No access to this portal")
         return super().list(request, *args, **kwargs)
 
+    @action(detail=False, methods=["get"])
+    def counts(self, request):
+        """Lightweight open/closed/awaiting counts (badge + hub)."""
+        from django.db.models import Count, OuterRef, Q, Subquery
+
+        from portals.models import Portal as PortalModel
+
+        ids = accessible_portal_ids(request.user)
+        last_author_role = (
+            SupportTicketMessage.objects.filter(ticket_id=OuterRef("pk"))
+            .order_by("-id")
+            .values("author__portal__role")[:1]
+        )
+        qs = SupportTicket.objects.filter(portal_id__in=ids).annotate(
+            _last_author_role=Subquery(last_author_role)
+        )
+        portal_id = request.query_params.get("portal")
+        if portal_id:
+            try:
+                portal = Portal.objects.get(pk=portal_id)
+            except Portal.DoesNotExist:
+                return Response({"detail": "Portal not found"}, status=404)
+            if not can_access_client_portal(request.user, portal):
+                raise PermissionDenied("No access to this portal")
+            qs = qs.filter(portal_id=portal_id)
+
+        agg = qs.aggregate(
+            open=Count("id", filter=Q(status=SupportTicket.Status.OPEN)),
+            closed=Count("id", filter=Q(status=SupportTicket.Status.CLOSED)),
+            awaiting_agency=Count(
+                "id",
+                filter=Q(status=SupportTicket.Status.OPEN)
+                & ~Q(_last_author_role=PortalModel.Role.AGENCY),
+            ),
+            awaiting_client=Count(
+                "id",
+                filter=Q(
+                    status=SupportTicket.Status.OPEN,
+                    _last_author_role=PortalModel.Role.AGENCY,
+                ),
+            ),
+        )
+        return Response(
+            {
+                "open": agg["open"] or 0,
+                "closed": agg["closed"] or 0,
+                "awaiting_agency": agg["awaiting_agency"] or 0,
+                "awaiting_client": agg["awaiting_client"] or 0,
+            }
+        )
+
     def retrieve(self, request, *args, **kwargs):
         ticket = self.get_object()
         self._ensure_access(ticket)
@@ -1115,13 +1163,24 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
             project=project,
             task=task,
         )
+        from django.db.models import OuterRef, Subquery
+
         ticket = (
-            SupportTicket.objects.select_related("portal", "project", "task", "created_by")
-            .prefetch_related("messages__author")
+            SupportTicket.objects.select_related(
+                "portal", "project", "task", "created_by", "created_by__portal"
+            )
+            .annotate(
+                _last_author_role=Subquery(
+                    SupportTicketMessage.objects.filter(ticket_id=OuterRef("pk"))
+                    .order_by("-id")
+                    .values("author__portal__role")[:1]
+                )
+            )
             .get(pk=ticket.pk)
         )
+        # List payload is enough to open the thread; detail loads messages once.
         return Response(
-            SupportTicketSerializer(ticket, context={"request": request}).data,
+            SupportTicketListSerializer(ticket, context={"request": request}).data,
             status=201,
         )
 

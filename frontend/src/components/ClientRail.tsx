@@ -6,7 +6,6 @@ import {
   type Paginated,
   type Portal,
   type Project,
-  type SupportTicket,
   type Task,
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -161,12 +160,12 @@ export function ClientRail() {
 
     async function loadTickets() {
       try {
-        const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
-          "/api/tickets/?bucket=open&awaiting=agency",
+        const data = await api<{ awaiting_agency?: number }>(
+          "/api/tickets/counts/",
           {},
           token!
         );
-        if (!cancelled) setOpenTickets(unwrapList(data).length);
+        if (!cancelled) setOpenTickets(data.awaiting_agency || 0);
       } catch {
         if (!cancelled) setOpenTickets(0);
       }

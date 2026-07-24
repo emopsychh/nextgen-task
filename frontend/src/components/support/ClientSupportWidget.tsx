@@ -87,7 +87,6 @@ export function ClientSupportWidget() {
 
   useEffect(() => {
     if (!isOpen || !token || !portalId) return;
-    setTickets([]);
     setListLoading(true);
     const ac = new AbortController();
     void loadList(ac.signal).catch((e) => {
@@ -139,7 +138,7 @@ export function ClientSupportWidget() {
     portalId,
     enabled: isOpen && !!portalId,
     onEvent: (payload) => {
-      if (payload?.kind?.startsWith("ticket_") || !payload?.kind) {
+      if (payload?.kind?.startsWith("ticket_")) {
         void loadList().catch(() => undefined);
         if (detail?.id) void loadDetail(detail.id).catch(() => undefined);
       }
