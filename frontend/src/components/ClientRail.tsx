@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { api, unwrapList, type Portal, type Project, type Task } from "../api/types";
+import {
+  api,
+  unwrapList,
+  type Paginated,
+  type Portal,
+  type Project,
+  type SupportTicket,
+  type Task,
+} from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { hueFromId, initialsFromLabel } from "../lib/portalUi";
 
@@ -34,16 +42,37 @@ function LogoutIcon() {
   );
 }
 
+function TicketsIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 7a2 2 0 0 1 2-2h8l4 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14 5v4h4M8 13h8M8 17h5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function ClientRail() {
   const { token, logout } = useAuth();
   const location = useLocation();
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
+  const [openTickets, setOpenTickets] = useState(0);
   const routePortalId = useMemo(() => {
     const match = location.pathname.match(/^\/portals\/(\d+)/);
     return match ? Number(match[1]) : null;
   }, [location.pathname]);
   const activeId = routePortalId ?? resolvedPortalId;
   const addActive = location.pathname === "/";
+  const ticketsActive = location.pathname.startsWith("/tickets");
   const [links, setLinks] = useState<LinkRow[]>([]);
   const [enteringPortalId, setEnteringPortalId] = useState<number | null>(null);
 
@@ -115,12 +144,43 @@ export function ClientRail() {
     };
   }, [token, location.key]);
 
+  useEffect(() => {
+    if (!token) {
+      setOpenTickets(0);
+      return;
+    }
+    let cancelled = false;
+
+    async function loadTickets() {
+      try {
+        const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
+          "/api/tickets/?bucket=open",
+          {},
+          token!
+        );
+        if (!cancelled) setOpenTickets(unwrapList(data).length);
+      } catch {
+        if (!cancelled) setOpenTickets(0);
+      }
+    }
+
+    void loadTickets();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void loadTickets();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [token, location.pathname]);
+
   return (
     <aside className="client-rail" aria-label="Клиенты" data-tour="tour-client-rail">
       <div className="client-rail-list">
         {links.map((link) => {
           const p = link.client_portal;
-          const active = activeId === p.id;
+          const active = !ticketsActive && activeId === p.id;
           const entering = enteringPortalId === p.id;
           return (
             <NavLink
@@ -139,11 +199,25 @@ export function ClientRail() {
         <NavLink
           to="/"
           end
-          className={`client-avatar add${addActive ? " active" : ""}`}
+          className={`client-avatar add${addActive && !ticketsActive ? " active" : ""}`}
           title="Новый клиент"
           data-tour="tour-add-client"
         >
           <span className="client-avatar-face">+</span>
+        </NavLink>
+        <NavLink
+          to="/tickets"
+          className={`client-avatar tickets${ticketsActive ? " active" : ""}`}
+          title="Тикеты"
+        >
+          <span className="client-avatar-face">
+            <TicketsIcon />
+          </span>
+          {openTickets > 0 ? (
+            <span className="client-rail-badge" aria-label={`${openTickets} открытых тикетов`}>
+              {openTickets > 99 ? "99+" : openTickets}
+            </span>
+          ) : null}
         </NavLink>
       </div>
 

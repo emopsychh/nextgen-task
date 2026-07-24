@@ -49,7 +49,9 @@ class SupportTicketApiTests(TestCase):
         self.assertEqual(create.data["body"], "На главной не кликается CTA")
         self.assertEqual(create.data["project"], self.project.id)
         self.assertEqual(create.data["task"], self.task.id)
-        self.assertEqual(create.data["messages"], [])
+        self.assertEqual(len(create.data["messages"]), 1)
+        self.assertEqual(create.data["messages"][0]["text"], "На главной не кликается CTA")
+        self.assertEqual(create.data["messages"][0]["author"], self.client_user.id)
 
         # Agency cannot create tickets
         agency_create = self.agency_client.post(
@@ -91,7 +93,7 @@ class SupportTicketApiTests(TestCase):
 
         detail = self.client_client.get(f"/api/tickets/{ticket_id}/")
         self.assertEqual(detail.status_code, 200)
-        self.assertEqual(len(detail.data["messages"]), 2)
+        self.assertEqual(len(detail.data["messages"]), 3)
 
         # Client cannot close
         bad_close = self.client_client.post(f"/api/tickets/{ticket_id}/close/", {}, format="json")
@@ -124,7 +126,7 @@ class SupportTicketApiTests(TestCase):
         self.assertIsNone(reopened.data["closed_at"])
 
         self.assertEqual(SupportTicket.objects.filter(status="open").count(), 1)
-        self.assertEqual(SupportTicketMessage.objects.filter(ticket_id=ticket_id).count(), 2)
+        self.assertEqual(SupportTicketMessage.objects.filter(ticket_id=ticket_id).count(), 3)
 
     def test_bucket_open_empty_for_other_portal(self):
         other = make_portal(Portal.Role.CLIENT, member_id="other-t", name="Other")

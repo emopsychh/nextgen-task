@@ -478,32 +478,38 @@ export function SupportTickets() {
                 ) : null}
               </header>
 
-              <div className="tickets-detail-body">
-                <p className="tickets-body-text">{detail.body}</p>
-              </div>
-
               <div className="tickets-thread" ref={threadRef}>
-                {(detail.messages || []).length === 0 ? (
-                  <p className="muted tickets-thread-empty">Пока нет сообщений в переписке</p>
-                ) : (
-                  (detail.messages || []).map((m) => {
-                    const mine = myAuthorId != null && m.author === myAuthorId;
-                    return (
-                      <div
-                        key={m.id}
-                        className={`msg-row ticket-msg-row${mine ? " is-mine" : ""}`}
-                      >
-                        <div className="msg-bubble">
-                          <div className="comment-top">
-                            <strong>{m.author_name || "Участник"}</strong>
-                            <span className="msg-time">{formatDateTime(m.created_at)}</span>
-                          </div>
-                          <div className="comment-text">{m.text}</div>
-                        </div>
+                {(detail.messages || []).length === 0 && detail.body ? (
+                  <div className="msg-row ticket-msg-row is-mine">
+                    <div className="msg-bubble">
+                      <div className="comment-top">
+                        <strong>{detail.created_by_name || "Клиент"}</strong>
+                        <span className="msg-time">{formatDateTime(detail.created_at)}</span>
                       </div>
-                    );
-                  })
-                )}
+                      <div className="comment-text">{detail.body}</div>
+                    </div>
+                  </div>
+                ) : null}
+                {(detail.messages || []).length === 0 && !detail.body ? (
+                  <p className="muted tickets-thread-empty">Пока нет сообщений в переписке</p>
+                ) : null}
+                {(detail.messages || []).map((m) => {
+                  const mine = myAuthorId != null && m.author === myAuthorId;
+                  return (
+                    <div
+                      key={m.id}
+                      className={`msg-row ticket-msg-row${mine ? " is-mine" : ""}`}
+                    >
+                      <div className="msg-bubble">
+                        <div className="comment-top">
+                          <strong>{m.author_name || "Участник"}</strong>
+                          <span className="msg-time">{formatDateTime(m.created_at)}</span>
+                        </div>
+                        <div className="comment-text">{m.text}</div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               {detail.status === "closed" ? (

@@ -396,15 +396,17 @@ export function ClientSupportWidget() {
             {error ? <div className="support-widget-error">{error}</div> : null}
 
             <div className="support-widget-chat-body" ref={threadRef}>
-              <div className="support-widget-msg is-body">
-                <div className="support-widget-msg-bubble">
-                  <div className="support-widget-msg-top">
-                    <strong>{detail.created_by_name || "Вы"}</strong>
-                    <span>{formatDateTime(detail.created_at)}</span>
+              {(detail.messages || []).length === 0 && detail.body ? (
+                <div className="support-widget-msg is-mine">
+                  <div className="support-widget-msg-bubble">
+                    <div className="support-widget-msg-top">
+                      <strong>{detail.created_by_name || "Вы"}</strong>
+                      <span>{formatDateTime(detail.created_at)}</span>
+                    </div>
+                    <p>{detail.body}</p>
                   </div>
-                  <p>{detail.body}</p>
                 </div>
-              </div>
+              ) : null}
               {(detail.messages || []).map((m) => {
                 const mine = myAuthorId != null && m.author === myAuthorId;
                 return (

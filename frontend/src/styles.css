@@ -406,6 +406,38 @@ a {
   transform: scale(0.94);
 }
 
+.client-avatar.tickets .client-avatar-face {
+  background: #121416;
+  color: #fff;
+  font-size: 0;
+}
+
+.client-avatar.tickets.active .client-avatar-face {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.client-avatar.tickets:hover .client-avatar-face {
+  filter: brightness(1.12);
+}
+
+.client-rail-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px #f3f4f6;
+}
+
 .client-rail-logout-only {
   justify-content: flex-end;
 }
@@ -6423,7 +6455,7 @@ a.task-card.is-done:hover,
 }
 
 .support-widget-field textarea {
-  resize: vertical;
+  resize: none;
   min-height: 120px;
 }
 

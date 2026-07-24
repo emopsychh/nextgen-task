@@ -77,6 +77,8 @@ def create_ticket(
         status=SupportTicket.Status.OPEN,
         created_by=actor,
     )
+    # Description is the first chat message from the author
+    SupportTicketMessage.objects.create(ticket=ticket, author=actor, text=body)
     publish_ticket_event(ticket, "ticket_created", actor_name=_author_name(actor))
     return ticket
 

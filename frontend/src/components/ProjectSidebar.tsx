@@ -119,25 +119,19 @@ export function ProjectSidebarNav() {
     };
   }, [token, contextPortalId, isAgency, onTicketsRoute]);
 
-  // Open tickets badge: agency = all clients; client = own portal
+  // Open tickets badge — client only (agency badge lives in ClientRail)
   useEffect(() => {
-    if (!token) {
-      setOpenTickets(0);
-      return;
-    }
-    if (!isAgency && !contextPortalId) {
-      setOpenTickets(0);
+    if (!token || isAgency || !contextPortalId) {
+      if (isAgency) setOpenTickets(0);
+      else if (!contextPortalId) setOpenTickets(0);
       return;
     }
     let cancelled = false;
 
     async function loadTickets() {
       try {
-        const url = isAgency
-          ? `/api/tickets/?bucket=open`
-          : `/api/tickets/?portal=${contextPortalId}&bucket=open`;
         const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
-          url,
+          `/api/tickets/?portal=${contextPortalId}&bucket=open`,
           {},
           token!
         );
@@ -243,20 +237,13 @@ export function ProjectSidebarNav() {
               setReportsAttention(unwrapList(data).length);
             }
           }
-          if (refreshTickets) {
-            const url = isAgency
-              ? `/api/tickets/?bucket=open`
-              : contextPortalId
-                ? `/api/tickets/?portal=${contextPortalId}&bucket=open`
-                : null;
-            if (url) {
-              const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
-                url,
-                {},
-                token
-              );
-              setOpenTickets(unwrapList(ticketsData).length);
-            }
+          if (refreshTickets && !isAgency && contextPortalId) {
+            const ticketsData = await api<SupportTicket[] | Paginated<SupportTicket>>(
+              `/api/tickets/?portal=${contextPortalId}&bucket=open`,
+              {},
+              token
+            );
+            setOpenTickets(unwrapList(ticketsData).length);
           }
         } catch {
           // keep previous
@@ -265,26 +252,7 @@ export function ProjectSidebarNav() {
     },
   });
 
-  const ticketsLink = isAgency ? (
-    <NavLink
-      to="/tickets"
-      className={({ isActive }) =>
-        `${showProjects ? "feed-nav-item" : "nav-item"}${isActive || onTicketsRoute ? " active" : ""}`
-      }
-    >
-      {showProjects ? (
-        <span className="feed-nav-icon" aria-hidden>
-          <TicketsNavIcon />
-        </span>
-      ) : null}
-      <span className={showProjects ? "feed-nav-label" : undefined}>Тикеты</span>
-      {openTickets > 0 ? (
-        <span className="feed-nav-count" aria-label={`${openTickets} открытых тикетов`}>
-          {openTickets > 99 ? "99+" : openTickets}
-        </span>
-      ) : null}
-    </NavLink>
-  ) : (
+  const ticketsLink = !isAgency ? (
     <button
       type="button"
       className={`${showProjects ? "feed-nav-item" : "nav-item"}${supportWidget.isOpen ? " active" : ""}`}
@@ -302,7 +270,7 @@ export function ProjectSidebarNav() {
         </span>
       ) : null}
     </button>
-  );
+  ) : null;
 
   if (!showProjects) {
     return (
@@ -313,7 +281,9 @@ export function ProjectSidebarNav() {
         {ticketsLink}
         {isAgency ? (
           <p className="sidebar-hint muted">
-            Выберите клиента слева, чтобы открыть проекты и отчёты.
+            {onTicketsRoute
+              ? "Общая лента тикетов по всем клиентам."
+              : "Выберите клиента слева, чтобы открыть проекты и отчёты."}
           </p>
         ) : null}
       </nav>
