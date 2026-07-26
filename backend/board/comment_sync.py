@@ -105,13 +105,9 @@ def status_from_bitrix_system_comment(text: str) -> str | None:
 
 
 def apply_status_from_bitrix_system_comment(task, text: str) -> bool:
-    """Apply inbound status inferred from a Bitrix system comment. No chat row.
-
-    Pause lines are ignored (product rule: Bitrix pause does not affect the app).
-    Only start → in_progress and complete → done are applied.
-    """
+    """Apply inbound start/pause/complete inferred from a Bitrix system line."""
     status = status_from_bitrix_system_comment(text)
-    if status not in ("in_progress", "done"):
+    if status not in ("todo", "in_progress", "done"):
         return False
     from board.status_sync import apply_inbound_status
 
@@ -560,17 +556,17 @@ def pull_task_chat_messages(
             if not isinstance(user, dict):
                 continue
             uid = str(user.get("id") or user.get("ID") or "")
-            name = " ".join(
-                (
-                    str(user.get("name") or user.get("NAME") or "").strip(),
-                    str(
-                        user.get("last_name")
-                        or user.get("LAST_NAME")
-                        or user.get("lastName")
-                        or ""
-                    ).strip(),
-                )
+            name = str(user.get("name") or user.get("NAME") or "").strip()
+            last_name = str(
+                user.get("last_name")
+                or user.get("LAST_NAME")
+                or user.get("lastName")
+                or ""
             ).strip()
+            # Some IM responses already return the full display name in `name`
+            # while also repeating the surname in `last_name`.
+            if last_name and not name.casefold().endswith(last_name.casefold()):
+                name = f"{name} {last_name}".strip()
             if not name:
                 name = str(user.get("NAME") or user.get("FULL_NAME") or "").strip()
             if uid:

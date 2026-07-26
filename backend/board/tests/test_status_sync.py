@@ -130,14 +130,13 @@ class ApplyInboundStatusTests(TestCase):
         TimeEntry.objects.create(task=task, author=self.user, started_at=timezone.now())
         return task
 
-    def test_pause_from_bitrix_is_ignored(self):
-        # Product rule: Bitrix pause must never change the app status/timer.
+    def test_pause_from_bitrix_stops_app_task_and_timer(self):
         task = self._running_task()
         changed = apply_inbound_status(task, "todo", force=True)
         task.refresh_from_db()
-        self.assertFalse(changed)
-        self.assertEqual(task.status, Task.Status.IN_PROGRESS)
-        self.assertTrue(task.time_entries.filter(ended_at__isnull=True).exists())
+        self.assertTrue(changed)
+        self.assertEqual(task.status, Task.Status.TODO)
+        self.assertFalse(task.time_entries.filter(ended_at__isnull=True).exists())
 
     def test_done_stops_running_timer(self):
         task = self._running_task()
@@ -170,7 +169,7 @@ class ApplyInboundStatusTests(TestCase):
             sync_status=Task.SyncStatus.PENDING,
             created_by=self.user,
         )
-        # Pause echo is ignored regardless; also done/start without force skip.
+        # Pending local writes are protected from stale inbound transitions.
         changed = apply_inbound_status(task, "done", force=False)
         task.refresh_from_db()
         self.assertFalse(changed)

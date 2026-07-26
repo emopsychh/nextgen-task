@@ -440,7 +440,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         if self.request.user.is_agency and old_status != task.status:
             author = self.request.user.bitrix_user
-            # Pause / complete → stop timer (local only; Bitrix pause is never pushed)
+            # Pause / complete → stop the local timer; status sync mirrors Bitrix.
             if old_status == Task.Status.IN_PROGRESS and task.status in (
                 Task.Status.TODO,
                 Task.Status.DONE,

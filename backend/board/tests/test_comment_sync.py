@@ -100,9 +100,9 @@ class UpsertCommentTests(TestCase):
         )
         self.assertEqual(Comment.objects.filter(task=self.task).count(), 1)
 
-    def test_system_log_pause_ignored_start_applies(self):
+    def test_system_log_pause_and_start_apply(self):
         # SYNCED so the "don't clobber a fresh pending push" guard does not apply.
-        # Pause from Bitrix must NOT change app status (product rule).
+        # Pause from Bitrix must stop the app task and its timer.
         Task.objects.filter(pk=self.task.pk).update(
             status=Task.Status.IN_PROGRESS, sync_status=Task.SyncStatus.SYNCED
         )
@@ -115,7 +115,7 @@ class UpsertCommentTests(TestCase):
         self.assertFalse(created)
         self.assertEqual(Comment.objects.filter(task=self.task).count(), 0)
         self.task.refresh_from_db()
-        self.assertEqual(self.task.status, Task.Status.IN_PROGRESS)
+        self.assertEqual(self.task.status, Task.Status.TODO)
 
         # Start from Bitrix still applies.
         Task.objects.filter(pk=self.task.pk).update(
@@ -155,7 +155,13 @@ class UpsertCommentTests(TestCase):
                     "date": "2026-07-26T16:00:00+00:00",
                 }
             ],
-            "users": [{"id": "12", "name": "Александр", "last_name": "Матвеев"}],
+            "users": [
+                {
+                    "id": "12",
+                    "name": "Александр Матвеев",
+                    "last_name": "Матвеев",
+                }
+            ],
         }
 
         created = pull_task_chat_messages(

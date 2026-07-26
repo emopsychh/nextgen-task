@@ -1,4 +1,4 @@
-"""Outbound status push: start/complete reach agency Bitrix; pause is a no-op.
+"""Outbound status push: start/pause/complete reach agency Bitrix.
 
 Client Bitrix tasks are never created — sync targets agency_bitrix_task_id only.
 """
@@ -46,7 +46,7 @@ class OutboundStatusPushTests(TestCase):
         )
 
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
-    def test_pause_is_noop_in_bitrix(self):
+    def test_pause_stops_timer_and_pauses_bitrix(self):
         task = make_task(
             self.project,
             created_by=self.user,
@@ -58,8 +58,8 @@ class OutboundStatusPushTests(TestCase):
         with patch.object(board_tasks, "BitrixClient", return_value=client):
             res = board_tasks.sync_task_to_bitrix(task.id)
         self.assertTrue(res["ok"])
-        client.pause_task.assert_not_called()
-        client.pause_task_timer.assert_not_called()
+        client.pause_task.assert_called_once_with("108")
+        client.pause_task_timer.assert_called_once_with("108")
         task.refresh_from_db()
         self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
 

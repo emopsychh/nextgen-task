@@ -187,25 +187,19 @@ def _stop_bitrix_timer_quiet(client: BitrixClient, bitrix_task_id: str) -> None:
 
 
 def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local: str) -> None:
-    """Push local work-state to Bitrix (locked product model).
-
-      • todo (pause)     → no-op. Bitrix stays «in progress»; pause is app-only.
-      • in_progress      → start Bitrix if not already in progress (resume after
-                           local pause is a no-op when Bitrix is already running).
-      • done             → complete Bitrix (app never posts «Учёт времени»).
-
-    Never push pause/todo — that was the source of status ping-pong.
-    """
+    """Push local start/pause/complete state to the agency Bitrix task."""
     target = _normalize_local(target_local)
-
-    # App-only pause: never push a pause/todo to Bitrix.
-    if target == "todo":
-        return
 
     task_data = client.get_task(bitrix_task_id)
     current = bitrix_status_code(task_data)
     if current is None:
         current = BITRIX_STATUS_PENDING
+
+    if target == "todo":
+        _stop_bitrix_timer_quiet(client, bitrix_task_id)
+        if current == BITRIX_STATUS_IN_PROGRESS:
+            client.pause_task(bitrix_task_id)
+        return
 
     if target == "done":
         if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
@@ -556,13 +550,10 @@ def sync_comment_to_bitrix(self, comment_id: int):
     except Comment.DoesNotExist:
         return {"ok": False, "reason": "missing"}
 
-    # Most system lines stay app-local. Spent-time on completion is the
-    # exception — the team needs it in Bitrix chat (manual Учёт времени).
+    # System lines stay app-local; completion time is written to Bitrix
+    # «Учёт времени», never duplicated as a chat message.
     if comment.is_system:
-        from board.completion import TIME_SPENT_MARKER
-
-        if not (comment.text or "").strip().startswith(TIME_SPENT_MARKER):
-            return {"ok": True, "skipped": "system"}
+        return {"ok": True, "skipped": "system"}
 
     author_name = comment.author_name or (
         comment.author.display_name if comment.author else "Участник"
@@ -991,6 +982,82 @@ def move_deal_stage_task(self, portal_id: int, stage_key: str):
         logger.exception(
             "move_deal_stage_task failed portal=%s key=%s", portal_id, stage_key
         )
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": str(exc)}
+
+
+def _extract_elapsed_id(result) -> str:
+    if isinstance(result, (int, float)):
+        return str(int(result))
+    if isinstance(result, str):
+        return result if result.isdigit() else ""
+    if isinstance(result, dict):
+        for key in ("id", "ID", "result"):
+            value = result.get(key)
+            if isinstance(value, (int, float)):
+                return str(int(value))
+            if isinstance(value, str) and value.isdigit():
+                return value
+    return ""
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=30)
+def sync_completion_time_to_bitrix(self, task_id: int):
+    """Fill Bitrix elapsed time up to the final total tracked in Nextgen."""
+    from django.db import transaction
+
+    from board.models import Task
+    from board.timeutils import task_tracked_seconds
+
+    try:
+        with transaction.atomic():
+            task = (
+                Task.objects.select_for_update()
+                .select_related("project", "project__portal")
+                .get(pk=task_id)
+            )
+            agency = _agency_portal_for_client(task.project.portal)
+            bitrix_id = str(task.agency_bitrix_task_id or "")
+            if not agency or not agency.access_token or not bitrix_id:
+                raise BitrixAPIError("Нет связанной задачи на портале агентства")
+
+            local_total = int(task_tracked_seconds(task, include_running=False))
+            if local_total <= 0:
+                return {"ok": True, "skipped": "no_time", "seconds": 0}
+
+            client = BitrixClient(agency)
+            bitrix_total = client.get_task_elapsed_seconds(bitrix_id)
+            if bitrix_total is None:
+                raise BitrixAPIError("Не удалось прочитать Учёт времени из Bitrix")
+
+            missing = max(0, local_total - int(bitrix_total))
+            if missing <= 0:
+                return {
+                    "ok": True,
+                    "skipped": "already_filled",
+                    "seconds": local_total,
+                    "bitrix_seconds": int(bitrix_total),
+                }
+
+            user_id = _bitrix_user_id(client.get_current_user()) or None
+            result = client.add_elapsed_item(
+                bitrix_id,
+                missing,
+                comment="",
+                user_id=user_id,
+            )
+            return {
+                "ok": True,
+                "seconds": local_total,
+                "bitrix_seconds_before": int(bitrix_total),
+                "added_seconds": missing,
+                "elapsed_id": _extract_elapsed_id(result),
+            }
+    except Task.DoesNotExist:
+        return {"ok": False, "reason": "missing"}
+    except BitrixAPIError as exc:
         try:
             raise self.retry(exc=exc)
         except self.MaxRetriesExceededError:
