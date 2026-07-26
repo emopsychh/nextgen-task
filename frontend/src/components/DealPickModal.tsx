@@ -88,7 +88,7 @@ export function DealPickModal({
 
         <div className="deal-pick-scope" role="note">
           <span className="deal-pick-scope-dot" aria-hidden />
-          Только сделки этого портала — где в CRM уже стоит его ссылка
+          Только сделки компании, где указан этот портал
         </div>
 
         {error ? <div className="error-banner">{error}</div> : null}
@@ -103,9 +103,9 @@ export function DealPickModal({
             <div className="deal-pick-empty">
               <strong>Нет сделок для этого портала</strong>
               <p className="muted">
-                Откройте сделку сопровождения в CRM и укажите ссылку на{" "}
-                <span className="deal-pick-domain">{portalDomain}</span> — после этого она
-                появится в списке.
+                В компании, участвующей в сделке, укажите ссылку на{" "}
+                <span className="deal-pick-domain">{portalDomain}</span> — после этого сделки
+                этой компании появятся в списке.
               </p>
             </div>
           ) : (

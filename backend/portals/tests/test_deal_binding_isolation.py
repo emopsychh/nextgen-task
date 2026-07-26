@@ -6,6 +6,7 @@ from board.tests.helpers import make_link, make_portal
 from portals.deal_resolve import (
     deactivate_bindings_for_deal,
     portal_link_matches,
+    portal_link_value_matches,
     resolve_or_refresh_binding,
 )
 from portals.models import PortalDealBinding
@@ -18,9 +19,18 @@ class PortalLinkMatchTests(TestCase):
         self.assertFalse(portal_link_matches("https://bitrix24.ru", "client.bitrix24.ru"))
         self.assertFalse(portal_link_matches("other.bitrix24.ru", "client.bitrix24.ru"))
         self.assertFalse(portal_link_matches("client", "client.bitrix24.ru"))
+        self.assertTrue(
+            portal_link_value_matches(
+                [{"VALUE": "https://client.bitrix24.ru/"}],
+                "client.bitrix24.ru",
+            )
+        )
 
 
-@override_settings(BITRIX_DEAL_PORTAL_LINK_FIELD="UF_CRM_PORTAL")
+@override_settings(
+    BITRIX_DEAL_PORTAL_LINK_FIELD="UF_CRM_PORTAL",
+    BITRIX_COMPANY_PORTAL_LINK_FIELD="UF_CRM_PORTAL",
+)
 class DealBindingIsolationTests(TestCase):
     def setUp(self):
         self.agency = make_portal(role="agency", domain="agency.bitrix24.ru", token="a-tok")
@@ -95,18 +105,29 @@ class DealBindingIsolationTests(TestCase):
             "ID": "158",
             "TITLE": "Новая сделочка",
             "CATEGORY_ID": "1",
-            "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+            "COMPANY_ID": "77",
             "CLOSED": "N",
         }
 
         def call(method, params=None):
+            if method == "crm.company.list":
+                return [
+                    {
+                        "ID": "77",
+                        "TITLE": "Newbie",
+                        "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+                    }
+                ]
             if method == "crm.deal.list":
                 return [deal]
             return {}
 
         bx.call.side_effect = call
         bx.get_deal.return_value = deal
-        bx.get_company.return_value = {}
+        bx.get_company.return_value = {
+            "ID": "77",
+            "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+        }
 
         with patch("portals.deal_resolve.sync_deal_hours_meta") as sync_meta:
             sync_meta.return_value = {

@@ -132,7 +132,7 @@ Vite проксирует `/api` и `/media` на `http://localhost:8000`.
   - пишет в таймлайн сделки: `Задача «…»: учтено … . Остаток часов: N`
   - уменьшает поле **оставшихся часов** на длительность этой сессии (поле **оплаченных** не меняется)
   - повторно не списывает ту же сессию (`billed_to_deal_at`)
-- Сделка ищется по полю «Ссылка на портал» (`BITRIX_DEAL_PORTAL_LINK_FIELD`) в воронке `BITRIX_ACCOMPANIMENT_CATEGORY_ID`
+- Компания ищется по полю «Ссылка на портал» (`BITRIX_COMPANY_PORTAL_LINK_FIELD`), затем выбираются её сделки из воронки `BITRIX_ACCOMPANIMENT_CATEGORY_ID`
 - Стадии сделки: отправка отчёта → «Согласование отчёта»; согласие клиента → «Подписание акта» (`BITRIX_DEAL_STAGE_*` или поиск по имени)
 - Проект компании (Bitrix workgroup) читается из `BITRIX_COMPANY_PROJECT_ID_FIELD` на компании сделки
 - Коды полей часов в `.env`: `BITRIX_DEAL_PAID_HOURS_FIELD`, `BITRIX_DEAL_REMAINING_HOURS_FIELD` (например `UF_CRM_…`)

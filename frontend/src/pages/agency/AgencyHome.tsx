@@ -373,7 +373,7 @@ export function AgencyHome() {
           <span className="how-num">3</span>
           <div>
             <strong>Выберите сделку</strong>
-            <p>Только сделки с ссылкой на этот портал</p>
+            <p>По ссылке на портал в компании CRM</p>
           </div>
         </div>
       </section>
@@ -500,8 +500,7 @@ export function AgencyHome() {
                     ) : (
                       <>
                         <p className="deal-bind-hint muted">
-                          Покажем сделки этого портала — только те, где в CRM уже стоит его
-                          ссылка
+                          Покажем сделки компании, где в CRM указана ссылка на этот портал
                         </p>
                         <button
                           type="button"

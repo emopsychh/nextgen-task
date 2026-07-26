@@ -28,7 +28,7 @@ See root `README.md` for full install flow across agency + client portals.
 ```
 BITRIX_DEAL_PAID_HOURS_FIELD=UF_CRM_…
 BITRIX_DEAL_REMAINING_HOURS_FIELD=UF_CRM_…
-BITRIX_DEAL_PORTAL_LINK_FIELD=UF_CRM_1784732110930
+BITRIX_COMPANY_PORTAL_LINK_FIELD=UF_CRM_1784732110930
 BITRIX_COMPANY_PROJECT_ID_FIELD=UF_CRM_1784732577491
 BITRIX_ACCOMPANIMENT_CATEGORY_ID=…
 BITRIX_DEAL_STAGE_REPORT_REVIEW=…   # «Согласование отчёта» (или пусто — поиск по имени)
@@ -43,7 +43,7 @@ BITRIX_DEAL_STAGE_ACT_SIGNING=…     # «Подписание акта» (ил�
 Обращение к менеджеру по отчёту стадию не меняет.
 
 При паузе/завершении задачи (закрытии сессии таймера) остаток уменьшается; оплаченные не трогаем.  
-Сделка находится автоматически по полю **«Ссылка на портал Битрикс24»** (`BITRIX_DEAL_PORTAL_LINK_FIELD`).  
+Сначала компания находится по полю **«Ссылка на портал Битрикс24»** (`BITRIX_COMPANY_PORTAL_LINK_FIELD`), затем приложение показывает её сделки сопровождения.
 `GROUP_ID` Bitrix-проекта компании — из поля **«ID проекта»** на компании (`BITRIX_COMPANY_PROJECT_ID_FIELD`); робот на стадии 2 создаёт проект и пишет ID.  
 В приложении «Проект» = родительская задача в этом GROUP; «Задача» = подзадача (на портале клиента — плоская задача).  
 Если остаток пустой — при поиске/обновлении копируется из оплаченных.

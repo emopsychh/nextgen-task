@@ -198,8 +198,14 @@ BITRIX_APPLICATION_TOKEN = os.getenv("BITRIX_APPLICATION_TOKEN", "")
 # Paid hours are never overwritten; remaining hours are decremented per closed timer session.
 BITRIX_DEAL_PAID_HOURS_FIELD = os.getenv("BITRIX_DEAL_PAID_HOURS_FIELD", "").strip()
 BITRIX_DEAL_REMAINING_HOURS_FIELD = os.getenv("BITRIX_DEAL_REMAINING_HOURS_FIELD", "").strip()
-# Deal UF «Ссылка на портал Битрикс24» — auto-find deal by client portal domain
+# Legacy deal UF «Ссылка на портал Битрикс24».
 BITRIX_DEAL_PORTAL_LINK_FIELD = os.getenv("BITRIX_DEAL_PORTAL_LINK_FIELD", "").strip()
+# Preferred company UF «Ссылка на портал Битрикс24». Falls back to the legacy
+# variable so existing deployments work when the same UF code was configured.
+BITRIX_COMPANY_PORTAL_LINK_FIELD = os.getenv(
+    "BITRIX_COMPANY_PORTAL_LINK_FIELD",
+    BITRIX_DEAL_PORTAL_LINK_FIELD,
+).strip()
 # Company UF «ID проекта» (Bitrix workgroup / GROUP_ID)
 BITRIX_COMPANY_PROJECT_ID_FIELD = os.getenv("BITRIX_COMPANY_PROJECT_ID_FIELD", "").strip()
 # CRM category (funnel) id for «Сопровождение»

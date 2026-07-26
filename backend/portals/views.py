@@ -480,9 +480,9 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
         # Explicit deal_id — must match portal link UF and stay exclusive.
         from portals.deal_resolve import (
+            company_portal_link_field,
             deactivate_bindings_for_deal,
-            deal_link_matches_client,
-            portal_link_field,
+            deal_company_matches_client,
         )
 
         meta = {
@@ -495,12 +495,14 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             try:
                 bx = BitrixClient(request.user.portal)
                 deal = bx.get_deal(deal_id)
-                if portal_link_field() and not deal_link_matches_client(deal, client_portal):
+                if company_portal_link_field() and not deal_company_matches_client(
+                    bx, deal, client_portal
+                ):
                     return Response(
                         {
                             "detail": (
-                                "Сделка не привязана к этому порталу "
-                                "(проверьте поле «Ссылка на портал» в CRM)"
+                                "Компания сделки не привязана к этому порталу "
+                                "(проверьте поле «Ссылка на портал» в компании CRM)"
                             )
                         },
                         status=400,

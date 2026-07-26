@@ -30,6 +30,10 @@ def portal_link_field() -> str:
     return (settings.BITRIX_DEAL_PORTAL_LINK_FIELD or "").strip()
 
 
+def company_portal_link_field() -> str:
+    return (settings.BITRIX_COMPANY_PORTAL_LINK_FIELD or "").strip()
+
+
 def company_project_id_field() -> str:
     return (settings.BITRIX_COMPANY_PROJECT_ID_FIELD or "").strip()
 
@@ -46,7 +50,7 @@ def deal_not_found_for_portal_message(client_portal) -> str:
         where = "этого клиента"
     return (
         f"Для {where} не найдена открытая сделка сопровождения. "
-        "В CRM укажите в сделке ссылку на этот портал Bitrix24 "
+        "В CRM укажите в компании сделки ссылку на этот портал Bitrix24 "
         "и нажмите «Выбрать сделку»."
     )
 
@@ -85,6 +89,24 @@ def portal_link_matches(field_value: str, client_host: str) -> bool:
     return bool(raw) and raw == client_host and bool(_HOST_RE.match(raw))
 
 
+def portal_link_value_matches(field_value, client_host: str) -> bool:
+    """Handle scalar and multi-value Bitrix URL/string user fields."""
+    if isinstance(field_value, dict):
+        preferred = [
+            field_value.get("VALUE"),
+            field_value.get("value"),
+            field_value.get("URL"),
+            field_value.get("url"),
+        ]
+        values = [value for value in preferred if value is not None]
+        if not values:
+            values = list(field_value.values())
+        return any(portal_link_value_matches(value, client_host) for value in values)
+    if isinstance(field_value, (list, tuple, set)):
+        return any(portal_link_value_matches(value, client_host) for value in field_value)
+    return portal_link_matches(str(field_value or ""), client_host)
+
+
 def deactivate_bindings_for_deal(
     *, agency_portal, deal_id: str, except_client_portal=None
 ) -> int:
@@ -118,7 +140,7 @@ def deal_link_matches_client(deal: dict, client_portal) -> bool:
     client_host = normalize_portal_host(getattr(client_portal, "domain", "") or "")
     if not client_host or not _HOST_RE.match(client_host):
         return False
-    return portal_link_matches(str(deal.get(link_field) or ""), client_host)
+    return portal_link_value_matches(deal.get(link_field), client_host)
 
 
 def _deal_list_select() -> list[str]:
@@ -131,9 +153,6 @@ def _deal_list_select() -> list[str]:
         "DATE_MODIFY",
         "CLOSED",
     ]
-    link_field = portal_link_field()
-    if link_field:
-        select.append(link_field)
     paid = (settings.BITRIX_DEAL_PAID_HOURS_FIELD or "").strip()
     rem = (settings.BITRIX_DEAL_REMAINING_HOURS_FIELD or "").strip()
     if paid:
@@ -150,16 +169,106 @@ def _unwrap_deal_list(result) -> list[dict]:
     return [d for d in deals if isinstance(d, dict)]
 
 
+def _list_crm_rows(
+    client: BitrixClient,
+    method: str,
+    *,
+    crm_filter: dict,
+    order: dict,
+    select: list[str],
+    max_pages: int = 20,
+) -> list[dict]:
+    """Read bounded Bitrix CRM pages (crm.*.list returns up to 50 rows)."""
+    rows: list[dict] = []
+    start = 0
+    for _ in range(max_pages):
+        result = client.call(
+            method,
+            {
+                "filter": crm_filter,
+                "order": order,
+                "select": select,
+                "start": start,
+            },
+        )
+        page = _unwrap_deal_list(result)
+        rows.extend(page)
+        if len(page) < 50:
+            break
+        start += len(page)
+    return rows
+
+
+def _company_ids_for_portal(client: BitrixClient, client_host: str) -> list[str]:
+    """CRM companies whose portal-link UF exactly matches the client host."""
+    link_field = company_portal_link_field()
+    if not link_field:
+        return []
+
+    select = ["ID", "TITLE", link_field]
+    companies: list[dict] = []
+    try:
+        companies = _list_crm_rows(
+            client,
+            "crm.company.list",
+            crm_filter={f"%{link_field}": client_host},
+            order={"DATE_MODIFY": "DESC"},
+            select=select,
+        )
+    except BitrixAPIError:
+        companies = []
+
+    def matching_ids(rows: list[dict]) -> list[str]:
+        ids: list[str] = []
+        for company in rows:
+            if not portal_link_value_matches(company.get(link_field), client_host):
+                continue
+            company_id = str(company.get("ID") or company.get("id") or "")
+            if company_id and company_id not in ids:
+                ids.append(company_id)
+        return ids
+
+    ids = matching_ids(companies)
+    if ids:
+        return ids
+
+    # URL/multiple user fields do not always support LIKE in Bitrix.
+    try:
+        companies = _list_crm_rows(
+            client,
+            "crm.company.list",
+            crm_filter={},
+            order={"DATE_MODIFY": "DESC"},
+            select=select,
+        )
+    except BitrixAPIError:
+        return []
+
+    return matching_ids(companies)
+
+
+def deal_company_matches_client(
+    client: BitrixClient, deal: dict, client_portal
+) -> bool:
+    """Verify that the deal's CRM company owns this exact portal link."""
+    company_id = str(deal.get("COMPANY_ID") or deal.get("companyId") or "")
+    link_field = company_portal_link_field()
+    client_host = normalize_portal_host(getattr(client_portal, "domain", "") or "")
+    if not company_id or not link_field or not client_host:
+        return False
+    company = client.get_company(company_id)
+    return portal_link_value_matches(company.get(link_field), client_host)
+
+
 def list_open_deals_for_portal(client: BitrixClient, client_portal) -> list[dict]:
     """
-    Open accompaniment deals whose portal-link UF points at this client portal.
+    Open accompaniment deals whose CRM company's portal-link UF points at this portal.
 
     Never returns deals linked to other portals — picker stays scoped to the
     client we are binding.
     """
-    link_field = portal_link_field()
     client_host = normalize_portal_host(getattr(client_portal, "domain", "") or "")
-    if not link_field or not client_host or not _HOST_RE.match(client_host):
+    if not company_portal_link_field() or not client_host or not _HOST_RE.match(client_host):
         return []
 
     base_filter: dict = {"CLOSED": "N"}
@@ -169,44 +278,24 @@ def list_open_deals_for_portal(client: BitrixClient, client_portal) -> list[dict
 
     select = _deal_list_select()
     order = {"DATE_MODIFY": "DESC"}
+    company_ids = _company_ids_for_portal(client, client_host)
+    if not company_ids:
+        return []
 
-    # Prefer Bitrix LIKE filter on the portal-link UF field.
-    candidates: list[dict] = []
-    try:
-        result = client.call(
-            "crm.deal.list",
-            {
-                "filter": {**base_filter, f"%{link_field}": client_host},
-                "order": order,
-                "select": select,
-                "start": 0,
-            },
-        )
-        candidates = _unwrap_deal_list(result)
-    except BitrixAPIError:
-        candidates = []
-
-    # Fallback: list open deals in the funnel and match in Python
-    if not candidates:
+    matched: list[dict] = []
+    for company_id in company_ids:
         try:
-            result = client.call(
-                "crm.deal.list",
-                {
-                    "filter": base_filter,
-                    "order": order,
-                    "select": select,
-                    "start": 0,
-                },
+            matched.extend(
+                _list_crm_rows(
+                    client,
+                    "crm.deal.list",
+                    crm_filter={**base_filter, "COMPANY_ID": company_id},
+                    order=order,
+                    select=select,
+                )
             )
-            candidates = _unwrap_deal_list(result)
         except BitrixAPIError:
-            return []
-
-    matched = [
-        d
-        for d in candidates
-        if portal_link_matches(str(d.get(link_field) or ""), client_host)
-    ]
+            continue
     # Dedupe by ID, keep CRM order (newest first).
     seen: set[str] = set()
     unique: list[dict] = []
@@ -321,12 +410,12 @@ def refresh_binding_from_deal(
     if client is None:
         client = BitrixClient(agency_portal)
 
-    if require_portal_link_match and portal_link_field():
+    if require_portal_link_match and company_portal_link_field():
         try:
             deal = client.get_deal(binding.deal_id)
         except BitrixAPIError:
             deal = None
-        if not deal or not deal_link_matches_client(deal, client_portal):
+        if not deal or not deal_company_matches_client(client, deal, client_portal):
             binding.is_active = False
             binding.save(update_fields=["is_active", "updated_at"])
             return None
@@ -415,8 +504,8 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
     if not link:
         return None
 
-    if not portal_link_field():
-        raise BitrixAPIError("Не задано BITRIX_DEAL_PORTAL_LINK_FIELD")
+    if not company_portal_link_field():
+        raise BitrixAPIError("Не задано поле ссылки на портал в компании")
 
     if not agency_portal.access_token:
         raise BitrixAPIError("Agency portal has no Bitrix token")
@@ -593,8 +682,8 @@ def resolve_bitrix_group_id(*, agency_portal, client_portal, force_refresh: bool
 
     if not agency_portal.access_token:
         raise BitrixAPIError("Agency portal has no Bitrix token")
-    if not portal_link_field():
-        raise BitrixAPIError("Не задано BITRIX_DEAL_PORTAL_LINK_FIELD")
+    if not company_portal_link_field():
+        raise BitrixAPIError("Не задано поле ссылки на портал в компании")
     if not company_project_id_field():
         raise BitrixAPIError("Не задано BITRIX_COMPANY_PROJECT_ID_FIELD")
 
