@@ -51,16 +51,57 @@ def normalize_portal_host(value: str) -> str:
 
 
 def portal_link_matches(field_value: str, client_host: str) -> bool:
+    """True only when the deal UF host equals this client portal host.
+
+    No substring / parent-domain fuzzy match — those caused unrelated portals
+    to inherit another company's accompaniment hours.
+    """
     if not client_host:
         return False
     field_host = normalize_portal_host(field_value)
-    if not field_host:
-        # Plain text without URL shape — compare as host-ish fragment
-        raw = (field_value or "").strip().lower()
-        return client_host in raw or raw in client_host
-    return field_host == client_host or field_host.endswith("." + client_host) or client_host.endswith(
-        "." + field_host
+    if field_host:
+        return field_host == client_host
+    # Plain text: accept only an exact host-shaped value (no "contains").
+    raw = (field_value or "").strip().lower().strip(".")
+    if raw.startswith("www."):
+        raw = raw[4:]
+    return bool(raw) and raw == client_host and bool(_HOST_RE.match(raw))
+
+
+def deactivate_bindings_for_deal(
+    *, agency_portal, deal_id: str, except_client_portal=None
+) -> int:
+    """Ensure a CRM deal is active for at most one client under this agency."""
+    from portals.models import PortalDealBinding
+
+    qs = PortalDealBinding.objects.filter(
+        agency_portal=agency_portal,
+        deal_id=str(deal_id),
+        is_active=True,
     )
+    if except_client_portal is not None:
+        qs = qs.exclude(client_portal_id=except_client_portal.id)
+    return qs.update(is_active=False)
+
+
+def deactivate_client_bindings(*, agency_portal, client_portal) -> int:
+    from portals.models import PortalDealBinding
+
+    return PortalDealBinding.objects.filter(
+        agency_portal=agency_portal,
+        client_portal=client_portal,
+        is_active=True,
+    ).update(is_active=False)
+
+
+def deal_link_matches_client(deal: dict, client_portal) -> bool:
+    link_field = portal_link_field()
+    if not link_field:
+        return False
+    client_host = normalize_portal_host(getattr(client_portal, "domain", "") or "")
+    if not client_host or not _HOST_RE.match(client_host):
+        return False
+    return portal_link_matches(str(deal.get(link_field) or ""), client_host)
 
 
 def _deal_list_select() -> list[str]:
@@ -210,15 +251,31 @@ def refresh_binding_from_deal(
     client_portal,
     binding,
     client: BitrixClient | None = None,
+    require_portal_link_match: bool = True,
 ):
     """
     Refresh hours/stage for an existing binding and capture credit when won.
     Does not switch to another deal.
+
+    If require_portal_link_match and the CRM portal-link UF no longer points at
+    this client, the binding is deactivated and None is returned — so hours from
+    another company's deal cannot stick to the wrong portal.
     """
     from portals.models import PortalLink
 
     if client is None:
         client = BitrixClient(agency_portal)
+
+    if require_portal_link_match and portal_link_field():
+        try:
+            deal = client.get_deal(binding.deal_id)
+        except BitrixAPIError:
+            deal = None
+        if not deal or not deal_link_matches_client(deal, client_portal):
+            binding.is_active = False
+            binding.save(update_fields=["is_active", "updated_at"])
+            return None
+
     meta = sync_deal_hours_meta(client, binding.deal_id)
     update_fields = _apply_meta_to_binding(binding, meta)
     if update_fields:
@@ -270,10 +327,12 @@ def refresh_deal_hours_for_portal(client_portal) -> bool:
             client_portal=client_portal,
         )
     except BitrixAPIError:
+        # Transient CRM errors: refresh only if the deal still belongs to this portal.
         refresh_binding_from_deal(
             agency_portal=link.agency_portal,
             client_portal=client_portal,
             binding=binding,
+            require_portal_link_match=True,
         )
     return True
 
@@ -281,8 +340,11 @@ def refresh_deal_hours_for_portal(client_portal) -> bool:
 def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str | None = None):
     """
     Ensure an active PortalDealBinding exists for the client.
-    Finds the open accompaniment deal by UF portal-link field → client portal domain.
-    When a new open deal appears, rolls pending hours credit into its remaining.
+
+    Finds the open accompaniment deal by UF portal-link field → client portal
+    domain (exact host). A deal may be active for only one client under the
+    agency. If this portal has no matching deal/link, any previous binding is
+    cleared so another company's hours cannot stick here.
     `company_id` is ignored (kept for call-site compatibility).
     """
     del company_id  # no longer used
@@ -317,14 +379,18 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
 
     deal = find_open_deal_for_portal(client, client_portal)
     if not deal:
-        # No open deal — refresh current binding (may be won) and capture credit
+        # No open deal for THIS portal. Keep previous only if its CRM link still
+        # points here (e.g. won deal). Otherwise clear — never inherit strangers' hours.
         if previous and previous.deal_id:
-            return refresh_binding_from_deal(
+            kept = refresh_binding_from_deal(
                 agency_portal=agency_portal,
                 client_portal=client_portal,
                 binding=previous,
                 client=client,
+                require_portal_link_match=True,
             )
+            if kept is not None:
+                return kept
         host = normalize_portal_host(client_portal.domain or "")
         raise BitrixAPIError(
             f"Не найдена открытая сделка с ссылкой на портал «{host}»"
@@ -344,6 +410,7 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
                 client_portal=client_portal,
                 binding=previous,
                 client=client,
+                require_portal_link_match=False,
             )
             link.refresh_from_db()
         except BitrixAPIError:
@@ -366,6 +433,12 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
     # Cache company + Bitrix workgroup id from company UF
     cache_company_and_group_on_link(client, link, deal)
 
+    # This deal belongs to this client only — drop other portals' active claim.
+    deactivate_bindings_for_deal(
+        agency_portal=agency_portal,
+        deal_id=deal_id,
+        except_client_portal=client_portal,
+    )
     PortalDealBinding.objects.filter(
         agency_portal=agency_portal,
         client_portal=client_portal,

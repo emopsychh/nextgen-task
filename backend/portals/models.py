@@ -125,7 +125,13 @@ class PortalDealBinding(models.Model):
                 fields=["agency_portal", "client_portal"],
                 condition=models.Q(is_active=True),
                 name="uniq_active_deal_binding_per_client",
-            )
+            ),
+            # One CRM deal → at most one active client under the agency.
+            models.UniqueConstraint(
+                fields=["agency_portal", "deal_id"],
+                condition=models.Q(is_active=True),
+                name="uniq_active_deal_binding_per_deal",
+            ),
         ]
 
     def __str__(self):

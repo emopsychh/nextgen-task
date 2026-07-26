@@ -462,7 +462,14 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                 return Response({"detail": "Клиент не привязан к агентству"}, status=400)
             return Response(PortalDealBindingSerializer(binding).data, status=201)
 
-        # Fallback: explicit deal_id (advanced)
+        # Fallback: explicit deal_id (advanced) — still must match portal link UF
+        # and must not stay shared across multiple clients.
+        from portals.deal_resolve import (
+            deactivate_bindings_for_deal,
+            deal_link_matches_client,
+            portal_link_field,
+        )
+
         meta = {
             "deal_title": "",
             "category_id": "",
@@ -471,10 +478,27 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         }
         if request.user.portal.access_token:
             try:
-                meta = sync_deal_hours_meta(BitrixClient(request.user.portal), deal_id)
+                bx = BitrixClient(request.user.portal)
+                deal = bx.get_deal(deal_id)
+                if portal_link_field() and not deal_link_matches_client(deal, client_portal):
+                    return Response(
+                        {
+                            "detail": (
+                                "Сделка не привязана к этому порталу "
+                                "(проверьте поле «Ссылка на портал» в CRM)"
+                            )
+                        },
+                        status=400,
+                    )
+                meta = sync_deal_hours_meta(bx, deal_id, deal)
             except BitrixAPIError as exc:
                 return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
 
+        deactivate_bindings_for_deal(
+            agency_portal=request.user.portal,
+            deal_id=deal_id,
+            except_client_portal=client_portal,
+        )
         PortalDealBinding.objects.filter(
             agency_portal=request.user.portal,
             client_portal=client_portal,
@@ -585,7 +609,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                 client_portal=binding.client_portal,
             )
         except BitrixAPIError:
-            # Keep existing binding; refresh hours/stage and capture won-deal credit
+            # Transient CRM error: refresh only if deal still belongs to this portal
             try:
                 from portals.deal_resolve import refresh_binding_from_deal
 
@@ -593,6 +617,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                     agency_portal=agency,
                     client_portal=binding.client_portal,
                     binding=binding,
+                    require_portal_link_match=True,
                 )
             except BitrixAPIError as exc:
                 return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
