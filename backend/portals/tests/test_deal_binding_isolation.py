@@ -7,6 +7,7 @@ from portals.deal_resolve import (
     deactivate_bindings_for_deal,
     portal_link_matches,
     portal_link_value_matches,
+    resolve_bitrix_group_id,
     resolve_or_refresh_binding,
 )
 from portals.models import PortalDealBinding
@@ -30,6 +31,7 @@ class PortalLinkMatchTests(TestCase):
 @override_settings(
     BITRIX_DEAL_PORTAL_LINK_FIELD="UF_CRM_PORTAL",
     BITRIX_COMPANY_PORTAL_LINK_FIELD="UF_CRM_PORTAL",
+    BITRIX_COMPANY_PROJECT_ID_FIELD="UF_CRM_PROJECT_ID",
 )
 class DealBindingIsolationTests(TestCase):
     def setUp(self):
@@ -58,6 +60,67 @@ class DealBindingIsolationTests(TestCase):
         self.assertFalse(
             PortalDealBinding.objects.get(client_portal=self.test, deal_id="158").is_active
         )
+
+    @patch("portals.deal_resolve.BitrixClient")
+    def test_group_id_comes_from_active_binding_not_stale_link(self, client_cls):
+        link = self.newbie.agency_links.get(agency_portal=self.agency)
+        link.bitrix_company_id = "88"
+        link.bitrix_group_id = "GROUP-OTHER-CLIENT"
+        link.save(update_fields=["bitrix_company_id", "bitrix_group_id"])
+        PortalDealBinding.objects.create(
+            agency_portal=self.agency,
+            client_portal=self.newbie,
+            deal_id="200",
+            is_active=True,
+        )
+        bx = MagicMock()
+        client_cls.return_value = bx
+        bx.get_deal.return_value = {"ID": "200", "COMPANY_ID": "77"}
+        bx.get_company.return_value = {
+            "ID": "77",
+            "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+            "UF_CRM_PROJECT_ID": "GROUP-NEWBIE",
+        }
+
+        group_id = resolve_bitrix_group_id(
+            agency_portal=self.agency,
+            client_portal=self.newbie,
+        )
+
+        self.assertEqual(group_id, "GROUP-NEWBIE")
+        bx.get_deal.assert_called_once_with("200")
+        link.refresh_from_db()
+        self.assertEqual(link.bitrix_company_id, "77")
+        self.assertEqual(link.bitrix_group_id, "GROUP-NEWBIE")
+
+    @patch("portals.deal_resolve.BitrixClient")
+    def test_empty_company_project_field_clears_stale_group(self, client_cls):
+        link = self.newbie.agency_links.get(agency_portal=self.agency)
+        link.bitrix_group_id = "GROUP-OTHER-CLIENT"
+        link.save(update_fields=["bitrix_group_id"])
+        PortalDealBinding.objects.create(
+            agency_portal=self.agency,
+            client_portal=self.newbie,
+            deal_id="200",
+            is_active=True,
+        )
+        bx = MagicMock()
+        client_cls.return_value = bx
+        bx.get_deal.return_value = {"ID": "200", "COMPANY_ID": "77"}
+        bx.get_company.return_value = {
+            "ID": "77",
+            "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+            "UF_CRM_PROJECT_ID": "",
+        }
+
+        with self.assertRaises(Exception):
+            resolve_bitrix_group_id(
+                agency_portal=self.agency,
+                client_portal=self.newbie,
+            )
+
+        link.refresh_from_db()
+        self.assertEqual(link.bitrix_group_id, "")
 
     @patch("portals.deal_resolve.BitrixClient")
     def test_resolve_clears_stale_binding_without_matching_link(self, client_cls):

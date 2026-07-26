@@ -109,7 +109,7 @@ class DealStageMoveOnReportTests(TestCase):
         self.assertEqual(res["reason"], "deal_closed")
         client.update_deal.assert_not_called()
 
-    @patch("board.reports.schedule_deal_stage_move")
+    @patch("portals.deal_stage_move.schedule_deal_stage_move")
     def test_send_and_accept_schedule_moves(self, schedule_mock):
         schedule_mock.return_value = None
         report = WorkReport.objects.create(

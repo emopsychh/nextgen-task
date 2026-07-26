@@ -29,6 +29,12 @@ def _mock_client() -> MagicMock:
 
 class SyncTaskIdempotencyTests(TestCase):
     def setUp(self):
+        group_patch = patch(
+            "portals.deal_resolve.resolve_bitrix_group_id",
+            return_value="G",
+        )
+        group_patch.start()
+        self.addCleanup(group_patch.stop)
         self.client_portal = make_portal(role=Portal.Role.CLIENT)
         self.agency = make_portal(role=Portal.Role.AGENCY, domain="agency.bitrix24.ru")
         make_link(self.agency, self.client_portal, bitrix_group_id="G")

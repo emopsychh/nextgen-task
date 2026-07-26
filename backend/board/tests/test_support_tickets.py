@@ -46,13 +46,25 @@ class SupportTicketApiTests(TestCase):
         ticket_id = create.data["id"]
         self.assertEqual(create.data["status"], "open")
         self.assertEqual(create.data["subject"], "Не работает кнопка")
-        self.assertEqual(create.data["body"], "На главной не кликается CTA")
         self.assertEqual(create.data["project"], self.project.id)
         self.assertEqual(create.data["task"], self.task.id)
-        self.assertEqual(len(create.data["messages"]), 1)
-        self.assertEqual(create.data["messages"][0]["text"], "На главной не кликается CTA")
-        self.assertEqual(create.data["messages"][0]["author"], self.client_user.id)
         self.assertEqual(create.data["awaiting_party"], "agency")
+        # Create returns the lightweight list payload; the UI fetches the
+        # complete thread only after opening the ticket.
+        self.assertNotIn("body", create.data)
+        self.assertNotIn("messages", create.data)
+        created_detail = self.client_client.get(f"/api/tickets/{ticket_id}/")
+        self.assertEqual(created_detail.status_code, 200)
+        self.assertEqual(created_detail.data["body"], "На главной не кликается CTA")
+        self.assertEqual(len(created_detail.data["messages"]), 1)
+        self.assertEqual(
+            created_detail.data["messages"][0]["text"],
+            "На главной не кликается CTA",
+        )
+        self.assertEqual(
+            created_detail.data["messages"][0]["author"],
+            self.client_user.id,
+        )
 
         # Client badge filter: nothing awaiting the client yet
         client_attn = self.client_client.get(

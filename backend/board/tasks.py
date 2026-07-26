@@ -245,11 +245,11 @@ def _ensure_project_agency_parent(project) -> tuple[str, str]:
     if not agency:
         raise BitrixAPIError("Клиент не привязан к агентству")
 
-    group_id = project.bitrix_group_id or ""
-    if not group_id:
-        group_id = resolve_bitrix_group_id(
-            agency_portal=agency, client_portal=project.portal
-        )
+    # Revalidate against the active deal on every outbound sync. A persisted
+    # Project.group_id may belong to a previous/manual binding.
+    group_id = resolve_bitrix_group_id(
+        agency_portal=agency, client_portal=project.portal
+    )
 
     if project.bitrix_task_id and project.bitrix_group_id == group_id:
         return project.bitrix_task_id, group_id

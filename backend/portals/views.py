@@ -480,6 +480,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
         # Explicit deal_id — must match portal link UF and stay exclusive.
         from portals.deal_resolve import (
+            cache_company_and_group_on_link,
             company_portal_link_field,
             deactivate_bindings_for_deal,
             deal_company_matches_client,
@@ -491,6 +492,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             "paid_hours": None,
             "remaining_hours": None,
         }
+        deal = None
         if request.user.portal.access_token:
             try:
                 bx = BitrixClient(request.user.portal)
@@ -510,6 +512,22 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                 meta = sync_deal_hours_meta(bx, deal_id, deal)
             except BitrixAPIError as exc:
                 return _crm_error_response(exc)
+
+        if deal is not None:
+            link = PortalLink.objects.filter(
+                agency_portal=request.user.portal,
+                client_portal=client_portal,
+            ).first()
+            if link:
+                try:
+                    cache_company_and_group_on_link(
+                        bx,
+                        link,
+                        deal,
+                        client_portal=client_portal,
+                    )
+                except BitrixAPIError as exc:
+                    return _crm_error_response(exc)
 
         deactivate_bindings_for_deal(
             agency_portal=request.user.portal,

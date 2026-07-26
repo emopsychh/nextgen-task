@@ -628,7 +628,13 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
     return binding
 
 
-def cache_company_and_group_on_link(client: BitrixClient, link, deal: dict) -> tuple[str, str]:
+def cache_company_and_group_on_link(
+    client: BitrixClient,
+    link,
+    deal: dict,
+    *,
+    client_portal=None,
+) -> tuple[str, str]:
     """
     From deal.COMPANY_ID → company UF project id → PortalLink cache.
     Returns (company_id, group_id).
@@ -637,34 +643,45 @@ def cache_company_and_group_on_link(client: BitrixClient, link, deal: dict) -> t
     group_id = ""
     field = company_project_id_field()
     if company_id and field:
-        try:
-            company = client.get_company(company_id)
-            raw = company.get(field)
-            if raw is not None and raw != "":
-                # UF may be list for some field types
-                if isinstance(raw, (list, tuple)) and raw:
-                    raw = raw[0]
-                group_id = str(raw).strip()
-        except BitrixAPIError:
-            group_id = ""
+        company = client.get_company(company_id)
+        if client_portal:
+            portal_field = company_portal_link_field()
+            if portal_field and not portal_link_value_matches(
+                company.get(portal_field), client_portal.domain
+            ):
+                raise BitrixAPIError(
+                    "Компания выбранной сделки не привязана к этому клиентскому порталу"
+                )
+        raw = company.get(field)
+        if raw is not None and raw != "":
+            # UF may be list for some field types
+            if isinstance(raw, (list, tuple)) and raw:
+                raw = raw[0]
+            group_id = str(raw).strip()
 
     update_fields = []
-    if company_id and link.bitrix_company_id != company_id:
+    if link.bitrix_company_id != company_id:
         link.bitrix_company_id = company_id
         update_fields.append("bitrix_company_id")
-    if group_id and link.bitrix_group_id != group_id:
+    # Company changed or its UF was cleared: never retain another company's
+    # workgroup id as a fallback.
+    if link.bitrix_group_id != group_id:
         link.bitrix_group_id = group_id
         update_fields.append("bitrix_group_id")
     if update_fields:
         link.save(update_fields=update_fields)
-    return company_id, group_id or link.bitrix_group_id
+    return company_id, group_id
 
 
 def resolve_bitrix_group_id(*, agency_portal, client_portal, force_refresh: bool = False) -> str:
     """
-    Return Bitrix workgroup id for this client (cached on PortalLink).
+    Return the workgroup id from the active binding's CRM company.
+
+    `force_refresh` remains for call-site compatibility; active bindings are
+    always verified because routing correctness is more important than this cache.
     Raises BitrixAPIError when the company has no project id configured.
     """
+    del force_refresh
     from portals.models import PortalLink
 
     link = (
@@ -677,9 +694,6 @@ def resolve_bitrix_group_id(*, agency_portal, client_portal, force_refresh: bool
     if not link:
         raise BitrixAPIError("Клиент не привязан к агентству")
 
-    if link.bitrix_group_id and not force_refresh:
-        return link.bitrix_group_id
-
     if not agency_portal.access_token:
         raise BitrixAPIError("Agency portal has no Bitrix token")
     if not company_portal_link_field():
@@ -688,13 +702,27 @@ def resolve_bitrix_group_id(*, agency_portal, client_portal, force_refresh: bool
         raise BitrixAPIError("Не задано BITRIX_COMPANY_PROJECT_ID_FIELD")
 
     client = BitrixClient(agency_portal)
-    deal = find_open_deal_for_portal(client, client_portal)
-    if not deal:
+    binding = get_active_binding(
+        agency_portal=agency_portal,
+        client_portal=client_portal,
+    )
+    if not binding:
+        binding = resolve_or_refresh_binding(
+            agency_portal=agency_portal,
+            client_portal=client_portal,
+        )
+    if not binding or not binding.deal_id:
         raise BitrixAPIError(deal_not_found_for_portal_message(client_portal))
 
-    _, group_id = cache_company_and_group_on_link(client, link, deal)
-    link.refresh_from_db()
-    group_id = group_id or link.bitrix_group_id
+    # GROUP_ID and UF_CRM_TASK must come from the same selected deal. Never use
+    # the first open deal or an unverified PortalLink cache here.
+    deal = client.get_deal(binding.deal_id)
+    _, group_id = cache_company_and_group_on_link(
+        client,
+        link,
+        deal,
+        client_portal=client_portal,
+    )
     if not group_id:
         raise BitrixAPIError(
             "У компании в CRM ещё нет проекта сопровождения. "
