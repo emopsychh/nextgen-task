@@ -7,6 +7,7 @@ import { DisputeIcon } from "../../components/icons";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime, formatDuration, formatPackageHours } from "../../lib/format";
+import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
 import { STATUS_LABEL } from "../../lib/status";
 import {
   EVENT_LABEL,
@@ -61,7 +62,8 @@ export function ReportDetail() {
 
   useEffect(() => {
     if (!reportId) return;
-    setDetail(null);
+    const cached = readPortalCache<WorkReport>("report-detail", reportId);
+    setDetail(cached);
     setError(null);
     const ac = new AbortController();
     void loadDetail(ac.signal).catch((e) => {
@@ -69,6 +71,12 @@ export function ReportDetail() {
     });
     return () => ac.abort();
   }, [reportId, loadDetail]);
+
+  useEffect(() => {
+    if (reportId && detail?.id === reportId) {
+      writePortalCache("report-detail", reportId, detail);
+    }
+  }, [detail, reportId]);
 
   usePortalLiveSync({
     token,

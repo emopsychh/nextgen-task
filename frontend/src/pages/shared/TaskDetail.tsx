@@ -21,6 +21,7 @@ import { useTaskLiveSync } from "../../hooks/useTaskLiveSync";
 import { dueMeta } from "../../lib/dates";
 import { formatDayLabel } from "../../lib/format";
 import { isImageFile } from "../../lib/files";
+import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
 import { isTaskOverdue } from "../../lib/status";
 
 /** Images first, then documents; drop exact duplicates (same name+size). */
@@ -46,6 +47,11 @@ type TaskPatch = Partial<{
   due_date: string | null;
   is_important: boolean;
 }>;
+
+type CachedThread = {
+  items: ThreadItem[];
+  hasMore: boolean;
+};
 
 export function TaskDetail() {
   const { taskId } = useParams();
@@ -261,12 +267,20 @@ export function TaskDetail() {
 
   useEffect(() => {
     genRef.current += 1;
-    setTask(null);
+    const id = Number(taskId || 0);
+    const cachedTask = readPortalCache<Task>("task-detail", id);
+    const cachedThread = readPortalCache<CachedThread>("task-thread", id);
+    setTask(cachedTask);
+    if (cachedTask) {
+      setDraftTitle(cachedTask.title);
+      setDraftDescription(cachedTask.description || "");
+      setDraftOutcome(cachedTask.outcome || "");
+    }
     setError(null);
-    setItems([]);
-    setHasMore(false);
+    setItems(cachedThread?.items || []);
+    setHasMore(cachedThread?.hasMore || false);
     setThreadSyncing(false);
-    itemsRef.current = [];
+    itemsRef.current = cachedThread?.items || [];
     activityRef.current = null;
     const ac = new AbortController();
     void load(ac.signal).catch((e) => {
@@ -278,7 +292,18 @@ export function TaskDetail() {
 
   useEffect(() => {
     itemsRef.current = items;
-  }, [items]);
+    const id = Number(taskId || 0);
+    if (id) {
+      writePortalCache<CachedThread>("task-thread", id, { items, hasMore });
+    }
+  }, [items, hasMore, taskId]);
+
+  useEffect(() => {
+    const id = Number(taskId || 0);
+    if (id && task?.id === id) {
+      writePortalCache("task-detail", id, task);
+    }
+  }, [task, taskId]);
 
   // Soft catch-up for Bitrix task files while the detail page stays open.
   useEffect(() => {

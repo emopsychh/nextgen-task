@@ -13,7 +13,11 @@ import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime, formatDuration } from "../../lib/format";
-import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
+import {
+  CACHE_PROJECTS,
+  readPortalCache,
+  writePortalCache,
+} from "../../lib/portalSessionCache";
 import {
   REPORT_BUCKETS,
   type ReportBucket,
@@ -154,7 +158,11 @@ export function ProjectReports() {
         token
       );
       if (signal?.aborted) return;
-      setProjects(unwrapList(data));
+      const list = unwrapList(data).filter(
+        (project) => project.portal === portalId
+      );
+      setProjects(list);
+      writePortalCache(CACHE_PROJECTS, portalId, list);
     },
     [token, portalId]
   );
@@ -189,7 +197,10 @@ export function ProjectReports() {
 
   useEffect(() => {
     if (!token || !portalId) return;
-    setProjects([]);
+    const cached = readPortalCache<Project[]>(CACHE_PROJECTS, portalId);
+    setProjects(
+      cached?.filter((project) => project.portal === portalId) || []
+    );
     setProjectsLoading(true);
     const ac = new AbortController();
     void loadProjects(ac.signal)

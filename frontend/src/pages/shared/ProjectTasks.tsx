@@ -17,7 +17,9 @@ import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { useSeenProjects } from "../../hooks/useSeenProjects";
 import { dueMeta } from "../../lib/dates";
 import {
+  readPortalCache,
   readBoardTasksCache,
+  writePortalCache,
   writeBoardTasksCache,
 } from "../../lib/portalSessionCache";
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
@@ -30,7 +32,11 @@ export function ProjectTasks() {
   const isAgency = portal?.role === "agency";
   const toast = useFlashToast();
 
-  const [project, setProject] = useState<Project | null>(null);
+  const numericProjectId = Number(projectId || 0);
+  const [project, setProject] = useState<Project | null>(
+    () =>
+      readPortalCache<Project>("project-meta", numericProjectId) || null
+  );
   const { markSeen } = useSeenProjects(project?.portal ?? null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
@@ -43,12 +49,15 @@ export function ProjectTasks() {
   const [busy, setBusy] = useState(false);
   const [enteringId, setEnteringId] = useState<number | null>(null);
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [counts, setCounts] = useState<TaskCounts>({
-    all: 0,
-    todo: 0,
-    in_progress: 0,
-    done: 0,
-  });
+  const [counts, setCounts] = useState<TaskCounts>(
+    () =>
+      readPortalCache<TaskCounts>("task-counts", numericProjectId) || {
+        all: 0,
+        todo: 0,
+        in_progress: 0,
+        done: 0,
+      }
+  );
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -104,6 +113,7 @@ export function ProjectTasks() {
     try {
       const c = await api<TaskCounts>(`/api/tasks/counts/?project=${projectId}`, {}, token);
       setCounts(c);
+      writePortalCache("task-counts", Number(projectId), c);
     } catch {
       // non-critical
     }
@@ -121,6 +131,7 @@ export function ProjectTasks() {
     ]);
     if (gen !== genRef.current || signal?.aborted) return;
     setProject(projectData);
+    writePortalCache("project-meta", Number(projectId), projectData);
     setTasks(taskData.results);
     setHasMore(Boolean(taskData.next));
     loadedPagesRef.current = 1;
@@ -189,8 +200,16 @@ export function ProjectTasks() {
   useEffect(() => {
     // Project routes reuse this component; never keep the previous project's
     // identity or live-sync portal while the new project is resolving.
-    setProject(null);
-    setCounts({ all: 0, todo: 0, in_progress: 0, done: 0 });
+    const id = Number(projectId || 0);
+    setProject(readPortalCache<Project>("project-meta", id));
+    setCounts(
+      readPortalCache<TaskCounts>("task-counts", id) || {
+        all: 0,
+        todo: 0,
+        in_progress: 0,
+        done: 0,
+      }
+    );
     setError(null);
   }, [projectId]);
 

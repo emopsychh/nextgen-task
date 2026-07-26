@@ -156,7 +156,7 @@ export function ClientRail() {
           if (label) setPortalLabel(p.id, label);
         }
       } catch {
-        if (!cancelled) setLinks([]);
+        // Keep the last successful snapshot during transient API failures.
       }
     }
 

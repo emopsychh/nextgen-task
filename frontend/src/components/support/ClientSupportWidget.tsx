@@ -13,6 +13,11 @@ import { useAuth } from "../../auth/AuthContext";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime } from "../../lib/format";
 import {
+  CACHE_PROJECTS,
+  readPortalCache,
+  writePortalCache,
+} from "../../lib/portalSessionCache";
+import {
   TICKET_BUCKETS,
   type TicketBucket,
   ticketsApiQuery,
@@ -29,7 +34,12 @@ export function ClientSupportWidget() {
 
   const [view, setView] = useState<View>("list");
   const [bucket, setBucket] = useState<TicketBucket>("open");
-  const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [tickets, setTickets] = useState<SupportTicket[]>(
+    () =>
+      (portalId
+        ? readPortalCache<SupportTicket[]>("tickets:client:open", portalId)
+        : null) || []
+  );
   const [listLoading, setListLoading] = useState(true);
   const [detail, setDetail] = useState<SupportTicket | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -42,10 +52,12 @@ export function ClientSupportWidget() {
   const [taskId, setTaskId] = useState<number | "">("");
   const [draft, setDraft] = useState("");
   const threadRef = useRef<HTMLDivElement>(null);
+  const listGenRef = useRef(0);
 
   const loadList = useCallback(
     async (signal?: AbortSignal) => {
       if (!token || !portalId) return;
+      const gen = ++listGenRef.current;
       setListLoading(true);
       try {
         const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
@@ -53,10 +65,12 @@ export function ClientSupportWidget() {
           { signal },
           token
         );
-        if (signal?.aborted) return;
-        setTickets(unwrapList(data));
+        if (signal?.aborted || gen !== listGenRef.current) return;
+        const list = unwrapList(data);
+        setTickets(list);
+        writePortalCache(`tickets:client:${bucket}`, portalId, list);
       } finally {
-        if (!signal?.aborted) setListLoading(false);
+        if (!signal?.aborted && gen === listGenRef.current) setListLoading(false);
       }
     },
     [token, portalId, bucket]
@@ -65,8 +79,14 @@ export function ClientSupportWidget() {
   const loadDetail = useCallback(
     async (id: number) => {
       if (!token) return;
+      const cached = readPortalCache<SupportTicket>("ticket-detail", id);
+      if (cached) {
+        setDetail((prev) => (prev?.id === id ? prev : cached));
+        setView("chat");
+      }
       const data = await api<SupportTicket>(`/api/tickets/${id}/`, {}, token);
       setDetail(data);
+      writePortalCache("ticket-detail", id, data);
       setView("chat");
     },
     [token]
@@ -87,6 +107,11 @@ export function ClientSupportWidget() {
 
   useEffect(() => {
     if (!isOpen || !token || !portalId) return;
+    const cached = readPortalCache<SupportTicket[]>(
+      `tickets:client:${bucket}`,
+      portalId
+    );
+    setTickets(cached || []);
     setListLoading(true);
     const ac = new AbortController();
     void loadList(ac.signal).catch((e) => {
@@ -98,10 +123,18 @@ export function ClientSupportWidget() {
 
   useEffect(() => {
     if (!isOpen || view !== "create" || !token || !portalId) return;
+    const cached = readPortalCache<Project[]>(CACHE_PROJECTS, portalId);
+    if (cached) setProjects(cached.filter((project) => project.portal === portalId));
     let cancelled = false;
     void api<Project[] | Paginated<Project>>(`/api/projects/?portal=${portalId}`, {}, token)
       .then((data) => {
-        if (!cancelled) setProjects(unwrapList(data));
+        if (!cancelled) {
+          const list = unwrapList(data).filter(
+            (project) => project.portal === portalId
+          );
+          setProjects(list);
+          writePortalCache(CACHE_PROJECTS, portalId, list);
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -233,7 +266,19 @@ export function ClientSupportWidget() {
                     key={b.id}
                     type="button"
                     className={`support-widget-tab${bucket === b.id ? " active" : ""}`}
-                    onClick={() => setBucket(b.id)}
+                    onClick={() => {
+                      if (b.id === bucket) return;
+                      listGenRef.current += 1;
+                      const cached = portalId
+                        ? readPortalCache<SupportTicket[]>(
+                            `tickets:client:${b.id}`,
+                            portalId
+                          )
+                        : null;
+                      setTickets(cached || []);
+                      setListLoading(true);
+                      setBucket(b.id);
+                    }}
                   >
                     {b.label.toLowerCase()}
                   </button>
@@ -244,7 +289,7 @@ export function ClientSupportWidget() {
             {error ? <div className="support-widget-error">{error}</div> : null}
 
             <div className="support-widget-scroll">
-              {listLoading ? (
+              {listLoading && tickets.length === 0 ? (
                 <p className="support-widget-empty muted">Загрузка…</p>
               ) : tickets.length === 0 ? (
                 <p className="support-widget-empty muted">

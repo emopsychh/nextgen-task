@@ -15,7 +15,11 @@ import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime } from "../../lib/format";
-import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
+import {
+  CACHE_PROJECTS,
+  readPortalCache,
+  writePortalCache,
+} from "../../lib/portalSessionCache";
 import {
   TICKET_BUCKETS,
   type TicketBucket,
@@ -118,7 +122,11 @@ export function SupportTickets() {
         token
       );
       if (signal?.aborted) return;
-      setProjects(unwrapList(data));
+      const list = unwrapList(data).filter(
+        (project) => project.portal === listPortalId
+      );
+      setProjects(list);
+      writePortalCache(CACHE_PROJECTS, listPortalId, list);
     },
     [token, listPortalId]
   );
@@ -152,8 +160,11 @@ export function SupportTickets() {
 
   useEffect(() => {
     if (!token) return;
-    setDetail(null);
-    setDetailLoading(Boolean(selectedId));
+    const cached = selectedId
+      ? readPortalCache<SupportTicket>("ticket-detail", selectedId)
+      : null;
+    setDetail(cached);
+    setDetailLoading(Boolean(selectedId) && !cached);
     setError(null);
     const ac = new AbortController();
     void loadDetail(ac.signal).catch((e) => {
@@ -163,6 +174,12 @@ export function SupportTickets() {
     });
     return () => ac.abort();
   }, [token, loadDetail]);
+
+  useEffect(() => {
+    if (detail?.id) {
+      writePortalCache("ticket-detail", detail.id, detail);
+    }
+  }, [detail]);
 
   useEffect(() => {
     if (!token || !listPortalId || !projectId) {
@@ -336,6 +353,17 @@ export function SupportTickets() {
             disabled={busy}
             onClick={() => {
               setShowCreate(true);
+              if (listPortalId) {
+                const cached = readPortalCache<Project[]>(
+                  CACHE_PROJECTS,
+                  listPortalId
+                );
+                if (cached) {
+                  setProjects(
+                    cached.filter((project) => project.portal === listPortalId)
+                  );
+                }
+              }
               void loadProjects();
             }}
           >

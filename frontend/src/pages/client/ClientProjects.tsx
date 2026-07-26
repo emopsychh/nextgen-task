@@ -39,6 +39,13 @@ import { reportDetailPath } from "../shared/reportHelpers";
 
 const RECENT_DONE_MS = 7 * 24 * 60 * 60 * 1000;
 const HOT_DUE_DAYS = 2;
+const CACHE_OVERVIEW = "overview";
+
+type OverviewSnapshot = {
+  openTasks: Task[];
+  recentDone: Task[];
+  disputedReports: WorkReport[];
+};
 
 function taskDueLabel(task: Task): string | null {
   if (!task.due_date) return null;
@@ -77,6 +84,7 @@ export function ClientProjects() {
   const [openTasks, setOpenTasks] = useState<Task[]>([]);
   const [recentDone, setRecentDone] = useState<Task[]>([]);
   const [disputedReports, setDisputedReports] = useState<WorkReport[]>([]);
+  const [overviewLoading, setOverviewLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { dismiss, isDismissed } = useWorkspaceDismissals(
     Number.isFinite(portalId) && portalId > 0 ? portalId : null
@@ -192,9 +200,21 @@ export function ClientProjects() {
 
   useEffect(() => {
     setProjects([]);
-    setOpenTasks([]);
-    setRecentDone([]);
-    setDisputedReports([]);
+    const cachedOverview = portalId
+      ? readPortalCache<OverviewSnapshot>(CACHE_OVERVIEW, portalId)
+      : null;
+    const scopedOpen =
+      cachedOverview?.openTasks.filter((task) => task.portal_id === portalId) || [];
+    const scopedDone =
+      cachedOverview?.recentDone.filter((task) => task.portal_id === portalId) || [];
+    const scopedDisputes =
+      cachedOverview?.disputedReports.filter(
+        (report) => report.portal_id === portalId
+      ) || [];
+    setOpenTasks(scopedOpen);
+    setRecentDone(scopedDone);
+    setDisputedReports(scopedDisputes);
+    setOverviewLoading(cachedOverview === null);
     setError(null);
     if (!portalId) {
       return;
@@ -253,7 +273,10 @@ export function ClientProjects() {
       ]);
       if (gen !== loadGenRef.current || signal?.aborted) return;
 
-      setOpenTasks(unwrapList(openData));
+      const scopedOpen = unwrapList(openData).filter(
+        (task) => task.portal_id === requestedPortalId
+      );
+      setOpenTasks(scopedOpen);
       const projectList = unwrapList(projectsData).filter(
         (project) => project.portal === requestedPortalId
       );
@@ -262,12 +285,18 @@ export function ClientProjects() {
 
       if (!isAgency) {
         const cutoff = Date.now() - RECENT_DONE_MS;
-        setRecentDone(
+        const scopedDone =
           unwrapList(doneData as Task[] | Paginated<Task>)
+            .filter((task) => task.portal_id === requestedPortalId)
             .filter((t) => new Date(t.updated_at).getTime() >= cutoff)
-            .slice(0, 6)
-        );
+            .slice(0, 6);
+        setRecentDone(scopedDone);
         setDisputedReports([]);
+        writePortalCache<OverviewSnapshot>(CACHE_OVERVIEW, requestedPortalId, {
+          openTasks: scopedOpen,
+          recentDone: scopedDone,
+          disputedReports: [],
+        });
         const mine = hoursData as DealBinding | null;
         const scopedMine =
           mine?.client_portal.id === requestedPortalId && mine.is_active ? mine : null;
@@ -288,8 +317,16 @@ export function ClientProjects() {
         setDealHours(binding);
         if (binding) writePortalCache(CACHE_DEAL_HOURS, requestedPortalId, binding);
         else clearPortalCache(CACHE_DEAL_HOURS, requestedPortalId);
+        const scopedDisputes = unwrapList(
+          disputedData as WorkReport[] | Paginated<WorkReport>
+        ).filter((report) => report.portal_id === requestedPortalId);
         setRecentDone([]);
-        setDisputedReports(unwrapList(disputedData as WorkReport[] | Paginated<WorkReport>));
+        setDisputedReports(scopedDisputes);
+        writePortalCache<OverviewSnapshot>(CACHE_OVERVIEW, requestedPortalId, {
+          openTasks: scopedOpen,
+          recentDone: [],
+          disputedReports: scopedDisputes,
+        });
         const fromBinding = binding?.client_portal;
         if (fromBinding) {
           const label = portalDisplayName(fromBinding);
@@ -316,8 +353,9 @@ export function ClientProjects() {
         }
       }
     } finally {
-      // No global in-flight lock: a request for client A must never suppress
-      // the request started immediately afterwards for client B.
+      if (gen === loadGenRef.current && !signal?.aborted) {
+        setOverviewLoading(false);
+      }
     }
   }
 
@@ -390,7 +428,12 @@ export function ClientProjects() {
                 <h2 className="section-title">Проекты в работе</h2>
                 <p className="muted">Модули, которые ещё не закрыты на 100%</p>
               </div>
-              {activeProjects.length === 0 ? (
+              {overviewLoading && activeProjects.length === 0 ? (
+                <div className="empty-linked workspace-empty data-loading-state">
+                  <span className="data-loading-spinner" aria-hidden />
+                  <p className="muted">Загружаем проекты…</p>
+                </div>
+              ) : activeProjects.length === 0 ? (
                 <div className="empty-linked workspace-empty">
                   <p className="muted">Сейчас нет проектов в работе.</p>
                 </div>
@@ -424,7 +467,12 @@ export function ClientProjects() {
                 <h2 className="section-title">Недавно завершено</h2>
                 <p className="muted">Можно посмотреть итог в задаче</p>
               </div>
-              {visibleRecentDone.length === 0 ? (
+              {overviewLoading && visibleRecentDone.length === 0 ? (
+                <div className="empty-linked workspace-empty data-loading-state">
+                  <span className="data-loading-spinner" aria-hidden />
+                  <p className="muted">Загружаем задачи…</p>
+                </div>
+              ) : visibleRecentDone.length === 0 ? (
                 <div className="empty-linked workspace-empty">
                   <p className="muted">За последние дни завершённых задач нет.</p>
                 </div>
@@ -452,7 +500,12 @@ export function ClientProjects() {
         </div>
       ) : (
         <div className="workspace-focus" data-tour="tour-agency-focus">
-          {!agencyNeedsAttention ? (
+          {overviewLoading && !agencyNeedsAttention ? (
+            <div className="empty-linked workspace-empty data-loading-state">
+              <span className="data-loading-spinner" aria-hidden />
+              <p className="muted">Загружаем обзор клиента…</p>
+            </div>
+          ) : !agencyNeedsAttention ? (
             <div className="empty-linked workspace-empty">
               <p className="muted">
                 Нет обращений по отчётам, активных проектов и горящих сроков. Полный список — во
