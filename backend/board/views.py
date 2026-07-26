@@ -9,7 +9,7 @@ from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -39,7 +39,6 @@ from .serializers import (
 )
 from .tasks import (
     pull_task_from_bitrix,
-    renew_task_in_bitrix,
     sync_comment_to_bitrix,
     sync_project_to_bitrix,
     sync_task_to_bitrix,
@@ -55,13 +54,6 @@ def enqueue_bitrix_sync(task_id: int) -> None:
         sync_task_to_bitrix(task_id)
     else:
         sync_task_to_bitrix.delay(task_id)
-
-
-def enqueue_bitrix_renew(task_id: int) -> None:
-    if settings.CELERY_TASK_ALWAYS_EAGER:
-        renew_task_in_bitrix(task_id)
-    else:
-        renew_task_in_bitrix.delay(task_id)
 
 
 def enqueue_project_sync(project_id: int) -> None:
@@ -428,6 +420,9 @@ class TaskViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("No access")
         old_status = task.status
         old_due = task.due_date
+        requested_status = serializer.validated_data.get("status", old_status)
+        if old_status == Task.Status.DONE and requested_status != Task.Status.DONE:
+            raise ValidationError({"status": "Завершённую задачу нельзя возобновить"})
         if self.request.user.is_client:
             new_status = serializer.validated_data.get("status", old_status)
             if new_status != old_status:
@@ -444,7 +439,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                         raise PermissionDenied(
                             "Срок можно менять только у задач, которые вы создали"
                         )
-        new_status = serializer.validated_data.get("status", old_status)
+        new_status = requested_status
         locally_paused = task.is_locally_paused
         if new_status != old_status:
             locally_paused = (
@@ -490,11 +485,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             old_status=old_status,
             old_due=old_due,
         )
-        is_reopen = old_status == Task.Status.DONE and task.status == Task.Status.TODO
-        if is_reopen:
-            enqueue_bitrix_renew(task.id)
-        else:
-            enqueue_bitrix_sync(task.id)
+        enqueue_bitrix_sync(task.id)
         publish_task_event(task, kind="task_update")
         task.refresh_from_db()
         serializer.instance = task

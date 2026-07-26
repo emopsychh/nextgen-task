@@ -202,25 +202,6 @@ class ApplyInboundStatusTests(TestCase):
         self.assertTrue(changed)
         self.assertEqual(task.status, Task.Status.DONE)
 
-    def test_pending_local_renew_is_not_reverted_by_stale_done(self):
-        task = make_task(
-            self.project,
-            status=Task.Status.TODO,
-            sync_status=Task.SyncStatus.PENDING,
-            created_by=self.user,
-        )
-        Task.objects.filter(pk=task.pk).update(
-            updated_at=timezone.now() - timedelta(minutes=5)
-        )
-        task.refresh_from_db()
-
-        changed = apply_inbound_status(task, "done", force=True)
-
-        task.refresh_from_db()
-        self.assertFalse(changed)
-        self.assertEqual(task.status, Task.Status.TODO)
-        self.assertEqual(task.sync_status, Task.SyncStatus.PENDING)
-
     def test_done_is_terminal_against_inbound_start(self):
         task = make_task(
             self.project,
@@ -232,23 +213,6 @@ class ApplyInboundStatusTests(TestCase):
         task.refresh_from_db()
         self.assertFalse(changed)
         self.assertEqual(task.status, Task.Status.DONE)
-
-    def test_explicit_bitrix_renew_reopens_done_task(self):
-        task = make_task(
-            self.project,
-            status=Task.Status.DONE,
-            sync_status=Task.SyncStatus.SYNCED,
-            created_by=self.user,
-        )
-        changed = apply_inbound_status(
-            task,
-            "todo",
-            force=True,
-            allow_reopen_from_done=True,
-        )
-        task.refresh_from_db()
-        self.assertTrue(changed)
-        self.assertEqual(task.status, Task.Status.TODO)
 
     def test_app_pause_not_undone_by_bitrix_still_in_progress(self):
         # App pause leaves Bitrix «in progress». Pull must not resume the app

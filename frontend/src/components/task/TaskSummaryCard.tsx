@@ -249,16 +249,6 @@ export function TaskSummaryCard({
               </button>
             </>
           )}
-          {task.status === "done" && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={saveBusy}
-              onClick={() => onSetStatus("todo")}
-            >
-              Возобновить
-            </button>
-          )}
         </div>
       ) : null}
     </aside>

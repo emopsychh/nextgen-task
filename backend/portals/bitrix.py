@@ -179,9 +179,6 @@ class BitrixClient:
     def pause_task(self, task_id: int | str) -> dict:
         return self.call("tasks.task.pause", {"taskId": task_id})
 
-    def renew_task(self, task_id: int | str) -> dict:
-        return self.call("tasks.task.renew", {"taskId": task_id})
-
     def start_task_timer(self, task_id: int | str) -> dict:
         """Start Bitrix task time tracking (Учёт времени)."""
         try:

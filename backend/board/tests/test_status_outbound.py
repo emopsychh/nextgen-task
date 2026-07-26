@@ -103,28 +103,6 @@ class OutboundStatusPushTests(TestCase):
         )
         client.start_task.assert_called()
 
-    def test_app_renew_reopens_completed_bitrix_task(self):
-        task = make_task(
-            self.project,
-            created_by=self.user,
-            status=Task.Status.TODO,
-            sync_status=Task.SyncStatus.PENDING,
-            agency_bitrix_task_id="108",
-        )
-        client = _mock_client(bitrix_status="5")
-
-        with patch.object(board_tasks, "BitrixClient", return_value=client):
-            result = board_tasks.renew_task_in_bitrix(task.id)
-
-        self.assertTrue(result["ok"])
-        client.renew_task.assert_called_once_with("108")
-        client.update_task.assert_called_once_with(
-            "108",
-            {"ALLOW_TIME_TRACKING": "N"},
-        )
-        task.refresh_from_db()
-        self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
-
     def test_agency_responsible_is_agency_oauth_user_not_client_author(self):
         task = make_task(
             self.project,
