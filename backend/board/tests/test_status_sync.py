@@ -130,13 +130,13 @@ class ApplyInboundStatusTests(TestCase):
         TimeEntry.objects.create(task=task, author=self.user, started_at=timezone.now())
         return task
 
-    def test_pause_from_bitrix_stops_app_task_and_timer(self):
+    def test_pause_from_bitrix_is_ignored(self):
         task = self._running_task()
         changed = apply_inbound_status(task, "todo", force=True)
         task.refresh_from_db()
-        self.assertTrue(changed)
-        self.assertEqual(task.status, Task.Status.TODO)
-        self.assertFalse(task.time_entries.filter(ended_at__isnull=True).exists())
+        self.assertFalse(changed)
+        self.assertEqual(task.status, Task.Status.IN_PROGRESS)
+        self.assertTrue(task.time_entries.filter(ended_at__isnull=True).exists())
 
     def test_done_stops_running_timer(self):
         task = self._running_task()
@@ -235,7 +235,7 @@ class ApplyInboundStatusTests(TestCase):
         self.assertFalse(changed)
         self.assertEqual(task.status, Task.Status.TODO)
 
-    def test_explicit_bitrix_start_may_resume_app_pause(self):
+    def test_delayed_explicit_bitrix_start_does_not_resume_app_pause(self):
         agency = make_portal(role=Portal.Role.AGENCY)
         make_link(agency, self.portal)
         make_user(agency, bitrix_id="99")
@@ -256,5 +256,5 @@ class ApplyInboundStatusTests(TestCase):
             task, "in_progress", force=True, allow_resume_from_pause=True
         )
         task.refresh_from_db()
-        self.assertTrue(changed)
-        self.assertEqual(task.status, Task.Status.IN_PROGRESS)
+        self.assertFalse(changed)
+        self.assertEqual(task.status, Task.Status.TODO)

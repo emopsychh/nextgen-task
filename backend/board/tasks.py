@@ -187,19 +187,17 @@ def _stop_bitrix_timer_quiet(client: BitrixClient, bitrix_task_id: str) -> None:
 
 
 def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local: str) -> None:
-    """Push local start/pause/complete state to the agency Bitrix task."""
+    """Push start/complete to Bitrix; pause remains local to each system."""
     target = _normalize_local(target_local)
+
+    # App pause must not pause Bitrix.
+    if target == "todo":
+        return
 
     task_data = client.get_task(bitrix_task_id)
     current = bitrix_status_code(task_data)
     if current is None:
         current = BITRIX_STATUS_PENDING
-
-    if target == "todo":
-        _stop_bitrix_timer_quiet(client, bitrix_task_id)
-        if current == BITRIX_STATUS_IN_PROGRESS:
-            client.pause_task(bitrix_task_id)
-        return
 
     if target == "done":
         if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
@@ -222,10 +220,9 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         client.renew_task(bitrix_task_id)
         refreshed = bitrix_status_code(client.get_task(bitrix_task_id))
         current = refreshed if refreshed is not None else BITRIX_STATUS_PENDING
-    try:
-        client.start_task(bitrix_task_id)
-    except BitrixAPIError:
-        pass
+    # A failed start must keep the task in sync_error/retry instead of silently
+    # reporting success while Bitrix remains unchanged.
+    client.start_task(bitrix_task_id)
 
 
 def _ensure_project_agency_parent(project) -> tuple[str, str]:

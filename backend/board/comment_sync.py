@@ -105,9 +105,9 @@ def status_from_bitrix_system_comment(text: str) -> str | None:
 
 
 def apply_status_from_bitrix_system_comment(task, text: str) -> bool:
-    """Apply inbound start/pause/complete inferred from a Bitrix system line."""
+    """Apply inbound start/complete; ignore Bitrix-local pause lines."""
     status = status_from_bitrix_system_comment(text)
-    if status not in ("todo", "in_progress", "done"):
+    if status not in ("in_progress", "done"):
         return False
     from board.status_sync import apply_inbound_status
 
