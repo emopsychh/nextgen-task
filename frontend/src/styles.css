@@ -703,6 +703,35 @@ a {
   padding: 18px 4px;
 }
 
+.data-loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 82px;
+}
+
+.data-loading-state p {
+  margin: 0;
+}
+
+.data-loading-spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  border: 2px solid #d5e4df;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: data-loading-spin 0.7s linear infinite;
+}
+
+@keyframes data-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .workspace-attention-list {
   display: flex;
   flex-direction: column;

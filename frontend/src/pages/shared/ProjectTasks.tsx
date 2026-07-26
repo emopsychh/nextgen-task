@@ -198,6 +198,7 @@ export function ProjectTasks() {
   useEffect(() => {
     if (!token || !projectId) return;
     genRef.current += 1;
+    const gen = genRef.current;
     setBitrixSyncing(false);
     const ac = new AbortController();
     const parts = cacheKeyParts();
@@ -218,7 +219,11 @@ export function ProjectTasks() {
       .catch((e) => {
         if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
       })
-      .finally(() => setInitialLoading(false));
+      .finally(() => {
+        if (gen === genRef.current && !ac.signal.aborted) {
+          setInitialLoading(false);
+        }
+      });
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, projectId, filter, debouncedQuery]);
@@ -458,7 +463,13 @@ export function ProjectTasks() {
               className={`task-filter-chip${filter === f.id ? " active" : ""}${
                 f.id !== "all" ? ` ${STATUS_TONE[f.id]}` : ""
               }`}
-              onClick={() => setFilter(f.id)}
+              onClick={() => {
+                if (f.id === filter) return;
+                setTasks([]);
+                setHasMore(false);
+                setInitialLoading(true);
+                setFilter(f.id);
+              }}
             >
               <span>{f.label}</span>
               <span className="task-filter-count">{f.count}</span>
@@ -469,7 +480,8 @@ export function ProjectTasks() {
 
       <div className="task-list">
         {initialLoading && visible.length === 0 ? (
-          <div className="empty-linked task-empty">
+          <div className="empty-linked task-empty data-loading-state">
+            <span className="data-loading-spinner" aria-hidden />
             <p className="muted">Загрузка задач…</p>
           </div>
         ) : visible.length === 0 ? (

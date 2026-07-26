@@ -17,6 +17,11 @@ import {
   portalDisplayName,
   setPortalLabel,
 } from "../../lib/portalLabelCache";
+import {
+  CACHE_PROJECTS,
+  readPortalCache,
+  writePortalCache,
+} from "../../lib/portalSessionCache";
 import { projectProgress } from "../../lib/projectProgress";
 
 export function ProjectsList() {
@@ -32,6 +37,8 @@ export function ProjectsList() {
   }, [routePortalId, isAgency, portal?.id]);
 
   const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -54,6 +61,8 @@ export function ProjectsList() {
     // accidentally returns a mixed page.
     const scoped = list.filter((project) => project.portal === portalId);
     setProjects(scoped);
+    writePortalCache(CACHE_PROJECTS, portalId, scoped);
+    setLoaded(true);
     seedIfEmpty(scoped.map((p) => p.id));
   }, [token, portalId, seedIfEmpty]);
 
@@ -73,11 +82,18 @@ export function ProjectsList() {
 
   useEffect(() => {
     if (!token || !portalId) return;
-    setProjects([]);
+    const cached = readPortalCache<Project[]>(CACHE_PROJECTS, portalId);
+    const scoped =
+      cached?.filter((project) => project.portal === portalId) || [];
+    setProjects(scoped);
+    setLoaded(cached !== null);
+    setLoading(true);
     setError(null);
     const ac = new AbortController();
     void load(ac.signal).catch((e) => {
       if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    }).finally(() => {
+      if (!ac.signal.aborted) setLoading(false);
     });
     return () => ac.abort();
   }, [token, portalId, load]);
@@ -186,7 +202,12 @@ export function ProjectsList() {
         </form>
       ) : null}
 
-      {projects.length === 0 ? (
+      {loading && projects.length === 0 ? (
+        <div className="empty-linked workspace-empty data-loading-state">
+          <span className="data-loading-spinner" aria-hidden />
+          <p className="muted">Загружаем проекты…</p>
+        </div>
+      ) : !loaded && error ? null : projects.length === 0 ? (
         <div className="empty-linked workspace-empty">
           <p className="muted">
             {isAgency
