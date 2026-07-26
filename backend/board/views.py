@@ -39,6 +39,7 @@ from .serializers import (
 )
 from .tasks import (
     pull_task_from_bitrix,
+    renew_task_in_bitrix,
     sync_comment_to_bitrix,
     sync_project_to_bitrix,
     sync_task_to_bitrix,
@@ -54,6 +55,13 @@ def enqueue_bitrix_sync(task_id: int) -> None:
         sync_task_to_bitrix(task_id)
     else:
         sync_task_to_bitrix.delay(task_id)
+
+
+def enqueue_bitrix_renew(task_id: int) -> None:
+    if settings.CELERY_TASK_ALWAYS_EAGER:
+        renew_task_in_bitrix(task_id)
+    else:
+        renew_task_in_bitrix.delay(task_id)
 
 
 def enqueue_project_sync(project_id: int) -> None:
@@ -436,7 +444,17 @@ class TaskViewSet(viewsets.ModelViewSet):
                         raise PermissionDenied(
                             "Срок можно менять только у задач, которые вы создали"
                         )
-        task = serializer.save(sync_status=Task.SyncStatus.PENDING)
+        new_status = serializer.validated_data.get("status", old_status)
+        locally_paused = task.is_locally_paused
+        if new_status != old_status:
+            locally_paused = (
+                old_status == Task.Status.IN_PROGRESS
+                and new_status == Task.Status.TODO
+            )
+        task = serializer.save(
+            sync_status=Task.SyncStatus.PENDING,
+            is_locally_paused=locally_paused,
+        )
 
         if self.request.user.is_agency and old_status != task.status:
             author = self.request.user.bitrix_user
@@ -472,6 +490,8 @@ class TaskViewSet(viewsets.ModelViewSet):
             old_status=old_status,
             old_due=old_due,
         )
+        if old_status == Task.Status.DONE and task.status == Task.Status.TODO:
+            enqueue_bitrix_renew(task.id)
         enqueue_bitrix_sync(task.id)
         publish_task_event(task, kind="task_update")
         task.refresh_from_db()

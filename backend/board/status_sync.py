@@ -468,6 +468,7 @@ def apply_inbound_status(
     stop_timers: bool = True,
     force: bool = False,
     allow_resume_from_pause: bool = False,
+    allow_reopen_from_done: bool = False,
 ) -> bool:
     """
     Apply status that originated in Bitrix. Does not push back to Bitrix.
@@ -489,13 +490,16 @@ def apply_inbound_status(
         Task.Status.DONE,
     ):
         return False
-    if new_status == Task.Status.TODO:
+    if new_status == Task.Status.TODO and not (
+        task.status == Task.Status.DONE and allow_reopen_from_done
+    ):
         return False
     # Done is terminal unless the app explicitly renews (outbound PENDING).
     if (
         task.status == Task.Status.DONE
         and new_status != Task.Status.DONE
         and task.sync_status != Task.SyncStatus.PENDING
+        and not allow_reopen_from_done
     ):
         return False
     # Protect local app pause from Bitrix still being «in progress».
@@ -505,7 +509,7 @@ def apply_inbound_status(
     if (
         task.status == Task.Status.TODO
         and new_status == Task.Status.IN_PROGRESS
-        and task.time_entries.exists()
+        and task.is_locally_paused
     ):
         return False
     if task.status == new_status:
@@ -536,10 +540,20 @@ def apply_inbound_status(
 
     old = task.status
     task.status = new_status
+    if new_status in (Task.Status.IN_PROGRESS, Task.Status.DONE) or allow_reopen_from_done:
+        task.is_locally_paused = False
     # Keep sync_status as synced — change came from Bitrix
     task.sync_status = Task.SyncStatus.SYNCED
     task.sync_error = ""
-    task.save(update_fields=["status", "sync_status", "sync_error", "updated_at"])
+    task.save(
+        update_fields=[
+            "status",
+            "is_locally_paused",
+            "sync_status",
+            "sync_error",
+            "updated_at",
+        ]
+    )
 
     if stop_timers and new_status == Task.Status.DONE:
         for running in task.time_entries.filter(ended_at__isnull=True):
@@ -908,12 +922,22 @@ def pull_task_status_from_bitrix(task) -> bool:
     from board.titles import strip_portal_title_prefix
 
     status, data, portal, bitrix_id = resolve_inbound_status_from_sources(task)
-    work = status if status in ("in_progress", "done") else None
+    work = (
+        status
+        if status in ("in_progress", "done")
+        or (task.status == "done" and status == "todo")
+        else None
+    )
     if not data or not portal or not bitrix_id:
         # Still apply work status if we could read it from a partial scan
         if work and task.status != work:
             prev = task.status
-            applied = apply_inbound_status(task, work, force=True)
+            applied = apply_inbound_status(
+                task,
+                work,
+                force=True,
+                allow_reopen_from_done=(task.status == "done" and work != "done"),
+            )
             if applied and work == "done" and prev != "done":
                 try:
                     from board.completion import finalize_task_completion
@@ -929,7 +953,12 @@ def pull_task_status_from_bitrix(task) -> bool:
     changed = False
     if local and task.status != local:
         prev = task.status
-        applied = apply_inbound_status(task, local, force=True)
+        applied = apply_inbound_status(
+            task,
+            local,
+            force=True,
+            allow_reopen_from_done=(task.status == "done" and local != "done"),
+        )
         changed = applied or changed
         if applied and local == "done" and prev != "done":
             try:
@@ -1020,7 +1049,11 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
             before_status,
             after_status,
         )
-        if local in ("in_progress", "done") and task.status != local:
+        explicit_reopen = task.status == "done" and local in ("todo", "in_progress")
+        if (
+            local in ("in_progress", "done")
+            or explicit_reopen
+        ) and task.status != local:
             prev = task.status
             # Keep the transition flag for virgin tasks. apply_inbound_status
             # still protects an app-paused task that already has tracked time.
@@ -1035,6 +1068,7 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
                 local,
                 force=True,
                 allow_resume_from_pause=explicit_start or local == "done",
+                allow_reopen_from_done=explicit_reopen,
             )
             if status_changed and local == "done" and prev != "done":
                 try:

@@ -214,12 +214,30 @@ class ApplyInboundStatusTests(TestCase):
         self.assertFalse(changed)
         self.assertEqual(task.status, Task.Status.DONE)
 
+    def test_explicit_bitrix_renew_reopens_done_task(self):
+        task = make_task(
+            self.project,
+            status=Task.Status.DONE,
+            sync_status=Task.SyncStatus.SYNCED,
+            created_by=self.user,
+        )
+        changed = apply_inbound_status(
+            task,
+            "todo",
+            force=True,
+            allow_reopen_from_done=True,
+        )
+        task.refresh_from_db()
+        self.assertTrue(changed)
+        self.assertEqual(task.status, Task.Status.TODO)
+
     def test_app_pause_not_undone_by_bitrix_still_in_progress(self):
         # App pause leaves Bitrix «in progress». Pull must not resume the app
         # when local time was already tracked.
         task = make_task(
             self.project,
             status=Task.Status.TODO,
+            is_locally_paused=True,
             sync_status=Task.SyncStatus.SYNCED,
             created_by=self.user,
         )
@@ -242,6 +260,7 @@ class ApplyInboundStatusTests(TestCase):
         task = make_task(
             self.project,
             status=Task.Status.TODO,
+            is_locally_paused=True,
             sync_status=Task.SyncStatus.SYNCED,
             created_by=self.user,
         )

@@ -533,6 +533,37 @@ def sync_task_to_bitrix(self, task_id: int):
     }
 
 
+@shared_task(bind=True, max_retries=3, default_retry_delay=10)
+def renew_task_in_bitrix(self, task_id: int):
+    """Explicit app Done→Todo transition: reopen the agency Bitrix task."""
+    from board.models import Task
+
+    task = (
+        Task.objects.select_related("project", "project__portal")
+        .filter(pk=task_id)
+        .first()
+    )
+    if not task:
+        return {"ok": False, "reason": "missing"}
+    agency = _agency_portal_for_client(task.project.portal)
+    bitrix_id = str(task.agency_bitrix_task_id or "")
+    if not agency or not agency.access_token or not bitrix_id:
+        return {"ok": False, "reason": "no_agency_task"}
+
+    client = BitrixClient(agency)
+    try:
+        current = bitrix_status_code(client.get_task(bitrix_id))
+        if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
+            client.renew_task(bitrix_id)
+        client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "N"})
+        return {"ok": True, "bitrix_task_id": bitrix_id}
+    except BitrixAPIError as exc:
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": str(exc)}
+
+
 @shared_task(bind=True, max_retries=5, default_retry_delay=5)
 def sync_comment_to_bitrix(self, comment_id: int):
     """Post a chat message into linked Bitrix task(s)."""

@@ -49,6 +49,9 @@ class Task(models.Model):
     description = models.TextField(blank=True)
     due_date = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.TODO)
+    # Distinguishes an app-local pause from initial/reopened TODO. Bitrix start
+    # events must never clear this independent pause.
+    is_locally_paused = models.BooleanField(default=False)
     # Bitrix «Важная задача» → PRIORITY high (2). Two-way synced.
     is_important = models.BooleanField(default=False)
     # Outcome filled when completing the task; shown in work reports.
