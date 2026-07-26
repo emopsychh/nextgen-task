@@ -62,6 +62,7 @@ class SyncTaskIdempotencyTests(TestCase):
         created_fields = client.create_task.call_args.args[0]
         self.assertEqual(created_fields["CREATED_BY"], "99")
         self.assertEqual(created_fields["RESPONSIBLE_ID"], "42")
+        self.assertEqual(created_fields["ALLOW_TIME_TRACKING"], "N")
 
         Task.objects.filter(pk=task.pk).update(sync_status=Task.SyncStatus.PENDING)
         with patch.object(board_tasks, "BitrixClient", return_value=client):

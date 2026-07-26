@@ -76,6 +76,10 @@ class OutboundStatusPushTests(TestCase):
         with patch.object(board_tasks, "BitrixClient", return_value=client):
             res = board_tasks.sync_task_to_bitrix(task.id)
         self.assertTrue(res["ok"])
+        self.assertEqual(
+            client.update_task.call_args.args[1]["ALLOW_TIME_TRACKING"],
+            "Y",
+        )
         client.complete_task.assert_called_once()
         client.pause_task_timer.assert_called()
         client.add_elapsed_item.assert_not_called()
@@ -93,6 +97,10 @@ class OutboundStatusPushTests(TestCase):
         with patch.object(board_tasks, "BitrixClient", return_value=client):
             res = board_tasks.sync_task_to_bitrix(task.id)
         self.assertTrue(res["ok"])
+        self.assertEqual(
+            client.update_task.call_args.args[1]["ALLOW_TIME_TRACKING"],
+            "N",
+        )
         client.start_task.assert_called()
 
     def test_agency_responsible_is_agency_oauth_user_not_client_author(self):

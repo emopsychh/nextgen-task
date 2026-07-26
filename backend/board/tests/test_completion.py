@@ -65,6 +65,10 @@ class CompletionHelpersTests(TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["added_seconds"], 90)
+        client.update_task.assert_called_once_with(
+            "108",
+            {"ALLOW_TIME_TRACKING": "Y"},
+        )
         client.add_elapsed_item.assert_called_once_with(
             "108",
             90,

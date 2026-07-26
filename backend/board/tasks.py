@@ -147,8 +147,9 @@ def _task_fields(
         fields["GROUP_ID"] = group_id
     if parent_id:
         fields["PARENT_ID"] = parent_id
-    # Keep Bitrix «Учёт времени» enabled so the team can enter time manually there.
-    fields["ALLOW_TIME_TRACKING"] = "Y"
+    # Never run a second live timer in Bitrix. Enable elapsed items only after
+    # completion, when Nextgen writes the final total through the API.
+    fields["ALLOW_TIME_TRACKING"] = "Y" if task.status == "done" else "N"
     # Bitrix PRIORITY: 2 = High («важная»), 1 = Normal. Mirror the local flag.
     fields["PRIORITY"] = "2" if getattr(task, "is_important", False) else "1"
     if crm_bindings:
@@ -384,7 +385,7 @@ def _do_sync_project_to_bitrix(project_id: int) -> dict:
         "TITLE": project.name,
         "DESCRIPTION": project.description or "",
         "GROUP_ID": group_id,
-        "ALLOW_TIME_TRACKING": "Y",
+        "ALLOW_TIME_TRACKING": "N",
     }
     crm_bindings = _crm_deal_uf_bindings(client_portal)
     if crm_bindings:
@@ -1025,6 +1026,7 @@ def sync_completion_time_to_bitrix(self, task_id: int):
                 return {"ok": True, "skipped": "no_time", "seconds": 0}
 
             client = BitrixClient(agency)
+            client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
             bitrix_total = client.get_task_elapsed_seconds(bitrix_id)
             if bitrix_total is None:
                 raise BitrixAPIError("Не удалось прочитать Учёт времени из Bitrix")
