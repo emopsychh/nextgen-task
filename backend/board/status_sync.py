@@ -532,6 +532,10 @@ def apply_inbound_status(
     # force=True (webhooks / pull): still skip for a short window so we don't
     # regress from a stale Bitrix echo before the outbound lands.
     if task.sync_status == Task.SyncStatus.PENDING:
+        # Done→Todo is an explicit local renew. Keep it pending until the renew
+        # task confirms Bitrix; an old `done` event must never undo it.
+        if task.status == Task.Status.TODO and new_status == Task.Status.DONE:
+            return False
         if not force:
             return False
         age = (timezone.now() - task.updated_at).total_seconds()
@@ -1035,11 +1039,20 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         before_status = local_status_from_bitrix_task(before) if before else None
         data_status = local_status_from_bitrix_task(data) if data else None
         local = after_status if after_status is not None else data_status
+        # A direct get reflects the current Bitrix state. Event delivery may be
+        # delayed (notably the old completion event arriving after renew).
+        if (
+            data_status is not None
+            and after_status is not None
+            and data_status != after_status
+        ):
+            local = data_status
         # Prefer an explicit FIELDS_BEFORE→AFTER transition when present.
         if (
             after_status is not None
             and before_status is not None
             and after_status != before_status
+            and (data_status is None or data_status == after_status)
         ):
             local = after_status
         logger.info(

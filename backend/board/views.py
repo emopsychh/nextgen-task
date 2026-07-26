@@ -490,9 +490,11 @@ class TaskViewSet(viewsets.ModelViewSet):
             old_status=old_status,
             old_due=old_due,
         )
-        if old_status == Task.Status.DONE and task.status == Task.Status.TODO:
+        is_reopen = old_status == Task.Status.DONE and task.status == Task.Status.TODO
+        if is_reopen:
             enqueue_bitrix_renew(task.id)
-        enqueue_bitrix_sync(task.id)
+        else:
+            enqueue_bitrix_sync(task.id)
         publish_task_event(task, kind="task_update")
         task.refresh_from_db()
         serializer.instance = task

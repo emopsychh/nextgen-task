@@ -122,6 +122,8 @@ class OutboundStatusPushTests(TestCase):
             "108",
             {"ALLOW_TIME_TRACKING": "N"},
         )
+        task.refresh_from_db()
+        self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
 
     def test_agency_responsible_is_agency_oauth_user_not_client_author(self):
         task = make_task(

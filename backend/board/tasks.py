@@ -536,31 +536,49 @@ def sync_task_to_bitrix(self, task_id: int):
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
 def renew_task_in_bitrix(self, task_id: int):
     """Explicit app Done→Todo transition: reopen the agency Bitrix task."""
+    from django.db import transaction
+
     from board.models import Task
 
-    task = (
-        Task.objects.select_related("project", "project__portal")
-        .filter(pk=task_id)
-        .first()
-    )
-    if not task:
-        return {"ok": False, "reason": "missing"}
-    agency = _agency_portal_for_client(task.project.portal)
-    bitrix_id = str(task.agency_bitrix_task_id or "")
-    if not agency or not agency.access_token or not bitrix_id:
-        return {"ok": False, "reason": "no_agency_task"}
-
-    client = BitrixClient(agency)
     try:
-        current = bitrix_status_code(client.get_task(bitrix_id))
-        if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
-            client.renew_task(bitrix_id)
-        client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "N"})
+        with transaction.atomic():
+            task = (
+                Task.objects.select_for_update(of=("self",))
+                .select_related("project", "project__portal")
+                .filter(pk=task_id)
+                .first()
+            )
+            if not task:
+                return {"ok": False, "reason": "missing"}
+            agency = _agency_portal_for_client(task.project.portal)
+            bitrix_id = str(task.agency_bitrix_task_id or "")
+            if not agency or not agency.access_token or not bitrix_id:
+                raise BitrixAPIError("Нет связанной задачи на портале агентства")
+
+            client = BitrixClient(agency)
+            current = bitrix_status_code(client.get_task(bitrix_id))
+            if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
+                client.renew_task(bitrix_id)
+            client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "N"})
+            task.sync_status = Task.SyncStatus.SYNCED
+            task.sync_error = ""
+            task.save(update_fields=["sync_status", "sync_error", "updated_at"])
+
+        try:
+            from board.realtime import publish_task_event
+
+            publish_task_event(task, kind="task_synced")
+        except Exception:
+            pass
         return {"ok": True, "bitrix_task_id": bitrix_id}
     except BitrixAPIError as exc:
         try:
             raise self.retry(exc=exc)
         except self.MaxRetriesExceededError:
+            Task.objects.filter(pk=task_id).update(
+                sync_status=Task.SyncStatus.ERROR,
+                sync_error=str(exc),
+            )
             return {"ok": False, "error": str(exc)}
 
 
