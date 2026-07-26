@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   api,
@@ -13,6 +13,7 @@ import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime, formatDuration } from "../../lib/format";
+import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
 import {
   REPORT_BUCKETS,
   type ReportBucket,
@@ -54,6 +55,10 @@ export function ProjectReports() {
   const [bucket, setBucket] = useState<ReportBucket>("all");
   const [reports, setReports] = useState<WorkReport[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [listLoading, setListLoading] = useState(true);
+  const [listLoaded, setListLoaded] = useState(false);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const listGenRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -109,14 +114,17 @@ export function ProjectReports() {
   const loadList = useCallback(
     async (signal?: AbortSignal) => {
       if (!token || !portalId) return;
+      const gen = ++listGenRef.current;
       const data = await api<WorkReport[] | Paginated<WorkReport>>(
         reportsApiQuery(portalId, bucket),
         { signal },
         token
       );
-      if (signal?.aborted) return;
+      if (signal?.aborted || gen !== listGenRef.current) return;
       const list = unwrapList(data);
       setReports(list);
+      writePortalCache(`reports:${bucket}`, portalId, list);
+      setListLoaded(true);
       void loadCounts(signal, bucket === "all" ? list : undefined);
     },
     [token, portalId, bucket, loadCounts]
@@ -138,17 +146,36 @@ export function ProjectReports() {
 
   useEffect(() => {
     if (!token || !portalId) return;
-    setReports([]);
-    setProjects([]);
-    setCounts({ all: 0, current: 0, review: 0, paid: 0 });
+    const cached = readPortalCache<WorkReport[]>(`reports:${bucket}`, portalId);
+    setReports(cached || []);
+    setListLoaded(cached !== null);
+    setListLoading(true);
     setError(null);
     const ac = new AbortController();
     void loadList(ac.signal).catch((e) => {
       if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    }).finally(() => {
+      if (!ac.signal.aborted) setListLoading(false);
     });
-    void loadProjects(ac.signal).catch(() => undefined);
     return () => ac.abort();
-  }, [token, portalId, loadList, loadProjects]);
+  }, [token, portalId, bucket, loadList]);
+
+  useEffect(() => {
+    setCounts({ all: 0, current: 0, review: 0, paid: 0 });
+  }, [portalId]);
+
+  useEffect(() => {
+    if (!token || !portalId) return;
+    setProjects([]);
+    setProjectsLoading(true);
+    const ac = new AbortController();
+    void loadProjects(ac.signal)
+      .catch(() => undefined)
+      .finally(() => {
+        if (!ac.signal.aborted) setProjectsLoading(false);
+      });
+    return () => ac.abort();
+  }, [token, portalId, loadProjects]);
 
   usePortalLiveSync({
     token,
@@ -243,7 +270,18 @@ export function ProjectReports() {
             key={b.id}
             type="button"
             className={`task-filter-chip${bucket === b.id ? " active" : ""}`}
-            onClick={() => setBucket(b.id)}
+            onClick={() => {
+              if (b.id === bucket) return;
+              listGenRef.current += 1;
+              const cached = readPortalCache<WorkReport[]>(
+                `reports:${b.id}`,
+                portalId
+              );
+              setReports(cached || []);
+              setListLoaded(cached !== null);
+              setListLoading(true);
+              setBucket(b.id);
+            }}
           >
             {b.label}
             <span className="task-filter-count">{counts[b.id]}</span>
@@ -273,7 +311,9 @@ export function ProjectReports() {
                 </label>
               </li>
             ))}
-            {projects.length === 0 ? (
+            {projectsLoading && projects.length === 0 ? (
+              <li className="muted">Загружаем проекты…</li>
+            ) : projects.length === 0 ? (
               <li className="muted">Пока нет проектов у этого клиента</li>
             ) : null}
           </ul>
@@ -300,7 +340,12 @@ export function ProjectReports() {
         </div>
       ) : null}
 
-      {reports.length === 0 ? (
+      {listLoading && reports.length === 0 ? (
+        <div className="report-list-empty-card data-loading-state">
+          <span className="data-loading-spinner" aria-hidden />
+          <p className="muted">Загружаем отчёты…</p>
+        </div>
+      ) : !listLoaded && error ? null : reports.length === 0 ? (
         <div className="report-list-empty-card">
           <p>В этой вкладке пока пусто.</p>
           {isAgency && (bucket === "all" || bucket === "current") ? (

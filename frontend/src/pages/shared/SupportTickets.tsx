@@ -15,6 +15,7 @@ import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime } from "../../lib/format";
+import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
 import {
   TICKET_BUCKETS,
   type TicketBucket,
@@ -44,7 +45,9 @@ export function SupportTickets() {
   const [bucket, setBucket] = useState<TicketBucket>("open");
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [listLoading, setListLoading] = useState(true);
+  const [listLoaded, setListLoaded] = useState(false);
   const [detail, setDetail] = useState<SupportTicket | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -56,14 +59,18 @@ export function SupportTickets() {
   const [taskId, setTaskId] = useState<number | "">("");
   const [draft, setDraft] = useState("");
   const threadRef = useRef<HTMLDivElement>(null);
+  const listGenRef = useRef(0);
 
   const listPath = ticketsListPath(listPortalId, isAgency);
   const livePortalId = detail?.portal ?? listPortalId;
+  const ticketCacheScope = isAgency ? portal?.id ?? null : listPortalId;
+  const ticketCacheKind = `tickets:${isAgency ? "agency" : "client"}:${bucket}`;
 
   const loadList = useCallback(
     async (signal?: AbortSignal) => {
       if (!token) return;
       if (!isAgency && !listPortalId) return;
+      const gen = ++listGenRef.current;
       setListLoading(true);
       try {
         const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
@@ -71,13 +78,18 @@ export function SupportTickets() {
           { signal },
           token
         );
-        if (signal?.aborted) return;
-        setTickets(unwrapList(data));
+        if (signal?.aborted || gen !== listGenRef.current) return;
+        const list = unwrapList(data);
+        setTickets(list);
+        setListLoaded(true);
+        if (ticketCacheScope) {
+          writePortalCache(ticketCacheKind, ticketCacheScope, list);
+        }
       } finally {
-        if (!signal?.aborted) setListLoading(false);
+        if (!signal?.aborted && gen === listGenRef.current) setListLoading(false);
       }
     },
-    [token, isAgency, listPortalId, bucket]
+    [token, isAgency, listPortalId, bucket, ticketCacheScope, ticketCacheKind]
   );
 
   const loadDetail = useCallback(
@@ -115,7 +127,11 @@ export function SupportTickets() {
     if (!token) return;
     if (!isAgency && !listPortalId) return;
     // A reused route must not show rows from the previous portal/filter.
-    setTickets([]);
+    const cached = ticketCacheScope
+      ? readPortalCache<SupportTicket[]>(ticketCacheKind, ticketCacheScope)
+      : null;
+    setTickets(cached || []);
+    setListLoaded(cached !== null);
     setError(null);
     setListLoading(true);
     const ac = new AbortController();
@@ -124,15 +140,26 @@ export function SupportTickets() {
       else if (!ac.signal.aborted) setListLoading(false);
     });
     return () => ac.abort();
-  }, [token, isAgency, listPortalId, loadList]);
+  }, [
+    token,
+    isAgency,
+    listPortalId,
+    bucket,
+    ticketCacheScope,
+    ticketCacheKind,
+    loadList,
+  ]);
 
   useEffect(() => {
     if (!token) return;
     setDetail(null);
+    setDetailLoading(Boolean(selectedId));
     setError(null);
     const ac = new AbortController();
     void loadDetail(ac.signal).catch((e) => {
       if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    }).finally(() => {
+      if (!ac.signal.aborted) setDetailLoading(false);
     });
     return () => ac.abort();
   }, [token, loadDetail]);
@@ -414,6 +441,15 @@ export function SupportTickets() {
                 aria-selected={bucket === b.id}
                 className={`tickets-tab${bucket === b.id ? " active" : ""}`}
                 onClick={() => {
+                  if (b.id === bucket) return;
+                  listGenRef.current += 1;
+                  const nextKind = `tickets:${isAgency ? "agency" : "client"}:${b.id}`;
+                  const cached = ticketCacheScope
+                    ? readPortalCache<SupportTicket[]>(nextKind, ticketCacheScope)
+                    : null;
+                  setTickets(cached || []);
+                  setListLoaded(cached !== null);
+                  setListLoading(true);
                   setBucket(b.id);
                   if (selectedId) navigate(listPath);
                 }}
@@ -422,9 +458,12 @@ export function SupportTickets() {
               </button>
             ))}
           </div>
-          {listLoading ? (
-            <p className="muted tickets-empty-list">Загрузка…</p>
-          ) : tickets.length === 0 ? (
+          {listLoading && tickets.length === 0 ? (
+            <div className="tickets-empty-list data-loading-state">
+              <span className="data-loading-spinner" aria-hidden />
+              <p className="muted">Загружаем тикеты…</p>
+            </div>
+          ) : !listLoaded && error ? null : tickets.length === 0 ? (
             <p className="muted tickets-empty-list">
               {bucket === "open" ? "Нет открытых тикетов" : "Архив пуст"}
             </p>
@@ -490,7 +529,12 @@ export function SupportTickets() {
         </aside>
 
         <section className="tickets-pane tickets-detail-pane">
-          {!selectedId || !detail ? (
+          {selectedId && detailLoading ? (
+            <div className="tickets-empty-detail data-loading-state">
+              <span className="data-loading-spinner" aria-hidden />
+              <p className="muted">Открываем тикет…</p>
+            </div>
+          ) : !selectedId || !detail ? (
             <div className="tickets-empty-detail">
               <p className="tickets-empty-title">Выберите тикет</p>
               <p className="muted">
