@@ -121,8 +121,39 @@ class SyncTaskIdempotencyTests(TestCase):
         self.assertTrue(result["ok"])
         client.add_task_comment.assert_called_once_with(
             "999",
-            "ADMIN: Здравствуйте, это тест",
+            "Здравствуйте, это тест",
             author_id="54",
+        )
+
+    def test_agency_comment_has_no_name_prefix(self):
+        agency_user = make_user(
+            self.agency,
+            bitrix_id="42",
+            name="Александр",
+            last_name="Матвеев",
+        )
+        task = make_task(
+            self.project,
+            created_by=agency_user,
+            agency_bitrix_task_id="999",
+        )
+        comment = Comment.objects.create(
+            task=task,
+            author=agency_user,
+            author_name="Александр Матвеев",
+            text="Здрасьте",
+        )
+        client = _mock_client()
+        client.add_task_comment.return_value = 322
+
+        with patch.object(board_tasks, "BitrixClient", return_value=client):
+            result = board_tasks.sync_comment_to_bitrix(comment.id)
+
+        self.assertTrue(result["ok"])
+        client.add_task_comment.assert_called_once_with(
+            "999",
+            "Здрасьте",
+            author_id=None,
         )
 
     def test_no_agency_link_errors_without_client_create(self):

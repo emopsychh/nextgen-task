@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from django.test import TestCase, override_settings
 
 from board.comment_sync import (
     _normalize_message,
     is_bitrix_system_log_comment,
     is_nextgen_file_echo,
+    pull_task_chat_messages,
     resolve_status_with_timer_activity,
     status_from_bitrix_system_comment,
     upsert_comment_from_bitrix_payload,
@@ -139,3 +142,62 @@ class UpsertCommentTests(TestCase):
         self.assertEqual(Comment.objects.filter(task=self.task).count(), 1)
         local.refresh_from_db()
         self.assertEqual(local.bitrix_comment_id, "13")
+
+    def test_imports_message_from_modern_task_chat(self):
+        client = MagicMock()
+        client.get_task.return_value = {"chatId": "77"}
+        client.call.return_value = {
+            "messages": [
+                {
+                    "id": "501",
+                    "author_id": "12",
+                    "text": "Сообщение из чата Bitrix",
+                    "date": "2026-07-26T16:00:00+00:00",
+                }
+            ],
+            "users": [{"id": "12", "name": "Александр", "last_name": "Матвеев"}],
+        }
+
+        created = pull_task_chat_messages(
+            self.task,
+            portal=self.portal,
+            bitrix_task_id="900",
+            client=client,
+        )
+
+        self.assertEqual(created, 1)
+        row = Comment.objects.get(task=self.task)
+        self.assertEqual(row.text, "Сообщение из чата Bitrix")
+        self.assertEqual(row.author_name, "Александр Матвеев")
+        self.assertEqual(row.bitrix_comment_id, "im:501")
+
+    @override_settings(BITRIX_CLIENT_TASK_AUTHOR_ID="54")
+    def test_task_chat_does_not_duplicate_outbound_client_message(self):
+        Comment.objects.create(
+            task=self.task,
+            author_name="ADMIN",
+            text="Здравствуйте",
+            bitrix_comment_id="100",
+        )
+        client = MagicMock()
+        client.get_task.return_value = {"chatId": "77"}
+        client.call.return_value = {
+            "messages": [
+                {
+                    "id": "502",
+                    "author_id": "54",
+                    "text": "Здравствуйте",
+                }
+            ],
+            "users": [{"id": "54", "name": "Клиент"}],
+        }
+
+        created = pull_task_chat_messages(
+            self.task,
+            portal=self.portal,
+            bitrix_task_id="900",
+            client=client,
+        )
+
+        self.assertEqual(created, 0)
+        self.assertEqual(Comment.objects.filter(task=self.task).count(), 1)

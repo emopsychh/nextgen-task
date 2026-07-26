@@ -571,13 +571,8 @@ def sync_comment_to_bitrix(self, comment_id: int):
     # File-only comments: Bitrix chat message is created by sync_attachment_to_bitrix
     if not body:
         return {"ok": True, "skipped": "empty_text"}
-    # Spent-time line: post as-is (no "Команда:" prefix) for a clean Bitrix status.
-    from board.completion import TIME_SPENT_MARKER
-
-    if comment.is_system and body.startswith(TIME_SPENT_MARKER):
-        message = body
-    else:
-        message = f"{author_name}: {body}".strip()
+    # Bitrix already renders the author profile next to the message.
+    message = body
     if not message:
         return {"ok": False, "reason": "empty"}
 

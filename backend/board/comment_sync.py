@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from django.conf import settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -492,13 +493,148 @@ def pull_comments_from_bitrix(task, *, portal=None, bitrix_task_id: str = "") ->
         rows = client.list_task_comments(bitrix_task_id)
     except BitrixAPIError as exc:
         logger.info("comment list failed task=%s: %s", task.id, exc)
-        return 0
+        rows = []
 
     created = 0
     for row in rows:
         cid = str(row.get("ID") or row.get("id") or "")
         if upsert_comment_from_bitrix_payload(
             task=task, portal=portal, payload=row, bitrix_comment_id=cid
+        ):
+            created += 1
+    created += pull_task_chat_messages(
+        task,
+        portal=portal,
+        bitrix_task_id=bitrix_task_id,
+        client=client,
+    )
+    return created
+
+
+def pull_task_chat_messages(
+    task,
+    *,
+    portal,
+    bitrix_task_id: str,
+    client: BitrixClient | None = None,
+) -> int:
+    """Import messages from the modern Bitrix task chat (`chatId`)."""
+    client = client or BitrixClient(portal)
+    try:
+        task_data = client.get_task(bitrix_task_id) or {}
+        chat_id = (
+            task_data.get("chatId")
+            or task_data.get("CHAT_ID")
+            or task_data.get("chat_id")
+            or ""
+        )
+        if not chat_id or str(chat_id) in ("0", "false"):
+            return 0
+        dialog_id = str(chat_id)
+        if not dialog_id.startswith("chat"):
+            dialog_id = f"chat{dialog_id}"
+        result = client.call(
+            "im.dialog.messages.get",
+            {"DIALOG_ID": dialog_id, "LIMIT": 50},
+        )
+    except BitrixAPIError as exc:
+        # Portals without the `im` scope still keep classic comment sync.
+        logger.info("task chat pull failed task=%s: %s", bitrix_task_id, exc)
+        return 0
+
+    if not isinstance(result, dict):
+        return 0
+    messages = result.get("messages") or result.get("MESSAGES") or []
+    if not messages and isinstance(result.get("result"), dict):
+        nested = result["result"]
+        messages = nested.get("messages") or nested.get("MESSAGES") or []
+    if not isinstance(messages, list):
+        return 0
+
+    users = result.get("users") or result.get("USERS") or []
+    if not users and isinstance(result.get("result"), dict):
+        users = result["result"].get("users") or result["result"].get("USERS") or []
+    user_names: dict[str, str] = {}
+    if isinstance(users, list):
+        for user in users:
+            if not isinstance(user, dict):
+                continue
+            uid = str(user.get("id") or user.get("ID") or "")
+            name = " ".join(
+                (
+                    str(user.get("name") or user.get("NAME") or "").strip(),
+                    str(
+                        user.get("last_name")
+                        or user.get("LAST_NAME")
+                        or user.get("lastName")
+                        or ""
+                    ).strip(),
+                )
+            ).strip()
+            if not name:
+                name = str(user.get("NAME") or user.get("FULL_NAME") or "").strip()
+            if uid:
+                user_names[uid] = name
+
+    from board.models import Comment
+
+    created = 0
+    service_author_id = (settings.BITRIX_CLIENT_TASK_AUTHOR_ID or "").strip()
+    for row in messages:
+        if not isinstance(row, dict):
+            continue
+        message_id = str(row.get("id") or row.get("ID") or "")
+        if not message_id:
+            continue
+        cid = f"im:{message_id}"
+        if _already_have_comment(task, cid):
+            continue
+        raw = str(row.get("text") or row.get("TEXT") or row.get("message") or "")
+        text = re.sub(r"\[/?[^\]]+\]", "", raw).strip()
+        if not text:
+            continue
+        author_id = str(
+            row.get("author_id")
+            or row.get("AUTHOR_ID")
+            or row.get("authorId")
+            or ""
+        )
+        author_name = user_names.get(author_id, "") or "Bitrix"
+        created_at = _parse_post_date(
+            row.get("date")
+            or row.get("DATE")
+            or row.get("date_create")
+            or row.get("DATE_CREATE")
+        )
+
+        # A classic task comment is mirrored into the task chat as well. Avoid
+        # importing that mirror as a second local message.
+        duplicates = Comment.objects.filter(task=task, text=text)
+        if author_id != service_author_id and author_name != "Bitrix":
+            duplicates = duplicates.filter(author_name__iexact=author_name)
+        if created_at:
+            duplicates = duplicates.filter(
+                created_at__gte=created_at - timedelta(seconds=10),
+                created_at__lte=created_at + timedelta(seconds=10),
+            )
+        else:
+            duplicates = duplicates.filter(
+                created_at__gte=timezone.now() - timedelta(minutes=2)
+            )
+        if duplicates.exists():
+            continue
+
+        payload = {
+            "ID": cid,
+            "AUTHOR_NAME": author_name,
+            "POST_MESSAGE": text,
+            "POST_DATE": created_at,
+        }
+        if upsert_comment_from_bitrix_payload(
+            task=task,
+            portal=portal,
+            payload=payload,
+            bitrix_comment_id=cid,
         ):
             created += 1
     return created
