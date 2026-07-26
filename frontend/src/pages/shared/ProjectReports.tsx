@@ -70,6 +70,7 @@ export function ProjectReports() {
   const [listLoading, setListLoading] = useState(true);
   const [listLoaded, setListLoaded] = useState(false);
   const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const listGenRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -162,6 +163,7 @@ export function ProjectReports() {
         (project) => project.portal === portalId
       );
       setProjects(list);
+      setProjectsLoaded(true);
       writePortalCache(CACHE_PROJECTS, portalId, list);
     },
     [token, portalId]
@@ -201,6 +203,7 @@ export function ProjectReports() {
     setProjects(
       cached?.filter((project) => project.portal === portalId) || []
     );
+    setProjectsLoaded(cached !== null);
     setProjectsLoading(true);
     const ac = new AbortController();
     void loadProjects(ac.signal)
@@ -345,7 +348,7 @@ export function ProjectReports() {
                 </label>
               </li>
             ))}
-            {projectsLoading && projects.length === 0 ? (
+            {projectsLoading && !projectsLoaded ? (
               <li className="muted">Загружаем проекты…</li>
             ) : projects.length === 0 ? (
               <li className="muted">Пока нет проектов у этого клиента</li>
@@ -374,7 +377,7 @@ export function ProjectReports() {
         </div>
       ) : null}
 
-      {listLoading && reports.length === 0 ? (
+      {listLoading && !listLoaded ? (
         <div className="report-list-empty-card data-loading-state">
           <span className="data-loading-spinner" aria-hidden />
           <p className="muted">Загружаем отчёты…</p>

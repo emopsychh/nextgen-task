@@ -3,7 +3,7 @@ import { api, type Task } from "../api/types";
 import { usePortalLiveSync } from "./usePortalLiveSync";
 
 const POLL_MS = 2000;
-const PULL_EVERY = 6; // Bitrix pull ~ every 12s
+const PULL_EVERY = 30; // Bitrix catch-up ~ every 60s; webhooks handle normal updates
 
 function fingerprint(task: Task): string {
   // Chat history is no longer inlined on the task; we rely on lightweight
@@ -69,7 +69,7 @@ export function useTaskLiveSync({
     null
   );
   const fpRef = useRef<string>("");
-  const pullNowRef = useRef(false);
+  const tickNowRef = useRef<(forcePull?: boolean) => void>(() => undefined);
   // Ignore in-flight polls that raced a local PATCH (e.g. Complete → done
   // was overwritten by a slow ?pull=1 that still had in_progress).
   const updatedAtRef = useRef<string>("");
@@ -105,7 +105,9 @@ export function useTaskLiveSync({
     portalId: portalId ?? task?.portal_id ?? null,
     enabled: enabled && !!taskId,
     onEvent: () => {
-      pullNowRef.current = true;
+      // Redis/SSE says local DB changed: refresh locally, do not trigger
+      // another Bitrix pull (which would create a publish/pull feedback loop).
+      tickNowRef.current(false);
     },
   });
 
@@ -123,8 +125,7 @@ export function useTaskLiveSync({
       tickCount += 1;
       try {
         const wantPull =
-          forcePull || pullNowRef.current || tickCount % PULL_EVERY === 0;
-        pullNowRef.current = false;
+          forcePull || tickCount % PULL_EVERY === 0;
         const pull = wantPull ? "?pull=1" : "";
         const data = await api<Task>(`/api/tasks/${taskId}/${pull}`, {}, token);
         if (cancelled) return;
@@ -159,6 +160,9 @@ export function useTaskLiveSync({
         inFlight = false;
       }
     }
+    tickNowRef.current = (forcePull = false) => {
+      void tick(forcePull);
+    };
 
     const onVisible = () => {
       if (document.visibilityState === "visible") void tick(true);
@@ -166,7 +170,7 @@ export function useTaskLiveSync({
     document.addEventListener("visibilitychange", onVisible);
     // Fast local poll first; Bitrix pull a few seconds later (does not block UI)
     void tick(false);
-    const firstPull = window.setTimeout(() => void tick(true), 4000);
+    const firstPull = window.setTimeout(() => void tick(true), 10000);
     const id = window.setInterval(() => void tick(false), POLL_MS);
 
     return () => {
@@ -174,6 +178,7 @@ export function useTaskLiveSync({
       document.removeEventListener("visibilitychange", onVisible);
       window.clearTimeout(firstPull);
       window.clearInterval(id);
+      tickNowRef.current = () => undefined;
     };
   }, [token, taskId, enabled]);
 }

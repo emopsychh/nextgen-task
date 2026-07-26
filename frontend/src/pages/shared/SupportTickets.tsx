@@ -486,7 +486,7 @@ export function SupportTickets() {
               </button>
             ))}
           </div>
-          {listLoading && tickets.length === 0 ? (
+          {listLoading && !listLoaded ? (
             <div className="tickets-empty-list data-loading-state">
               <span className="data-loading-spinner" aria-hidden />
               <p className="muted">Загружаем тикеты…</p>

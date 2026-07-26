@@ -41,6 +41,11 @@ export function ClientSupportWidget() {
         : null) || []
   );
   const [listLoading, setListLoading] = useState(true);
+  const [listLoaded, setListLoaded] = useState(
+    () =>
+      Boolean(portalId) &&
+      readPortalCache<SupportTicket[]>("tickets:client:open", portalId!) !== null
+  );
   const [detail, setDetail] = useState<SupportTicket | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -68,6 +73,7 @@ export function ClientSupportWidget() {
         if (signal?.aborted || gen !== listGenRef.current) return;
         const list = unwrapList(data);
         setTickets(list);
+        setListLoaded(true);
         writePortalCache(`tickets:client:${bucket}`, portalId, list);
       } finally {
         if (!signal?.aborted && gen === listGenRef.current) setListLoading(false);
@@ -112,6 +118,7 @@ export function ClientSupportWidget() {
       portalId
     );
     setTickets(cached || []);
+    setListLoaded(cached !== null);
     setListLoading(true);
     const ac = new AbortController();
     void loadList(ac.signal).catch((e) => {
@@ -276,6 +283,7 @@ export function ClientSupportWidget() {
                           )
                         : null;
                       setTickets(cached || []);
+                      setListLoaded(cached !== null);
                       setListLoading(true);
                       setBucket(b.id);
                     }}
@@ -289,7 +297,7 @@ export function ClientSupportWidget() {
             {error ? <div className="support-widget-error">{error}</div> : null}
 
             <div className="support-widget-scroll">
-              {listLoading && tickets.length === 0 ? (
+              {listLoading && !listLoaded ? (
                 <p className="support-widget-empty muted">Загрузка…</p>
               ) : tickets.length === 0 ? (
                 <p className="support-widget-empty muted">

@@ -202,7 +202,7 @@ export function ProjectsList() {
         </form>
       ) : null}
 
-      {loading && projects.length === 0 ? (
+      {loading && !loaded ? (
         <div className="empty-linked workspace-empty data-loading-state">
           <span className="data-loading-spinner" aria-hidden />
           <p className="muted">Загружаем проекты…</p>

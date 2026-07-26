@@ -1,5 +1,6 @@
 from celery import shared_task
 import logging
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,24 @@ def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
     return str(local.bitrix_id) if local else ""
 
 
+def _resolve_creator_id(task, portal, responsible_id: str) -> str:
+    """Creator must be a user of the target (agency) Bitrix portal."""
+    if (
+        task.created_by_id
+        and task.created_by
+        and task.created_by.portal_id == portal.id
+        and task.created_by.bitrix_id
+    ):
+        return str(task.created_by.bitrix_id)
+    # Cross-portal author means the task was submitted by a client. Never send
+    # that foreign Bitrix user id to the agency portal.
+    if task.created_by_id and task.created_by:
+        configured = (settings.BITRIX_CLIENT_TASK_AUTHOR_ID or "").strip()
+        if configured:
+            return configured
+    return responsible_id
+
+
 def _agency_portal_for_client(client_portal):
     from portals.models import PortalLink
 
@@ -106,6 +125,7 @@ def _task_fields(
     task,
     *,
     responsible_id: str | None = None,
+    creator_id: str | None = None,
     group_id: str | None = None,
     parent_id: str | None = None,
     include_deadline: bool = True,
@@ -121,7 +141,8 @@ def _task_fields(
         fields["DEADLINE"] = format_bitrix_deadline(task.due_date)
     if responsible_id:
         fields["RESPONSIBLE_ID"] = responsible_id
-        fields["CREATED_BY"] = responsible_id
+    if creator_id:
+        fields["CREATED_BY"] = creator_id
     if group_id:
         fields["GROUP_ID"] = group_id
     if parent_id:
@@ -261,6 +282,7 @@ def _sync_one_portal(
 
     client = BitrixClient(portal)
     responsible_id = _resolve_responsible_id(client, task, portal)
+    creator_id = _resolve_creator_id(task, portal, responsible_id)
     if not responsible_id and not existing_id:
         raise BitrixAPIError(
             f"Не указан исполнитель на {portal.domain}: откройте приложение на этом портале "
@@ -305,6 +327,7 @@ def _sync_one_portal(
     fields = _task_fields(
         task,
         responsible_id=responsible_id,
+        creator_id=creator_id,
         group_id=group_id,
         parent_id=parent_id,
         include_deadline=True,
@@ -776,6 +799,44 @@ def sync_attachment_to_bitrix(self, attachment_id: int):
         "agency_bitrix_file_id": attachment.agency_bitrix_file_id,
         "errors": errors,
     }
+
+
+@shared_task(bind=True, max_retries=1, default_retry_delay=15)
+def pull_task_from_bitrix(
+    self,
+    task_id: int,
+    *,
+    include_status: bool = True,
+    include_comments: bool = True,
+    include_files: bool = False,
+):
+    """Background Bitrix catch-up; never hold an interactive HTTP request."""
+    from board.models import Task
+    from board.realtime import publish_task_event
+
+    task = Task.objects.select_related("project").filter(pk=task_id).first()
+    if not task:
+        return {"ok": False, "reason": "task_not_found"}
+
+    changed = False
+    try:
+        if include_status:
+            from board.status_sync import pull_task_status_from_bitrix
+
+            changed = bool(pull_task_status_from_bitrix(task)) or changed
+        if include_comments:
+            from board.comment_sync import pull_comments_from_bitrix
+
+            changed = bool(pull_comments_from_bitrix(task)) or changed
+        if include_files:
+            from board.file_sync import pull_attachments_from_bitrix
+
+            changed = bool(pull_attachments_from_bitrix(task)) or changed
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+    publish_task_event(task, kind="task_pull_complete")
+    return {"ok": True, "changed": changed, "task_id": task_id}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)

@@ -5,7 +5,6 @@ from urllib.parse import quote
 
 from django.conf import settings
 from django.core import signing
-from django.db.models import Prefetch
 from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
 from rest_framework import permissions, viewsets
@@ -38,7 +37,12 @@ from .serializers import (
     WorkReportSerializer,
     serialize_thread_items,
 )
-from .tasks import sync_comment_to_bitrix, sync_project_to_bitrix, sync_task_to_bitrix
+from .tasks import (
+    pull_task_from_bitrix,
+    sync_comment_to_bitrix,
+    sync_project_to_bitrix,
+    sync_task_to_bitrix,
+)
 from .timeutils import stop_time_entry
 from .realtime import publish_portal_event, publish_task_event
 
@@ -64,6 +68,28 @@ def enqueue_comment_sync(comment_id: int) -> None:
         sync_comment_to_bitrix(comment_id)
     else:
         sync_comment_to_bitrix.delay(comment_id)
+
+
+def enqueue_task_pull(
+    task_id: int,
+    *,
+    include_status: bool = True,
+    include_comments: bool = True,
+    include_files: bool = False,
+) -> None:
+    # In eager/dev mode there is no worker; never turn an interactive GET into
+    # a 30-second Bitrix call. Webhooks and the next normal sync still catch up.
+    if settings.CELERY_TASK_ALWAYS_EAGER:
+        return
+    pull_task_from_bitrix.apply_async(
+        args=[task_id],
+        kwargs={
+            "include_status": include_status,
+            "include_comments": include_comments,
+            "include_files": include_files,
+        },
+        expires=90,
+    )
 
 
 def accessible_portal_ids(user):
@@ -331,12 +357,6 @@ class TaskViewSet(viewsets.ModelViewSet):
                     output_field=IntegerField(),
                 ),
             )
-        if self.action == "retrieve":
-            # Comments/attachments are loaded lazily via the `thread` action,
-            # so we only prefetch what the task payload itself needs.
-            qs = qs.prefetch_related(
-                Prefetch("time_entries", queryset=TimeEntry.objects.select_related("author")),
-            )
         portal_id = self.request.query_params.get("portal")
         if portal_id:
             qs = qs.filter(project__portal_id=portal_id)
@@ -347,42 +367,33 @@ class TaskViewSet(viewsets.ModelViewSet):
         return qs
 
     def list(self, request, *args, **kwargs):
-        # Soft pull deadlines/status from agency Bitrix when opening a project board
+        # Queue Bitrix status catch-up without blocking the task board response.
         if request.query_params.get("pull") in ("1", "true", "yes"):
             project_id = request.query_params.get("project")
             if project_id:
                 try:
-                    from board.status_sync import pull_task_status_from_bitrix
-
-                    # Cap per request so board paint stays responsive; FE soft-polls.
-                    qs = (
+                    task_ids = list(
                         self.filter_queryset(self.get_queryset())
                         .filter(project_id=project_id)
-                        .exclude(agency_bitrix_task_id="")[:20]
+                        .exclude(agency_bitrix_task_id="")
+                        .values_list("id", flat=True)[:20]
                     )
-                    for task in qs:
-                        try:
-                            pull_task_status_from_bitrix(task)
-                        except Exception:
-                            logger.exception("Bitrix pull failed for task %s", task.id)
+                    for task_id in task_ids:
+                        enqueue_task_pull(
+                            task_id,
+                            include_status=True,
+                            include_comments=False,
+                            include_files=False,
+                        )
                 except Exception:
-                    logger.exception("Bitrix task list pull failed for project %s", project_id)
+                    logger.exception("Bitrix task pull enqueue failed project=%s", project_id)
         return super().list(request, *args, **kwargs)
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
-        # Live sync ?pull=1: status + comments only (no file downloads / deal CRM).
+        # Return local DB immediately; slow Bitrix calls run in Celery.
         if request.query_params.get("pull") in ("1", "true", "yes"):
-            try:
-                from board.comment_sync import pull_comments_from_bitrix
-                from board.status_sync import pull_task_status_from_bitrix
-
-                changed = pull_task_status_from_bitrix(instance)
-                pulled = pull_comments_from_bitrix(instance)
-                if changed or pulled:
-                    instance.refresh_from_db()
-            except Exception:
-                logger.exception("Bitrix status pull failed for task %s", instance.id)
+            enqueue_task_pull(instance.id)
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
@@ -566,17 +577,12 @@ class TaskViewSet(viewsets.ModelViewSet):
         want_pull = request.query_params.get("pull") in ("1", "true", "yes")
         want_files = request.query_params.get("files") in ("1", "true", "yes")
         if want_pull or want_files:
-            try:
-                if want_pull:
-                    from board.comment_sync import pull_comments_from_bitrix
-
-                    pull_comments_from_bitrix(task)
-                if want_files:
-                    from board.file_sync import pull_attachments_from_bitrix
-
-                    pull_attachments_from_bitrix(task)
-            except Exception:
-                logger.exception("Bitrix thread pull failed for task %s", task.id)
+            enqueue_task_pull(
+                task.id,
+                include_status=want_pull,
+                include_comments=want_pull,
+                include_files=want_files,
+            )
 
         try:
             limit = int(request.query_params.get("limit", 30))

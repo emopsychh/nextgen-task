@@ -288,7 +288,12 @@ class TaskSerializer(serializers.ModelSerializer):
         return task_tracked_seconds(obj, include_running=False)
 
     def get_active_timer(self, obj):
-        running = obj.time_entries.filter(ended_at__isnull=True).order_by("-started_at").first()
+        running = (
+            obj.time_entries.filter(ended_at__isnull=True)
+            .select_related("author")
+            .order_by("-started_at")
+            .first()
+        )
         if not running:
             return None
         return TimeEntrySerializer(running).data

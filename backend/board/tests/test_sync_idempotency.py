@@ -9,7 +9,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from django.db import transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from board import tasks as board_tasks
 from board.models import Task
@@ -38,6 +38,7 @@ class SyncTaskIdempotencyTests(TestCase):
         )
 
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
+    @override_settings(BITRIX_CLIENT_TASK_AUTHOR_ID="99")
     def test_rerun_creates_agency_once_then_updates(self):
         task = make_task(
             self.project, created_by=self.user, sync_status=Task.SyncStatus.PENDING
@@ -52,6 +53,9 @@ class SyncTaskIdempotencyTests(TestCase):
         self.assertEqual(task.bitrix_task_id, "")  # client Bitrix never created
         self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
         self.assertEqual(client.create_task.call_count, 1)
+        created_fields = client.create_task.call_args.args[0]
+        self.assertEqual(created_fields["CREATED_BY"], "99")
+        self.assertEqual(created_fields["RESPONSIBLE_ID"], "42")
 
         Task.objects.filter(pk=task.pk).update(sync_status=Task.SyncStatus.PENDING)
         with patch.object(board_tasks, "BitrixClient", return_value=client):

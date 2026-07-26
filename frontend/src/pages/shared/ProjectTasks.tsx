@@ -224,7 +224,9 @@ export function ProjectTasks() {
     const cached = parts
       ? readBoardTasksCache(parts[0], parts[1], parts[2])
       : null;
-    if (cached?.tasks?.length) {
+    // An empty cached page is still a valid loaded snapshot. Treating [] as a
+    // cache miss made the full-page loader reappear on every revisit.
+    if (cached) {
       setTasks(cached.tasks as Task[]);
       setHasMore(Boolean(cached.hasMore));
       setInitialLoading(false);
@@ -268,11 +270,13 @@ export function ProjectTasks() {
     portalId: project?.portal ?? null,
     enabled: !!projectId,
     onEvent: () => {
-      pullNowRef.current = true;
+      // The 2.5s local poll will pick up the DB change. Do not turn a
+      // pull-complete event into another Bitrix pull.
+      pullNowRef.current = false;
     },
   });
 
-  // Soft realtime: refresh page 1 + merge; Bitrix pull every ~12s (or on SSE).
+  // Soft realtime: refresh page 1 locally; Bitrix catch-up about once a minute.
   useEffect(() => {
     if (!token || !projectId) return;
     let cancelled = false;
@@ -289,7 +293,7 @@ export function ProjectTasks() {
       tickAc = new AbortController();
       const signal = tickAc.signal;
       try {
-        const wantPull = pullNowRef.current || tickCount % 5 === 0;
+        const wantPull = pullNowRef.current || tickCount % 24 === 0;
         pullNowRef.current = false;
         const data = await fetchPage(1, wantPull, signal);
         if (cancelled || signal.aborted) return;
