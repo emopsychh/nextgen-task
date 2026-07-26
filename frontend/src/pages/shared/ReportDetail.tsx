@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type WorkReport } from "../../api/types";
+import { api, isAbortError, type WorkReport } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { DisputeIcon } from "../../components/icons";
@@ -41,9 +41,14 @@ export function ReportDetail() {
 
   const listPath = reportsListPath(portalId, isAgency);
 
-  const loadDetail = useCallback(async () => {
+  const loadDetail = useCallback(async (signal?: AbortSignal) => {
     if (!token || !reportId) return;
-    const data = await api<WorkReport>(`/api/reports/${reportId}/`, {}, token);
+    const data = await api<WorkReport>(
+      `/api/reports/${reportId}/`,
+      { signal },
+      token
+    );
+    if (signal?.aborted) return;
     setDetail(data);
     setExpandedTasks(new Set());
     setTaskFilter("all");
@@ -56,7 +61,13 @@ export function ReportDetail() {
 
   useEffect(() => {
     if (!reportId) return;
-    void loadDetail().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
+    setDetail(null);
+    setError(null);
+    const ac = new AbortController();
+    void loadDetail(ac.signal).catch((e) => {
+      if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    });
+    return () => ac.abort();
   }, [reportId, loadDetail]);
 
   usePortalLiveSync({

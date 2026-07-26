@@ -8,6 +8,11 @@ import { DealPickModal, type DealCandidate } from "../../components/DealPickModa
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { hueFromId, initialsFromLabel } from "../../lib/portalUi";
+import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
+
+const CACHE_AGENCY_LINKS = "agency-links";
+const CACHE_AGENCY_PORTALS = "agency-portals";
+const CACHE_AGENCY_BINDINGS = "agency-bindings";
 
 type LinkRow = {
   id: number;
@@ -31,11 +36,20 @@ function initials(portal: Portal): string {
 }
 
 export function AgencyHome() {
-  const { token } = useAuth();
+  const { token, portal } = useAuth();
+  const agencyId = portal?.id || 0;
   const toast = useFlashToast();
-  const [links, setLinks] = useState<LinkRow[]>([]);
-  const [portals, setPortals] = useState<Portal[]>([]);
-  const [bindings, setBindings] = useState<DealBinding[]>([]);
+  const [links, setLinks] = useState<LinkRow[]>(
+    () => readPortalCache<LinkRow[]>(CACHE_AGENCY_LINKS, agencyId) || []
+  );
+  const [portals, setPortals] = useState<Portal[]>(
+    () => readPortalCache<Portal[]>(CACHE_AGENCY_PORTALS, agencyId) || []
+  );
+  const [bindings, setBindings] = useState<DealBinding[]>(
+    () => readPortalCache<DealBinding[]>(CACHE_AGENCY_BINDINGS, agencyId) || []
+  );
+  const [linksLoading, setLinksLoading] = useState(links.length === 0);
+  const [portalsLoading, setPortalsLoading] = useState(portals.length === 0);
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -65,16 +79,63 @@ export function AgencyHome() {
   }, [bindings]);
 
   const load = useCallback(async () => {
-    if (!token) return;
-    const [linkData, portalData, dealData] = await Promise.all([
-      api<LinkRow[] | { results: LinkRow[] }>("/api/portal-links/", {}, token),
-      api<Portal[] | { results: Portal[] }>("/api/portals/", {}, token),
-      api<DealBinding[] | { results: DealBinding[] }>("/api/deal-bindings/", {}, token),
+    if (!token || !agencyId) return;
+    setLinksLoading(true);
+    setPortalsLoading(true);
+
+    // These endpoints are independent. Apply each response immediately so a
+    // slower deal query cannot hold the client list at "0".
+    const linksRequest = api<LinkRow[] | { results: LinkRow[] }>(
+      "/api/portal-links/",
+      {},
+      token
+    ).then((data) => {
+      const list = unwrapList(data);
+      setLinks(list);
+      writePortalCache(CACHE_AGENCY_LINKS, agencyId, list);
+      setLinksLoading(false);
+    });
+    const portalsRequest = api<Portal[] | { results: Portal[] }>(
+      "/api/portals/?linkable=1",
+      {},
+      token
+    ).then((data) => {
+      const list = unwrapList(data).filter((p) => p.role === "client");
+      setPortals(list);
+      writePortalCache(CACHE_AGENCY_PORTALS, agencyId, list);
+      setPortalsLoading(false);
+    });
+    const bindingsRequest = api<DealBinding[] | { results: DealBinding[] }>(
+      "/api/deal-bindings/?is_active=true",
+      {},
+      token
+    ).then((data) => {
+      const list = unwrapList(data).filter(
+        (binding) => binding.agency_portal === agencyId && binding.is_active
+      );
+      setBindings(list);
+      writePortalCache(CACHE_AGENCY_BINDINGS, agencyId, list);
+    });
+
+    const results = await Promise.allSettled([
+      linksRequest,
+      portalsRequest,
+      bindingsRequest,
     ]);
-    setLinks(unwrapList(linkData));
-    setPortals(unwrapList(portalData).filter((p) => p.role === "client"));
-    setBindings(unwrapList(dealData));
-  }, [token]);
+    setLinksLoading(false);
+    setPortalsLoading(false);
+    const failed = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected"
+    );
+    if (failed) throw failed.reason;
+  }, [token, agencyId]);
+
+  useEffect(() => {
+    if (!agencyId) return;
+    setLinks(readPortalCache<LinkRow[]>(CACHE_AGENCY_LINKS, agencyId) || []);
+    setPortals(readPortalCache<Portal[]>(CACHE_AGENCY_PORTALS, agencyId) || []);
+    setBindings(readPortalCache<DealBinding[]>(CACHE_AGENCY_BINDINGS, agencyId) || []);
+  }, [agencyId]);
 
   const refreshAllDealHours = useCallback(async (signal?: AbortSignal) => {
     if (!token) return;
@@ -113,15 +174,21 @@ export function AgencyHome() {
     if (signal?.aborted) return;
     try {
       const dealData = await api<DealBinding[] | { results: DealBinding[] }>(
-        "/api/deal-bindings/",
+        "/api/deal-bindings/?is_active=true",
         { signal },
         token
       );
-      if (!signal?.aborted) setBindings(unwrapList(dealData));
+      if (!signal?.aborted) {
+        const list = unwrapList(dealData).filter(
+          (binding) => binding.agency_portal === agencyId && binding.is_active
+        );
+        setBindings(list);
+        writePortalCache(CACHE_AGENCY_BINDINGS, agencyId, list);
+      }
     } catch (e) {
       if (!isAbortError(e)) undefined;
     }
-  }, [token]);
+  }, [token, agencyId]);
 
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка загрузки"));
@@ -277,7 +344,9 @@ export function AgencyHome() {
           <p className="page-sub">Порталы Bitrix и сделки сопровождения</p>
         </div>
         <div className="stat-pill">
-          <span className="stat-pill-value">{links.length}</span>
+          <span className="stat-pill-value">
+            {linksLoading && links.length === 0 ? "…" : links.length}
+          </span>
           <span className="stat-pill-label">подключено</span>
         </div>
       </div>
@@ -350,6 +419,8 @@ export function AgencyHome() {
               </button>
             </div>
           </form>
+        ) : portalsLoading ? (
+          <p className="connect-empty muted">Загружаем доступные порталы…</p>
         ) : (
           <p className="connect-empty muted">Клиентов для подключения нет</p>
         )}
@@ -360,7 +431,11 @@ export function AgencyHome() {
           <h2 className="section-title">Ваши клиенты</h2>
         </div>
 
-        {links.length === 0 ? (
+        {linksLoading && links.length === 0 ? (
+          <div className="empty-linked">
+            <p className="muted">Загружаем клиентов…</p>
+          </div>
+        ) : links.length === 0 ? (
           <div className="empty-linked">
             <p className="muted">Пока никого нет</p>
           </div>

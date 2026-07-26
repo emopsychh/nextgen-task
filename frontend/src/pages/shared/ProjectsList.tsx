@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, unwrapList, type Paginated, type Project } from "../../api/types";
+import {
+  api,
+  isAbortError,
+  unwrapList,
+  type Paginated,
+  type Project,
+} from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
@@ -35,16 +41,20 @@ export function ProjectsList() {
   const [title, setTitle] = useState("Проекты");
   const { isUnseen, seedIfEmpty } = useSeenProjects(portalId);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     if (!token || !portalId) return;
     const data = await api<Project[] | Paginated<Project>>(
       `/api/projects/?portal=${portalId}`,
-      {},
+      { signal },
       token
     );
+    if (signal?.aborted) return;
     const list = unwrapList(data);
-    setProjects(list);
-    seedIfEmpty(list.map((p) => p.id));
+    // Treat the route as a hard tenant boundary even if an API regression
+    // accidentally returns a mixed page.
+    const scoped = list.filter((project) => project.portal === portalId);
+    setProjects(scoped);
+    seedIfEmpty(scoped.map((p) => p.id));
   }, [token, portalId, seedIfEmpty]);
 
   useEffect(() => {
@@ -63,7 +73,13 @@ export function ProjectsList() {
 
   useEffect(() => {
     if (!token || !portalId) return;
-    void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка"));
+    setProjects([]);
+    setError(null);
+    const ac = new AbortController();
+    void load(ac.signal).catch((e) => {
+      if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
+    });
+    return () => ac.abort();
   }, [token, portalId, load]);
 
   usePortalLiveSync({

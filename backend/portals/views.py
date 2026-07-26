@@ -1,5 +1,5 @@
 import requests
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.conf import settings
 from django.http import HttpResponse, HttpResponseRedirect
 from django.views.decorators.csrf import csrf_exempt
@@ -355,6 +355,13 @@ class PortalViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.is_agency:
+            if self.request.query_params.get("linkable") in ("1", "true", "yes"):
+                # The connect picker needs only unclaimed client installs, not
+                # every portal in the database plus a paginated COUNT.
+                return Portal.objects.filter(
+                    role=Portal.Role.CLIENT,
+                    agency_links__isnull=True,
+                ).exclude(domain="").exclude(domain__iexact="unknown")
             # Own portal + real client portals (skip broken installs without domain)
             return Portal.objects.filter(
                 Q(id=user.portal.id)
@@ -429,7 +436,13 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = PortalDealBinding.objects.select_related("client_portal", "agency_portal")
         if getattr(user, "is_agency", False):
-            return qs.filter(agency_portal=user.portal)
+            return qs.filter(agency_portal=user.portal).prefetch_related(
+                Prefetch(
+                    "client_portal__agency_links",
+                    queryset=PortalLink.objects.filter(agency_portal=user.portal),
+                    to_attr="_current_agency_links",
+                )
+            )
         # Client may read/refresh their own accompaniment binding
         return qs.filter(client_portal=user.portal)
 

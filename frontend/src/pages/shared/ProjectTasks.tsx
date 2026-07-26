@@ -186,6 +186,14 @@ export function ProjectTasks() {
     markSeen(id);
   }, [projectId, project, markSeen]);
 
+  useEffect(() => {
+    // Project routes reuse this component; never keep the previous project's
+    // identity or live-sync portal while the new project is resolving.
+    setProject(null);
+    setCounts({ all: 0, todo: 0, in_progress: 0, done: 0 });
+    setError(null);
+  }, [projectId]);
+
   // Reset & reload page 1 whenever project / filter / search change.
   useEffect(() => {
     if (!token || !projectId) return;

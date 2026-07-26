@@ -114,7 +114,9 @@ export function SupportTickets() {
   useEffect(() => {
     if (!token) return;
     if (!isAgency && !listPortalId) return;
-    // Keep previous rows while the next list loads (no empty flash).
+    // A reused route must not show rows from the previous portal/filter.
+    setTickets([]);
+    setError(null);
     setListLoading(true);
     const ac = new AbortController();
     void loadList(ac.signal).catch((e) => {
@@ -126,6 +128,8 @@ export function SupportTickets() {
 
   useEffect(() => {
     if (!token) return;
+    setDetail(null);
+    setError(null);
     const ac = new AbortController();
     void loadDetail(ac.signal).catch((e) => {
       if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");

@@ -29,6 +29,7 @@ import {
 import {
   CACHE_DEAL_HOURS,
   CACHE_PROJECTS,
+  clearPortalCache,
   readPortalCache,
   writePortalCache,
 } from "../../lib/portalSessionCache";
@@ -107,13 +108,15 @@ export function ClientProjects() {
     [recentDone, isDismissed]
   );
   const loadGenRef = useRef(0);
-  const loadInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!portalId) {
       setPortalInfo(null);
       return;
     }
+    // Route changes reuse this component. Never leave the previous client's
+    // identity visible while the next client's data is loading.
+    setPortalInfo(null);
     if (!isAgency && portal) {
       setPortalInfo(portal);
       const label = portalDisplayName(portal);
@@ -157,6 +160,7 @@ export function ClientProjects() {
 
   async function refreshDealHoursInBackground(bindingId: number, signal?: AbortSignal) {
     if (!token || !portalId) return;
+    const requestedPortalId = portalId;
     try {
       const updated = await api<DealBinding>(
         `/api/deal-bindings/${bindingId}/refresh-hours/`,
@@ -164,53 +168,66 @@ export function ClientProjects() {
         token
       );
       if (signal?.aborted) return;
+      if (updated.client_portal.id !== requestedPortalId || !updated.is_active) return;
       setDealHours(updated);
-      writePortalCache(CACHE_DEAL_HOURS, portalId, updated);
+      writePortalCache(CACHE_DEAL_HOURS, requestedPortalId, updated);
     } catch (e) {
       if (!isAbortError(e)) undefined;
     }
   }
 
   useEffect(() => {
+    // Clear first: an absent cache must not mean "keep the previous client".
+    setDealHours(null);
     if (!portalId) {
-      setDealHours(null);
       return;
     }
     const cached = readPortalCache<DealBinding>(CACHE_DEAL_HOURS, portalId);
-    if (cached) setDealHours(cached);
+    if (cached?.client_portal.id === portalId && cached.is_active) {
+      setDealHours(cached);
+    } else if (cached) {
+      clearPortalCache(CACHE_DEAL_HOURS, portalId);
+    }
   }, [portalId]);
 
   useEffect(() => {
+    setProjects([]);
+    setOpenTasks([]);
+    setRecentDone([]);
+    setDisputedReports([]);
+    setError(null);
     if (!portalId) {
-      setProjects([]);
       return;
     }
     const cached = readPortalCache<Project[]>(CACHE_PROJECTS, portalId);
-    if (cached?.length) setProjects(cached);
+    const scoped = cached?.filter((project) => project.portal === portalId) || [];
+    if (scoped.length) setProjects(scoped);
+    if (cached && scoped.length !== cached.length) {
+      writePortalCache(CACHE_PROJECTS, portalId, scoped);
+    }
   }, [portalId]);
 
   async function load(signal?: AbortSignal) {
     if (!token || !portalId) return;
-    if (loadInFlightRef.current) return;
-    const gen = loadGenRef.current;
-    loadInFlightRef.current = true;
+    const requestedPortalId = portalId;
+    const gen = ++loadGenRef.current;
     try {
       const [openData, doneData, hoursData, disputedData, projectsData] = await Promise.all([
         api<Task[] | Paginated<Task>>(
-          `/api/tasks/?portal=${portalId}&open=1`,
+          `/api/tasks/?portal=${requestedPortalId}&open=1`,
           { signal },
           token
         ),
         !isAgency
           ? api<Task[] | Paginated<Task>>(
-              `/api/tasks/?portal=${portalId}&status=done&ordering=-updated_at`,
+              `/api/tasks/?portal=${requestedPortalId}&status=done&ordering=-updated_at`,
               { signal },
               token
             )
           : Promise.resolve([] as Task[]),
         isAgency
           ? api<DealBinding[] | Paginated<DealBinding>>(
-              `/api/deal-bindings/?client_portal=${portalId}&is_active=true`,
+              `/api/deal-bindings/?client_portal=${requestedPortalId}&is_active=true`,
               { signal },
               token
             ).catch((e) => {
@@ -223,13 +240,13 @@ export function ClientProjects() {
             }),
         isAgency
           ? api<WorkReport[] | Paginated<WorkReport>>(
-              `/api/reports/?portal=${portalId}&status=disputed`,
+              `/api/reports/?portal=${requestedPortalId}&status=disputed`,
               { signal },
               token
             )
           : Promise.resolve([] as WorkReport[]),
         api<Project[] | Paginated<Project>>(
-          `/api/projects/?portal=${portalId}`,
+          `/api/projects/?portal=${requestedPortalId}`,
           { signal },
           token
         ),
@@ -237,9 +254,11 @@ export function ClientProjects() {
       if (gen !== loadGenRef.current || signal?.aborted) return;
 
       setOpenTasks(unwrapList(openData));
-      const projectList = unwrapList(projectsData);
+      const projectList = unwrapList(projectsData).filter(
+        (project) => project.portal === requestedPortalId
+      );
       setProjects(projectList);
-      writePortalCache(CACHE_PROJECTS, portalId, projectList);
+      writePortalCache(CACHE_PROJECTS, requestedPortalId, projectList);
 
       if (!isAgency) {
         const cutoff = Date.now() - RECENT_DONE_MS;
@@ -250,26 +269,36 @@ export function ClientProjects() {
         );
         setDisputedReports([]);
         const mine = hoursData as DealBinding | null;
-        setDealHours(mine);
-        if (mine) writePortalCache(CACHE_DEAL_HOURS, portalId, mine);
+        const scopedMine =
+          mine?.client_portal.id === requestedPortalId && mine.is_active ? mine : null;
+        setDealHours(scopedMine);
+        if (scopedMine) {
+          writePortalCache(CACHE_DEAL_HOURS, requestedPortalId, scopedMine);
+        } else {
+          clearPortalCache(CACHE_DEAL_HOURS, requestedPortalId);
+        }
         if (portal) setPortalInfo(portal);
-        if (mine?.id) void refreshDealHoursInBackground(mine.id, signal);
+        if (scopedMine?.id) void refreshDealHoursInBackground(scopedMine.id, signal);
       } else {
         const bindings = unwrapList(hoursData as DealBinding[] | Paginated<DealBinding>);
-        const binding = bindings[0] || null;
+        const binding =
+          bindings.find(
+            (row) => row.client_portal.id === requestedPortalId && row.is_active
+          ) || null;
         setDealHours(binding);
-        if (binding) writePortalCache(CACHE_DEAL_HOURS, portalId, binding);
+        if (binding) writePortalCache(CACHE_DEAL_HOURS, requestedPortalId, binding);
+        else clearPortalCache(CACHE_DEAL_HOURS, requestedPortalId);
         setRecentDone([]);
         setDisputedReports(unwrapList(disputedData as WorkReport[] | Paginated<WorkReport>));
         const fromBinding = binding?.client_portal;
         if (fromBinding) {
           const label = portalDisplayName(fromBinding);
           if (label) {
-            setPortalLabel(portalId, label);
+            setPortalLabel(requestedPortalId, label);
             setPortalInfo(fromBinding);
           }
         } else {
-          const cached = getPortalLabel(portalId);
+          const cached = getPortalLabel(requestedPortalId);
           if (cached) {
             setPortalInfo((prev) =>
               prev?.id === portalId
@@ -287,17 +316,20 @@ export function ClientProjects() {
         }
       }
     } finally {
-      loadInFlightRef.current = false;
+      // No global in-flight lock: a request for client A must never suppress
+      // the request started immediately afterwards for client B.
     }
   }
 
   useEffect(() => {
-    loadGenRef.current += 1;
     const ac = new AbortController();
     void load(ac.signal).catch((e) => {
       if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
     });
-    return () => ac.abort();
+    return () => {
+      loadGenRef.current += 1;
+      ac.abort();
+    };
   }, [token, portalId]);
 
   const reloadRef = useRef<() => void>(() => undefined);

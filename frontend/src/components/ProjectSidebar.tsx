@@ -75,6 +75,9 @@ export function ProjectSidebarNav() {
 
   // Instant label from auth / ClientRail cache — don't wait for projects list
   useEffect(() => {
+    setClientLabel("");
+    setReportsAttention(0);
+    setOpenTickets(0);
     if (!contextPortalId) return;
     if (!isAgency && portal?.id === contextPortalId) {
       const label = portalDisplayName(portal);
@@ -133,10 +136,15 @@ export function ProjectSidebarNav() {
     if (!token || !contextPortalId) return;
     if (isAgency && onTicketsRoute) return;
 
+    // This sidebar survives route changes. Clear the previous tenant before
+    // hydrating the cache for the newly selected portal.
+    setProjects([]);
     const cached = readPortalCache<Project[]>(CACHE_PROJECTS, contextPortalId);
-    if (cached?.length) {
-      setProjects(cached);
-      seedIfEmpty(cached.map((p) => p.id));
+    const scoped =
+      cached?.filter((project) => project.portal === contextPortalId) || [];
+    if (scoped.length) {
+      setProjects(scoped);
+      seedIfEmpty(scoped.map((p) => p.id));
     }
 
     let cancelled = false;
@@ -148,7 +156,9 @@ export function ProjectSidebarNav() {
           token!
         );
         if (cancelled) return;
-        const list = unwrapList(data);
+        const list = unwrapList(data).filter(
+          (project) => project.portal === contextPortalId
+        );
         setProjects(list);
         seedIfEmpty(list.map((p) => p.id));
         writePortalCache(CACHE_PROJECTS, contextPortalId!, list);

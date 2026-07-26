@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Fragment, useEffect, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Brand } from "./components/Brand";
@@ -19,6 +19,20 @@ import { ReportDetail } from "./pages/shared/ReportDetail";
 import { ProjectTasks } from "./pages/shared/ProjectTasks";
 import { SupportTickets } from "./pages/shared/SupportTickets";
 import { TaskDetail } from "./pages/shared/TaskDetail";
+
+function RouteDataBoundary({ children }: { children: ReactNode }) {
+  const params = useParams();
+  const key = [
+    params.portalId,
+    params.projectId,
+    params.reportId,
+    params.ticketId,
+    params.taskId,
+  ]
+    .map((value) => value || "")
+    .join(":");
+  return <Fragment key={key}>{children}</Fragment>;
+}
 
 function LogoutRail() {
   const { logout } = useAuth();
@@ -109,15 +123,36 @@ export default function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route index element={isAgency ? <AgencyHome /> : <ClientProjects />} />
-        <Route path="portals/:portalId" element={<ClientProjects />} />
-        <Route path="portals/:portalId/projects" element={<ProjectsList />} />
+        <Route
+          path="portals/:portalId"
+          element={<RouteDataBoundary><ClientProjects /></RouteDataBoundary>}
+        />
+        <Route
+          path="portals/:portalId/projects"
+          element={<RouteDataBoundary><ProjectsList /></RouteDataBoundary>}
+        />
         <Route path="projects" element={isAgency ? <Navigate to="/" replace /> : <ProjectsList />} />
-        <Route path="portals/:portalId/reports" element={<ProjectReports />} />
-        <Route path="portals/:portalId/reports/:reportId" element={<ReportDetail />} />
-        <Route path="portals/:portalId/tickets" element={<SupportTickets />} />
-        <Route path="portals/:portalId/tickets/:ticketId" element={<SupportTickets />} />
+        <Route
+          path="portals/:portalId/reports"
+          element={<RouteDataBoundary><ProjectReports /></RouteDataBoundary>}
+        />
+        <Route
+          path="portals/:portalId/reports/:reportId"
+          element={<RouteDataBoundary><ReportDetail /></RouteDataBoundary>}
+        />
+        <Route
+          path="portals/:portalId/tickets"
+          element={<RouteDataBoundary><SupportTickets /></RouteDataBoundary>}
+        />
+        <Route
+          path="portals/:portalId/tickets/:ticketId"
+          element={<RouteDataBoundary><SupportTickets /></RouteDataBoundary>}
+        />
         <Route path="reports" element={<ProjectReports />} />
-        <Route path="reports/:reportId" element={<ReportDetail />} />
+        <Route
+          path="reports/:reportId"
+          element={<RouteDataBoundary><ReportDetail /></RouteDataBoundary>}
+        />
         <Route
           path="tickets"
           element={isAgency ? <SupportTickets /> : <ClientTicketsRedirect />}
@@ -126,9 +161,18 @@ export default function App() {
           path="tickets/:ticketId"
           element={isAgency ? <SupportTickets /> : <ClientTicketsRedirect />}
         />
-        <Route path="projects/:projectId" element={<ProjectTasks />} />
-        <Route path="projects/:projectId/reports" element={<ProjectReports />} />
-        <Route path="tasks/:taskId" element={<TaskDetail />} />
+        <Route
+          path="projects/:projectId"
+          element={<RouteDataBoundary><ProjectTasks /></RouteDataBoundary>}
+        />
+        <Route
+          path="projects/:projectId/reports"
+          element={<RouteDataBoundary><ProjectReports /></RouteDataBoundary>}
+        />
+        <Route
+          path="tasks/:taskId"
+          element={<RouteDataBoundary><TaskDetail /></RouteDataBoundary>}
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

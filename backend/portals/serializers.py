@@ -113,10 +113,14 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
         cache = self.context.setdefault("_portal_link_by_pair", {})
         key = (obj.agency_portal_id, obj.client_portal_id)
         if key not in cache:
-            cache[key] = PortalLink.objects.filter(
-                agency_portal_id=obj.agency_portal_id,
-                client_portal_id=obj.client_portal_id,
-            ).first()
+            prefetched = getattr(obj.client_portal, "_current_agency_links", None)
+            if prefetched is not None:
+                cache[key] = prefetched[0] if prefetched else None
+            else:
+                cache[key] = PortalLink.objects.filter(
+                    agency_portal_id=obj.agency_portal_id,
+                    client_portal_id=obj.client_portal_id,
+                ).first()
         return cache[key]
 
     def get_bitrix_company_id(self, obj):

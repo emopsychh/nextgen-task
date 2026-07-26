@@ -26,6 +26,9 @@ export function usePortalLiveSync({ token, portalId, enabled = true, onEvent }: 
   useEffect(() => {
     if (!token || !portalId || !enabled) return;
 
+    // The cursor belongs to one portal only. Carrying it across route changes
+    // can suppress updates for a quieter client or cause a false refresh.
+    lastV.current = 0;
     let cancelled = false;
     let es: EventSource | null = null;
     let pollTimer: number | undefined;

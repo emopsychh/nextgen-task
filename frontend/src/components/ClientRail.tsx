@@ -9,7 +9,10 @@ import {
 } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { portalDisplayName, setPortalLabel } from "../lib/portalLabelCache";
+import { readPortalCache, writePortalCache } from "../lib/portalSessionCache";
 import { hueFromId, initialsFromLabel } from "../lib/portalUi";
+
+const CACHE_AGENCY_LINKS = "agency-links";
 
 type LinkRow = {
   id: number;
@@ -61,7 +64,7 @@ function TicketsIcon() {
 }
 
 export function ClientRail() {
-  const { token, logout } = useAuth();
+  const { token, logout, portal } = useAuth();
   const location = useLocation();
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
   const [openTickets, setOpenTickets] = useState(0);
@@ -72,8 +75,17 @@ export function ClientRail() {
   const activeId = routePortalId ?? resolvedPortalId;
   const addActive = location.pathname === "/";
   const ticketsActive = location.pathname.startsWith("/tickets");
-  const [links, setLinks] = useState<LinkRow[]>([]);
+  const [links, setLinks] = useState<LinkRow[]>(
+    () =>
+      readPortalCache<LinkRow[]>(CACHE_AGENCY_LINKS, portal?.id || 0) || []
+  );
   const [enteringPortalId, setEnteringPortalId] = useState<number | null>(null);
+
+  useEffect(() => {
+    setLinks(
+      readPortalCache<LinkRow[]>(CACHE_AGENCY_LINKS, portal?.id || 0) || []
+    );
+  }, [portal?.id]);
 
   useEffect(() => {
     if (!token || routePortalId) {
@@ -122,6 +134,9 @@ export function ClientRail() {
         if (cancelled) return;
         const list = unwrapList(data);
         setLinks(list);
+        if (portal?.id) {
+          writePortalCache(CACHE_AGENCY_LINKS, portal.id, list);
+        }
         for (const link of list) {
           const p = link.client_portal;
           const label = portalDisplayName(p);
@@ -148,7 +163,7 @@ export function ClientRail() {
       cancelled = true;
       window.removeEventListener("clients-updated", onUpdate);
     };
-  }, [token, location.key]);
+  }, [token, portal?.id]);
 
   useEffect(() => {
     if (!token) {

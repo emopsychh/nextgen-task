@@ -138,6 +138,10 @@ export function ProjectReports() {
 
   useEffect(() => {
     if (!token || !portalId) return;
+    setReports([]);
+    setProjects([]);
+    setCounts({ all: 0, current: 0, review: 0, paid: 0 });
+    setError(null);
     const ac = new AbortController();
     void loadList(ac.signal).catch((e) => {
       if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
