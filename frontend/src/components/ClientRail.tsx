@@ -13,6 +13,7 @@ import { readPortalCache, writePortalCache } from "../lib/portalSessionCache";
 import { hueFromId, initialsFromLabel } from "../lib/portalUi";
 
 const CACHE_AGENCY_LINKS = "agency-links";
+const CACHE_AGENCY_TICKET_COUNT = "agency-ticket-count";
 
 type LinkRow = {
   id: number;
@@ -67,7 +68,13 @@ export function ClientRail() {
   const { token, logout, portal } = useAuth();
   const location = useLocation();
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
-  const [openTickets, setOpenTickets] = useState(0);
+  const [openTickets, setOpenTickets] = useState(
+    () =>
+      readPortalCache<number>(
+        CACHE_AGENCY_TICKET_COUNT,
+        portal?.id || 0
+      ) || 0
+  );
   const routePortalId = useMemo(() => {
     const match = location.pathname.match(/^\/portals\/(\d+)/);
     return match ? Number(match[1]) : null;
@@ -84,6 +91,12 @@ export function ClientRail() {
   useEffect(() => {
     setLinks(
       readPortalCache<LinkRow[]>(CACHE_AGENCY_LINKS, portal?.id || 0) || []
+    );
+    setOpenTickets(
+      readPortalCache<number>(
+        CACHE_AGENCY_TICKET_COUNT,
+        portal?.id || 0
+      ) || 0
     );
   }, [portal?.id]);
 
@@ -179,9 +192,15 @@ export function ClientRail() {
           {},
           token!
         );
-        if (!cancelled) setOpenTickets(data.awaiting_agency || 0);
+        if (!cancelled) {
+          const count = data.awaiting_agency || 0;
+          setOpenTickets(count);
+          if (portal?.id) {
+            writePortalCache(CACHE_AGENCY_TICKET_COUNT, portal.id, count);
+          }
+        }
       } catch {
-        if (!cancelled) setOpenTickets(0);
+        // Keep the last known count.
       }
     }
 
@@ -194,7 +213,7 @@ export function ClientRail() {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [token, location.pathname]);
+  }, [token, location.pathname, portal?.id]);
 
   return (
     <aside className="client-rail" aria-label="Клиенты" data-tour="tour-client-rail">

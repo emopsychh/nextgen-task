@@ -25,6 +25,14 @@ import {
   STATUS_LABEL_RU,
 } from "./reportHelpers";
 
+const EMPTY_REPORT_COUNTS: Record<ReportBucket, number> = {
+  all: 0,
+  current: 0,
+  review: 0,
+  paid: 0,
+};
+const CACHE_REPORT_COUNTS = "report-counts";
+
 export function ProjectReports() {
   const { portalId: routePortalId, projectId: routeProjectId } = useParams();
   const { token, portal } = useAuth();
@@ -63,21 +71,28 @@ export function ProjectReports() {
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [pickedProjects, setPickedProjects] = useState<Set<number>>(new Set());
-  const [counts, setCounts] = useState<Record<ReportBucket, number>>({
-    all: 0,
-    current: 0,
-    review: 0,
-    paid: 0,
-  });
+  const [counts, setCounts] = useState<Record<ReportBucket, number>>(
+    () =>
+      (portalId
+        ? readPortalCache<Record<ReportBucket, number>>(
+            CACHE_REPORT_COUNTS,
+            portalId
+          )
+        : null) || EMPTY_REPORT_COUNTS
+  );
 
   const applyCounts = useCallback((next: Record<ReportBucket, number>) => {
-    setCounts({
+    const normalized = {
       all: next.all ?? 0,
       current: next.current ?? 0,
       review: next.review ?? 0,
       paid: next.paid ?? 0,
-    });
-  }, []);
+    };
+    setCounts(normalized);
+    if (portalId) {
+      writePortalCache(CACHE_REPORT_COUNTS, portalId, normalized);
+    }
+  }, [portalId]);
 
   const loadCounts = useCallback(
     async (signal?: AbortSignal, seed?: WorkReport[]) => {
@@ -161,7 +176,15 @@ export function ProjectReports() {
   }, [token, portalId, bucket, loadList]);
 
   useEffect(() => {
-    setCounts({ all: 0, current: 0, review: 0, paid: 0 });
+    if (!portalId) {
+      setCounts(EMPTY_REPORT_COUNTS);
+      return;
+    }
+    const cached = readPortalCache<Record<ReportBucket, number>>(
+      CACHE_REPORT_COUNTS,
+      portalId
+    );
+    setCounts(cached || EMPTY_REPORT_COUNTS);
   }, [portalId]);
 
   useEffect(() => {

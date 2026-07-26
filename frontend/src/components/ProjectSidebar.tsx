@@ -68,6 +68,8 @@ export function ProjectSidebarNav() {
 
   const { seedIfEmpty, unseenCount } = useSeenProjects(contextPortalId);
   const projectsUnseen = unseenCount(projects);
+  const reportsCountCache = `sidebar-reports:${isAgency ? "agency" : "client"}`;
+  const ticketsCountCache = "sidebar-tickets:client";
 
   useEffect(() => {
     if (contextPortalId) lastPortalRef.current = contextPortalId;
@@ -76,8 +78,6 @@ export function ProjectSidebarNav() {
   // Instant label from auth / ClientRail cache — don't wait for projects list
   useEffect(() => {
     setClientLabel("");
-    setReportsAttention(0);
-    setOpenTickets(0);
     if (!contextPortalId) return;
     if (!isAgency && portal?.id === contextPortalId) {
       const label = portalDisplayName(portal);
@@ -90,6 +90,22 @@ export function ProjectSidebarNav() {
     const cached = getPortalLabel(contextPortalId);
     if (cached) setClientLabel(cached);
   }, [contextPortalId, isAgency, portal]);
+
+  useEffect(() => {
+    if (!contextPortalId) {
+      setReportsAttention(0);
+      setOpenTickets(0);
+      return;
+    }
+    setReportsAttention(
+      readPortalCache<number>(reportsCountCache, contextPortalId) || 0
+    );
+    setOpenTickets(
+      !isAgency
+        ? readPortalCache<number>(ticketsCountCache, contextPortalId) || 0
+        : 0
+    );
+  }, [contextPortalId, isAgency, reportsCountCache]);
 
   useEffect(() => {
     const onLabel = (event: Event) => {
@@ -187,18 +203,23 @@ export function ProjectSidebarNav() {
       else if (!contextPortalId) setOpenTickets(0);
       return;
     }
+    const portalId = contextPortalId;
     let cancelled = false;
 
     async function loadTickets() {
       try {
         const data = await api<{ awaiting_client?: number }>(
-          `/api/tickets/counts/?portal=${contextPortalId}`,
+          `/api/tickets/counts/?portal=${portalId}`,
           {},
           token!
         );
-        if (!cancelled) setOpenTickets(data.awaiting_client || 0);
+        if (!cancelled) {
+          const count = data.awaiting_client || 0;
+          setOpenTickets(count);
+          writePortalCache(ticketsCountCache, portalId, count);
+        }
       } catch {
-        if (!cancelled) setOpenTickets(0);
+        // Keep the last known count.
       }
     }
 
@@ -218,6 +239,7 @@ export function ProjectSidebarNav() {
       if (!contextPortalId || (isAgency && onTicketsRoute)) setReportsAttention(0);
       return;
     }
+    const portalId = contextPortalId;
     let cancelled = false;
 
     async function loadReports() {
@@ -226,15 +248,19 @@ export function ProjectSidebarNav() {
           draft?: number;
           disputed?: number;
           review?: number;
-        }>(`/api/reports/counts/?portal=${contextPortalId}`, {}, token!);
+        }>(`/api/reports/counts/?portal=${portalId}`, {}, token!);
         if (cancelled) return;
         if (isAgency) {
-          setReportsAttention((data.draft || 0) + (data.disputed || 0));
+          const count = (data.draft || 0) + (data.disputed || 0);
+          setReportsAttention(count);
+          writePortalCache(reportsCountCache, portalId, count);
         } else {
-          setReportsAttention(data.review || 0);
+          const count = data.review || 0;
+          setReportsAttention(count);
+          writePortalCache(reportsCountCache, portalId, count);
         }
       } catch {
-        if (!cancelled) setReportsAttention(0);
+        // Keep the last known count.
       }
     }
 
@@ -256,9 +282,17 @@ export function ProjectSidebarNav() {
     onEvent: (payload) => {
       if (!token) return;
       const kind = payload?.kind || "";
-      const refreshReports = kind.startsWith("report_");
-      const refreshTickets = kind.startsWith("ticket_");
-      const refreshProjects = kind.startsWith("project_");
+      // Cursor polling only carries a version, not the original event kind.
+      // In that fallback mode refresh all small sidebar datasets.
+      const cursorBump = !kind && typeof payload?.v === "number";
+      const refreshReports = cursorBump || kind.startsWith("report_");
+      const refreshTickets = cursorBump || kind.startsWith("ticket_");
+      const refreshProjects =
+        cursorBump ||
+        kind.startsWith("project_") ||
+        kind.startsWith("task_") ||
+        kind === "ontaskadd" ||
+        kind === "ontaskupdate";
       if (!refreshReports && !refreshTickets && !refreshProjects) return;
       void (async () => {
         try {
@@ -268,7 +302,9 @@ export function ProjectSidebarNav() {
               {},
               token
             );
-            const list = unwrapList(data);
+            const list = unwrapList(data).filter(
+              (project) => project.portal === contextPortalId
+            );
             setProjects(list);
             seedIfEmpty(list.map((p) => p.id));
             writePortalCache(CACHE_PROJECTS, contextPortalId, list);
@@ -280,9 +316,13 @@ export function ProjectSidebarNav() {
               review?: number;
             }>(`/api/reports/counts/?portal=${contextPortalId}`, {}, token);
             if (isAgency) {
-              setReportsAttention((data.draft || 0) + (data.disputed || 0));
+              const count = (data.draft || 0) + (data.disputed || 0);
+              setReportsAttention(count);
+              writePortalCache(reportsCountCache, contextPortalId, count);
             } else {
-              setReportsAttention(data.review || 0);
+              const count = data.review || 0;
+              setReportsAttention(count);
+              writePortalCache(reportsCountCache, contextPortalId, count);
             }
           }
           if (refreshTickets && !isAgency && contextPortalId) {
@@ -291,7 +331,9 @@ export function ProjectSidebarNav() {
               {},
               token
             );
-            setOpenTickets(data.awaiting_client || 0);
+            const count = data.awaiting_client || 0;
+            setOpenTickets(count);
+            writePortalCache(ticketsCountCache, contextPortalId, count);
           }
         } catch {
           // keep previous

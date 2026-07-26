@@ -842,7 +842,22 @@ class BitrixEventView(APIView):
                 # Agency ingest may create project under a client portal
                 client_id = (result or {}).get("client_portal_id")
                 if client_id:
-                    publish_portal_event(client_id, {"kind": event_u.lower()})
+                    result_kind = (result or {}).get("kind")
+                    if result_kind == "project":
+                        realtime_kind = (
+                            "project_create"
+                            if (result or {}).get("created")
+                            else "project_update"
+                        )
+                    else:
+                        realtime_kind = event_u.lower()
+                    publish_portal_event(
+                        client_id,
+                        {
+                            "kind": realtime_kind,
+                            "project_id": (result or {}).get("project_id"),
+                        },
+                    )
                 elif portal.role == PortalModel.Role.CLIENT:
                     publish_portal_event(portal.id, {"kind": event_u.lower()})
         except Exception:
