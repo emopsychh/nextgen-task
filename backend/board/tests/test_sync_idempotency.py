@@ -12,7 +12,7 @@ from django.db import transaction
 from django.test import TestCase, override_settings
 
 from board import tasks as board_tasks
-from board.models import Task
+from board.models import Comment, Task
 from portals.models import Portal
 
 from .helpers import make_link, make_portal, make_project, make_task, make_user
@@ -98,6 +98,32 @@ class SyncTaskIdempotencyTests(TestCase):
         self.assertEqual(task.sync_status, Task.SyncStatus.ERROR)
         # No successful create on a usable portal (token empty → BitrixAPIError before create)
         self.assertEqual(client.create_task.call_count, 0)
+
+    @override_settings(BITRIX_CLIENT_TASK_AUTHOR_ID="54")
+    def test_client_comment_uses_dedicated_agency_author(self):
+        task = make_task(
+            self.project,
+            created_by=self.user,
+            agency_bitrix_task_id="999",
+        )
+        comment = Comment.objects.create(
+            task=task,
+            author=self.user,
+            author_name="ADMIN",
+            text="Здравствуйте, это тест",
+        )
+        client = _mock_client()
+        client.add_task_comment.return_value = 321
+
+        with patch.object(board_tasks, "BitrixClient", return_value=client):
+            result = board_tasks.sync_comment_to_bitrix(comment.id)
+
+        self.assertTrue(result["ok"])
+        client.add_task_comment.assert_called_once_with(
+            "999",
+            "ADMIN: Здравствуйте, это тест",
+            author_id="54",
+        )
 
     def test_no_agency_link_errors_without_client_create(self):
         lonely = make_portal(role=Portal.Role.CLIENT, domain="lonely.bitrix24.ru")

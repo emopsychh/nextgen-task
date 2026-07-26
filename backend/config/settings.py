@@ -194,7 +194,7 @@ CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "0") == "1"
 BITRIX_CLIENT_ID = os.getenv("BITRIX_CLIENT_ID", "")
 BITRIX_CLIENT_SECRET = os.getenv("BITRIX_CLIENT_SECRET", "")
 BITRIX_APPLICATION_TOKEN = os.getenv("BITRIX_APPLICATION_TOKEN", "")
-# Agency-portal user shown as task creator when a client submits via Nextgen.
+# Agency-portal user shown as creator/author for client tasks and comments.
 BITRIX_CLIENT_TASK_AUTHOR_ID = os.getenv("BITRIX_CLIENT_TASK_AUTHOR_ID", "").strip()
 # Custom deal number fields (UF_CRM_…) in воронка «Сопровождение»
 # Paid hours are never overwritten; remaining hours are decremented per closed timer session.

@@ -601,7 +601,20 @@ def sync_comment_to_bitrix(self, comment_id: int):
     saved_ids: dict[str, str] = {}
     for portal, bitrix_task_id in targets:
         try:
-            result = BitrixClient(portal).add_task_comment(bitrix_task_id, message)
+            author_id = None
+            if (
+                comment.author_id
+                and comment.author
+                and comment.author.portal_id != portal.id
+            ):
+                # A client-portal user cannot be an author on the agency
+                # portal. Post through the dedicated agency employee instead.
+                author_id = (settings.BITRIX_CLIENT_TASK_AUTHOR_ID or "").strip() or None
+            result = BitrixClient(portal).add_task_comment(
+                bitrix_task_id,
+                message,
+                author_id=author_id,
+            )
             cid = ""
             if isinstance(result, (int, float)):
                 cid = str(int(result))
