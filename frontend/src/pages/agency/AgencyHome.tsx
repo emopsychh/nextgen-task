@@ -4,6 +4,7 @@ import { api, isAbortError, unwrapList, type DealBinding, type Portal } from "..
 import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { DealHoursCard } from "../../components/DealHoursCard";
+import { DealPickModal, type DealCandidate } from "../../components/DealPickModal";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { hueFromId, initialsFromLabel } from "../../lib/portalUi";
@@ -16,6 +17,13 @@ type LinkRow = {
 type PendingUnlink = {
   linkId: number;
   name: string;
+};
+
+type DealPickerState = {
+  portalId: number;
+  portalName: string;
+  portalDomain: string;
+  currentDealId?: string | null;
 };
 
 function initials(portal: Portal): string {
@@ -35,6 +43,11 @@ export function AgencyHome() {
   const [pendingUnlink, setPendingUnlink] = useState<PendingUnlink | null>(null);
   const [unlinking, setUnlinking] = useState(false);
   const [dealBusyId, setDealBusyId] = useState<number | null>(null);
+  const [dealPicker, setDealPicker] = useState<DealPickerState | null>(null);
+  const [dealCandidates, setDealCandidates] = useState<DealCandidate[]>([]);
+  const [dealPickLoading, setDealPickLoading] = useState(false);
+  const [dealPickError, setDealPickError] = useState<string | null>(null);
+  const [dealConfirmId, setDealConfirmId] = useState<string | null>(null);
   const bindingsRef = useRef(bindings);
   bindingsRef.current = bindings;
 
@@ -192,25 +205,67 @@ export function AgencyHome() {
     }
   }
 
-  async function findDealByPortal(portalId: number) {
+  async function openDealPicker(portal: Portal, currentDealId?: string | null) {
     if (!token) return;
-    setDealBusyId(portalId);
+    const portalName = portal.name || portal.domain;
     setError(null);
+    setDealPickError(null);
+    setDealCandidates([]);
+    setDealConfirmId(null);
+    setDealBusyId(portal.id);
+    setDealPicker({
+      portalId: portal.id,
+      portalName,
+      portalDomain: portal.domain,
+      currentDealId: currentDealId || null,
+    });
+    setDealPickLoading(true);
+    try {
+      const data = await api<{ results: DealCandidate[] }>(
+        `/api/deal-bindings/candidates/?client_portal_id=${portal.id}`,
+        {},
+        token
+      );
+      setDealCandidates(data.results || []);
+    } catch (err) {
+      setDealPickError(err instanceof Error ? err.message : "Не удалось загрузить сделки");
+    } finally {
+      setDealPickLoading(false);
+      setDealBusyId(null);
+    }
+  }
+
+  function closeDealPicker() {
+    if (dealConfirmId) return;
+    setDealPicker(null);
+    setDealCandidates([]);
+    setDealPickError(null);
+  }
+
+  async function bindSelectedDeal(dealId: string) {
+    if (!token || !dealPicker) return;
+    setDealConfirmId(dealId);
+    setDealPickError(null);
     try {
       await api(
         "/api/deal-bindings/",
         {
           method: "POST",
-          body: JSON.stringify({ client_portal_id: portalId }),
+          body: JSON.stringify({
+            client_portal_id: dealPicker.portalId,
+            deal_id: dealId,
+          }),
         },
         token
       );
-      toast.show("Сделка найдена по ссылке на портал в CRM", "Сделка привязана");
+      toast.show("Пакет часов этого клиента обновлён", "Сделка привязана");
+      setDealPicker(null);
+      setDealCandidates([]);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось найти сделку");
+      setDealPickError(err instanceof Error ? err.message : "Не удалось привязать сделку");
     } finally {
-      setDealBusyId(null);
+      setDealConfirmId(null);
     }
   }
 
@@ -248,8 +303,8 @@ export function AgencyHome() {
         <div className="how-step">
           <span className="how-num">3</span>
           <div>
-            <strong>Сделка подтянется сама</strong>
-            <p>По полю «Ссылка на портал» в CRM</p>
+            <strong>Выберите сделку</strong>
+            <p>Только сделки с ссылкой на этот портал</p>
           </div>
         </div>
       </section>
@@ -358,19 +413,28 @@ export function AgencyHome() {
                           ) : null}
                         </div>
                         <DealHoursCard binding={binding} audience="agency" />
+                        <button
+                          type="button"
+                          className="btn btn-ghost deal-bind-change"
+                          disabled={dealBusy}
+                          onClick={() => void openDealPicker(p, binding.deal_id)}
+                        >
+                          {dealBusy ? "Загрузка…" : "Сменить сделку"}
+                        </button>
                       </div>
                     ) : (
                       <>
                         <p className="deal-bind-hint muted">
-                          Сделка ищется по полю «Ссылка на портал» в CRM
+                          Покажем сделки этого портала — только те, где в CRM уже стоит его
+                          ссылка
                         </p>
                         <button
                           type="button"
                           className="btn btn-accent"
                           disabled={dealBusy}
-                          onClick={() => void findDealByPortal(p.id)}
+                          onClick={() => void openDealPicker(p)}
                         >
-                          {dealBusy ? "Ищем…" : "Найти сделку"}
+                          {dealBusy ? "Загрузка…" : "Выбрать сделку"}
                         </button>
                       </>
                     )}
@@ -393,6 +457,19 @@ export function AgencyHome() {
           if (!unlinking) setPendingUnlink(null);
         }}
         onConfirm={() => void confirmUnlink()}
+      />
+
+      <DealPickModal
+        open={Boolean(dealPicker)}
+        portalName={dealPicker?.portalName || ""}
+        portalDomain={dealPicker?.portalDomain || ""}
+        loading={dealPickLoading}
+        error={dealPickError}
+        deals={dealCandidates}
+        currentDealId={dealPicker?.currentDealId}
+        confirmingId={dealConfirmId}
+        onClose={closeDealPicker}
+        onSelect={(dealId) => void bindSelectedDeal(dealId)}
       />
     </div>
   );

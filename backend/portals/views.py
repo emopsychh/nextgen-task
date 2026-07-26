@@ -13,7 +13,12 @@ from rest_framework.views import APIView
 import logging
 
 from .bitrix import BitrixAPIError, BitrixClient
-from .deal_resolve import resolve_or_refresh_binding, sync_deal_hours_meta
+from .deal_resolve import (
+    list_open_deals_for_portal,
+    resolve_or_refresh_binding,
+    serialize_deal_candidate,
+    sync_deal_hours_meta,
+)
 from .models import Portal, PortalDealBinding, PortalLink
 from .permissions import IsAgencyPortal, IsPortalAuthenticated, can_access_client_portal
 from .serializers import (
@@ -27,6 +32,16 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _crm_error_response(exc: Exception, *, status: int = 400) -> Response:
+    """Return a clean user-facing CRM error (no technical Bitrix prefixes)."""
+    detail = str(exc).strip() or "Не удалось обратиться к CRM"
+    # Drop leftover technical prefixes from older call sites / Bitrix raw errors.
+    for prefix in ("Bitrix CRM:", "Bitrix:", "CRM:"):
+        if detail.lower().startswith(prefix.lower()):
+            detail = detail[len(prefix) :].strip()
+    return Response({"detail": detail}, status=status)
 
 
 def _event_is_authentic(portal, auth: dict) -> bool:
@@ -398,18 +413,8 @@ class PortalLinkViewSet(viewsets.ModelViewSet):
             client_portal=client_portal,
         )
         serializer.instance = link
-        # Best-effort: bind accompaniment deal by portal-link UF field
-        try:
-            resolve_or_refresh_binding(
-                agency_portal=self.request.user.portal,
-                client_portal=client_portal,
-            )
-        except BitrixAPIError as exc:
-            logger.info(
-                "Auto deal bind skipped for client portal %s: %s",
-                client_portal.id,
-                exc,
-            )
+        # Deal is chosen explicitly in the agency UI (picker scoped to this portal).
+
 
 
 class PortalDealBindingViewSet(viewsets.ModelViewSet):
@@ -449,21 +454,18 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
         deal_id = str(request.data.get("deal_id") or "").strip()
 
-        # Preferred: resolve open accompaniment deal by portal-link UF field
         if not deal_id:
-            try:
-                binding = resolve_or_refresh_binding(
-                    agency_portal=request.user.portal,
-                    client_portal=client_portal,
-                )
-            except BitrixAPIError as exc:
-                return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
-            if not binding:
-                return Response({"detail": "Клиент не привязан к агентству"}, status=400)
-            return Response(PortalDealBindingSerializer(binding).data, status=201)
+            return Response(
+                {
+                    "detail": (
+                        "Выберите сделку в списке. "
+                        "Привязываются только сделки этого портала."
+                    )
+                },
+                status=400,
+            )
 
-        # Fallback: explicit deal_id (advanced) — still must match portal link UF
-        # and must not stay shared across multiple clients.
+        # Explicit deal_id — must match portal link UF and stay exclusive.
         from portals.deal_resolve import (
             deactivate_bindings_for_deal,
             deal_link_matches_client,
@@ -492,7 +494,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                     )
                 meta = sync_deal_hours_meta(bx, deal_id, deal)
             except BitrixAPIError as exc:
-                return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
+                return _crm_error_response(exc)
 
         deactivate_bindings_for_deal(
             agency_portal=request.user.portal,
@@ -549,7 +551,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                     client_portal=binding.client_portal,
                 )
             except BitrixAPIError as exc:
-                return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
+                return _crm_error_response(exc)
             if not binding:
                 return Response({"detail": "Не удалось обновить привязку"}, status=400)
 
@@ -565,6 +567,57 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             binding.save(update_fields=["is_active", "updated_at"])
 
         return Response(PortalDealBindingSerializer(binding).data)
+
+    @action(detail=False, methods=["get"], url_path="candidates")
+    def candidates(self, request):
+        """Open CRM deals whose portal-link points at this client portal only."""
+        if not getattr(request.user, "is_agency", False):
+            return Response({"detail": "Только для агентства"}, status=403)
+        client_id = request.query_params.get("client_portal_id")
+        if client_id is None:
+            return Response({"detail": "client_portal_id required"}, status=400)
+        try:
+            client_portal = Portal.objects.get(pk=client_id, role=Portal.Role.CLIENT)
+        except Portal.DoesNotExist:
+            return Response({"detail": "Client portal not found"}, status=404)
+        if not can_access_client_portal(request.user, client_portal):
+            return Response({"detail": "Client is not linked to this agency"}, status=403)
+
+        agency = request.user.portal
+        if not agency.access_token:
+            return Response({"detail": "Нет доступа к CRM агентства"}, status=400)
+
+        try:
+            deals = list_open_deals_for_portal(BitrixClient(agency), client_portal)
+        except BitrixAPIError as exc:
+            return _crm_error_response(exc)
+
+        deal_ids = [str(d.get("ID") or d.get("id") or "") for d in deals]
+        deal_ids = [d for d in deal_ids if d]
+        taken = {
+            str(row.deal_id): row.client_portal_id
+            for row in PortalDealBinding.objects.filter(
+                agency_portal=agency,
+                deal_id__in=deal_ids,
+                is_active=True,
+            ).exclude(client_portal=client_portal)
+        }
+
+        items = [
+            serialize_deal_candidate(
+                d,
+                bound_client_portal_id=taken.get(str(d.get("ID") or d.get("id") or "")),
+            )
+            for d in deals
+        ]
+        return Response(
+            {
+                "client_portal_id": client_portal.id,
+                "client_portal_name": client_portal.name or client_portal.domain,
+                "client_portal_domain": client_portal.domain,
+                "results": items,
+            }
+        )
 
     @action(
         detail=False,
@@ -620,7 +673,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                     require_portal_link_match=True,
                 )
             except BitrixAPIError as exc:
-                return Response({"detail": f"Bitrix CRM: {exc}"}, status=400)
+                return _crm_error_response(exc)
 
         if not binding:
             return Response({"detail": "Сделка не найдена"}, status=404)

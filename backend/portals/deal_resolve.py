@@ -34,6 +34,23 @@ def company_project_id_field() -> str:
     return (settings.BITRIX_COMPANY_PROJECT_ID_FIELD or "").strip()
 
 
+def deal_not_found_for_portal_message(client_portal) -> str:
+    """User-facing copy when no accompaniment deal matches this portal."""
+    host = normalize_portal_host(getattr(client_portal, "domain", "") or "")
+    label = (getattr(client_portal, "name", "") or "").strip() or host or "клиента"
+    if host and label != host:
+        where = f"«{label}» ({host})"
+    elif host:
+        where = f"«{host}»"
+    else:
+        where = "этого клиента"
+    return (
+        f"Для {where} не найдена открытая сделка сопровождения. "
+        "В CRM укажите в сделке ссылку на этот портал Bitrix24 "
+        "и нажмите «Выбрать сделку»."
+    )
+
+
 def normalize_portal_host(value: str) -> str:
     """Extract comparable host from a portal domain or Bitrix URL."""
     text = (value or "").strip()
@@ -133,15 +150,17 @@ def _unwrap_deal_list(result) -> list[dict]:
     return [d for d in deals if isinstance(d, dict)]
 
 
-def find_open_deal_for_portal(client: BitrixClient, client_portal) -> dict | None:
+def list_open_deals_for_portal(client: BitrixClient, client_portal) -> list[dict]:
     """
-    Find the newest open accompaniment deal whose portal-link field
-    points at this client Bitrix portal.
+    Open accompaniment deals whose portal-link UF points at this client portal.
+
+    Never returns deals linked to other portals — picker stays scoped to the
+    client we are binding.
     """
     link_field = portal_link_field()
     client_host = normalize_portal_host(getattr(client_portal, "domain", "") or "")
     if not link_field or not client_host or not _HOST_RE.match(client_host):
-        return None
+        return []
 
     base_filter: dict = {"CLOSED": "N"}
     category = accompaniment_category_id()
@@ -169,25 +188,61 @@ def find_open_deal_for_portal(client: BitrixClient, client_portal) -> dict | Non
 
     # Fallback: list open deals in the funnel and match in Python
     if not candidates:
-        result = client.call(
-            "crm.deal.list",
-            {
-                "filter": base_filter,
-                "order": order,
-                "select": select,
-                "start": 0,
-            },
-        )
-        candidates = _unwrap_deal_list(result)
+        try:
+            result = client.call(
+                "crm.deal.list",
+                {
+                    "filter": base_filter,
+                    "order": order,
+                    "select": select,
+                    "start": 0,
+                },
+            )
+            candidates = _unwrap_deal_list(result)
+        except BitrixAPIError:
+            return []
 
     matched = [
         d
         for d in candidates
         if portal_link_matches(str(d.get(link_field) or ""), client_host)
     ]
-    if not matched:
-        return None
-    return matched[0]
+    # Dedupe by ID, keep CRM order (newest first).
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for d in matched:
+        did = str(d.get("ID") or d.get("id") or "")
+        if not did or did in seen:
+            continue
+        seen.add(did)
+        unique.append(d)
+    return unique
+
+
+def find_open_deal_for_portal(client: BitrixClient, client_portal) -> dict | None:
+    """Newest open accompaniment deal for this client portal (or None)."""
+    matched = list_open_deals_for_portal(client, client_portal)
+    return matched[0] if matched else None
+
+
+def serialize_deal_candidate(deal: dict, *, bound_client_portal_id: int | None = None) -> dict:
+    """Compact payload for the agency deal picker."""
+    from portals.deal_hours import read_deal_hours
+
+    deal_id = str(deal.get("ID") or deal.get("id") or "")
+    hours = read_deal_hours(deal) if hours_fields_configured() else None
+    return {
+        "deal_id": deal_id,
+        "title": str(deal.get("TITLE") or deal.get("title") or f"Сделка #{deal_id}"),
+        "stage_id": str(deal.get("STAGE_ID") or deal.get("stageId") or ""),
+        "company_id": str(deal.get("COMPANY_ID") or deal.get("companyId") or ""),
+        "paid_hours": float(hours.paid) if hours and hours.paid is not None else None,
+        "remaining_hours": (
+            float(hours.remaining) if hours and hours.remaining is not None else None
+        ),
+        "bound_to_other_client": bound_client_portal_id is not None,
+        "bound_client_portal_id": bound_client_portal_id,
+    }
 
 
 def sync_deal_hours_meta(client: BitrixClient, deal_id: str, deal: dict | None = None) -> dict:
@@ -391,12 +446,7 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
             )
             if kept is not None:
                 return kept
-        host = normalize_portal_host(client_portal.domain or "")
-        raise BitrixAPIError(
-            f"Не найдена открытая сделка с ссылкой на портал «{host}»"
-            + (f" (воронка {accompaniment_category_id()})" if accompaniment_category_id() else "")
-            + f" в поле {portal_link_field()}"
-        )
+        raise BitrixAPIError(deal_not_found_for_portal_message(client_portal))
 
     deal_id = str(deal.get("ID") or deal.get("id") or "")
     if not deal_id:
@@ -551,19 +601,15 @@ def resolve_bitrix_group_id(*, agency_portal, client_portal, force_refresh: bool
     client = BitrixClient(agency_portal)
     deal = find_open_deal_for_portal(client, client_portal)
     if not deal:
-        host = normalize_portal_host(client_portal.domain or "")
-        raise BitrixAPIError(
-            f"Не найдена открытая сделка с ссылкой на портал «{host}»"
-        )
+        raise BitrixAPIError(deal_not_found_for_portal_message(client_portal))
 
     _, group_id = cache_company_and_group_on_link(client, link, deal)
     link.refresh_from_db()
     group_id = group_id or link.bitrix_group_id
     if not group_id:
         raise BitrixAPIError(
-            "У компании в CRM нет ID проекта "
-            f"(поле {company_project_id_field()}). "
-            "Дождитесь стадии 2 воронки — робот создаст проект."
+            "У компании в CRM ещё нет проекта сопровождения. "
+            "Дождитесь нужной стадии воронки — робот создаст проект автоматически."
         )
     return group_id
 

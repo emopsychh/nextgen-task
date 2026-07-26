@@ -75,7 +75,7 @@ class DealBindingIsolationTests(TestCase):
                 agency_portal=self.agency,
                 client_portal=self.newbie,
             )
-        self.assertIn("Не найдена открытая сделка", str(ctx.exception))
+        self.assertIn("не найдена", str(ctx.exception).lower())
         binding = PortalDealBinding.objects.get(client_portal=self.newbie, deal_id="158")
         self.assertFalse(binding.is_active)
 
