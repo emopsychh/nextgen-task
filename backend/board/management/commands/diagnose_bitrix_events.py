@@ -32,7 +32,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--rebind",
             action="store_true",
-            help="Re-bind OnTaskUpdate / comment / add handlers",
+            help="Re-bind OnTaskUpdate / comment / add / delete handlers",
         )
         parser.add_argument(
             "--task-id",

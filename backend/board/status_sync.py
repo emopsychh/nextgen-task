@@ -28,7 +28,7 @@ def ensure_task_event_bindings(portal) -> bool:
         return False
     handler = event_handler_url()
     client = BitrixClient(portal)
-    wanted = {"ONTASKUPDATE", "ONTASKCOMMENTADD", "ONTASKADD"}
+    wanted = {"ONTASKUPDATE", "ONTASKCOMMENTADD", "ONTASKADD", "ONTASKDELETE"}
     try:
         existing = client.call("event.get") or []
         if isinstance(existing, dict):
@@ -65,6 +65,7 @@ def ensure_task_event_bindings(portal) -> bool:
             ("OnTaskUpdate", "ONTASKUPDATE"),
             ("OnTaskCommentAdd", "ONTASKCOMMENTADD"),
             ("OnTaskAdd", "ONTASKADD"),
+            ("OnTaskDelete", "ONTASKDELETE"),
         ):
             if key in bound:
                 continue
@@ -378,6 +379,88 @@ def find_local_task_for_bitrix(*, portal, bitrix_task_id: str):
         qs.filter(agency_bitrix_task_id=bitrix_task_id).first()
         or qs.filter(bitrix_task_id=bitrix_task_id).first()
     )
+
+
+def find_local_project_for_bitrix(*, portal, bitrix_task_id: str):
+    """Match local project by agency parent Bitrix task id."""
+    from board.models import Project
+    from portals.models import PortalLink
+
+    bitrix_task_id = str(bitrix_task_id)
+    qs = Project.objects.select_related("portal")
+
+    direct = qs.filter(bitrix_task_id=bitrix_task_id, portal=portal).first()
+    if direct:
+        return direct
+
+    client_ids = list(
+        PortalLink.objects.filter(agency_portal=portal).values_list(
+            "client_portal_id", flat=True
+        )
+    )
+    if client_ids:
+        linked = qs.filter(
+            bitrix_task_id=bitrix_task_id, portal_id__in=client_ids
+        ).first()
+        if linked:
+            return linked
+
+    return qs.filter(bitrix_task_id=bitrix_task_id).first()
+
+
+def handle_bitrix_task_delete(*, portal, bitrix_task_id: str) -> dict:
+    """
+    OnTaskDelete from agency Bitrix: remove the local task or project.
+    One app DB serves both agency and client UIs — no client Bitrix copy.
+    """
+    bitrix_task_id = str(bitrix_task_id)
+
+    task = find_local_task_for_bitrix(portal=portal, bitrix_task_id=bitrix_task_id)
+    if task:
+        client_portal_id = task.project.portal_id
+        project_id = task.project_id
+        task_id = task.id
+        task.delete()
+        logger.info(
+            "OnTaskDelete removed local task id=%s bitrix=%s portal=%s",
+            task_id,
+            bitrix_task_id,
+            portal.id,
+        )
+        return {
+            "ok": True,
+            "deleted": "task",
+            "task_id": task_id,
+            "project_id": project_id,
+            "client_portal_id": client_portal_id,
+        }
+
+    project = find_local_project_for_bitrix(
+        portal=portal, bitrix_task_id=bitrix_task_id
+    )
+    if project:
+        client_portal_id = project.portal_id
+        project_id = project.id
+        # Cascade removes local subtasks; Bitrix may emit separate OnTaskDelete
+        # for children — those become no-ops after this.
+        project.delete()
+        logger.info(
+            "OnTaskDelete removed local project id=%s bitrix=%s portal=%s",
+            project_id,
+            bitrix_task_id,
+            portal.id,
+        )
+        return {
+            "ok": True,
+            "deleted": "project",
+            "project_id": project_id,
+            "client_portal_id": client_portal_id,
+        }
+
+    logger.info(
+        "OnTaskDelete unknown bitrix id=%s portal=%s", bitrix_task_id, portal.id
+    )
+    return {"ok": True, "ignored": "unknown_task"}
 
 
 def format_bitrix_deadline(due) -> str:

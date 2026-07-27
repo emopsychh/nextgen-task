@@ -260,3 +260,50 @@ class ApplyInboundStatusTests(TestCase):
         task.refresh_from_db()
         self.assertFalse(changed)
         self.assertEqual(task.status, Task.Status.TODO)
+
+
+class BitrixTaskDeleteTests(TestCase):
+    def setUp(self):
+        self.agency = make_portal(role=Portal.Role.AGENCY)
+        self.client_portal = make_portal(role=Portal.Role.CLIENT)
+        make_link(self.agency, self.client_portal)
+        self.project = make_project(
+            self.client_portal, name="P", bitrix_task_id="parent-10"
+        )
+
+    def test_delete_subtask_by_agency_bitrix_id(self):
+        from board.status_sync import handle_bitrix_task_delete
+
+        task = make_task(
+            self.project, title="Sub", agency_bitrix_task_id="bx-55"
+        )
+        result = handle_bitrix_task_delete(
+            portal=self.agency, bitrix_task_id="bx-55"
+        )
+        self.assertEqual(result["deleted"], "task")
+        self.assertEqual(result["task_id"], task.id)
+        self.assertFalse(Task.objects.filter(pk=task.id).exists())
+        self.assertTrue(
+            type(self.project).objects.filter(pk=self.project.id).exists()
+        )
+
+    def test_delete_project_by_parent_bitrix_id(self):
+        from board.models import Project
+        from board.status_sync import handle_bitrix_task_delete
+
+        child = make_task(self.project, title="Child", agency_bitrix_task_id="bx-9")
+        result = handle_bitrix_task_delete(
+            portal=self.agency, bitrix_task_id="parent-10"
+        )
+        self.assertEqual(result["deleted"], "project")
+        self.assertEqual(result["project_id"], self.project.id)
+        self.assertFalse(Project.objects.filter(pk=self.project.id).exists())
+        self.assertFalse(Task.objects.filter(pk=child.id).exists())
+
+    def test_unknown_bitrix_id_is_ignored(self):
+        from board.status_sync import handle_bitrix_task_delete
+
+        result = handle_bitrix_task_delete(
+            portal=self.agency, bitrix_task_id="missing"
+        )
+        self.assertEqual(result.get("ignored"), "unknown_task")

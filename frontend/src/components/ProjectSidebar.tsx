@@ -292,7 +292,8 @@ export function ProjectSidebarNav() {
         kind.startsWith("project_") ||
         kind.startsWith("task_") ||
         kind === "ontaskadd" ||
-        kind === "ontaskupdate";
+        kind === "ontaskupdate" ||
+        kind === "ontaskdelete";
       if (!refreshReports && !refreshTickets && !refreshProjects) return;
       void (async () => {
         try {

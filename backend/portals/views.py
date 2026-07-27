@@ -718,7 +718,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
 @method_decorator(csrf_exempt, name="dispatch")
 class BitrixEventView(APIView):
-    """Incoming Bitrix app events (OnTaskAdd / OnTaskUpdate / OnTaskCommentAdd)."""
+    """Incoming Bitrix app events (OnTaskAdd / Update / CommentAdd / Delete)."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -726,7 +726,12 @@ class BitrixEventView(APIView):
     def post(self, request):
         event, data, auth = _parse_bitrix_event(request)
         event_u = str(event or "").upper().replace("_", "")
-        if event_u not in ("ONTASKUPDATE", "ONTASKCOMMENTADD", "ONTASKADD"):
+        if event_u not in (
+            "ONTASKUPDATE",
+            "ONTASKCOMMENTADD",
+            "ONTASKADD",
+            "ONTASKDELETE",
+        ):
             return Response({"ok": True, "ignored": event or "empty"})
 
         bitrix_task_id = _bitrix_event_task_id(data)
@@ -831,7 +836,7 @@ class BitrixEventView(APIView):
 
         from board.comment_sync import ingest_bitrix_comment_event
         from board.project_sync import ingest_agency_bitrix_task
-        from board.status_sync import handle_bitrix_task_update
+        from board.status_sync import handle_bitrix_task_delete, handle_bitrix_task_update
         from portals.models import Portal as PortalModel
 
         if event_u == "ONTASKCOMMENTADD":
@@ -845,6 +850,10 @@ class BitrixEventView(APIView):
                 )
             else:
                 result = {"ok": True, "ignored": "client_task_add"}
+        elif event_u == "ONTASKDELETE":
+            result = handle_bitrix_task_delete(
+                portal=portal, bitrix_task_id=str(bitrix_task_id)
+            )
         else:
             result = handle_bitrix_task_update(
                 portal=portal, bitrix_task_id=str(bitrix_task_id), event_data=data
@@ -853,33 +862,46 @@ class BitrixEventView(APIView):
             from board.realtime import publish_portal_event, publish_task_event
             from board.models import Task
 
-            task_id = (result or {}).get("task_id")
-            if task_id:
-                t = Task.objects.select_related("project").filter(pk=task_id).first()
-                if t:
-                    publish_task_event(t, kind=event_u.lower())
+            # Task/project already gone after delete — publish by ids from result.
+            if event_u == "ONTASKDELETE" and (result or {}).get("deleted"):
+                client_id = (result or {}).get("client_portal_id") or portal.id
+                publish_portal_event(
+                    client_id,
+                    {
+                        "kind": "ontaskdelete",
+                        "task_id": (result or {}).get("task_id"),
+                        "project_id": (result or {}).get("project_id"),
+                        "deleted": (result or {}).get("deleted"),
+                    },
+                )
             else:
-                # Agency ingest may create project under a client portal
-                client_id = (result or {}).get("client_portal_id")
-                if client_id:
-                    result_kind = (result or {}).get("kind")
-                    if result_kind == "project":
-                        realtime_kind = (
-                            "project_create"
-                            if (result or {}).get("created")
-                            else "project_update"
+                task_id = (result or {}).get("task_id")
+                if task_id:
+                    t = Task.objects.select_related("project").filter(pk=task_id).first()
+                    if t:
+                        publish_task_event(t, kind=event_u.lower())
+                else:
+                    # Agency ingest may create project under a client portal
+                    client_id = (result or {}).get("client_portal_id")
+                    if client_id:
+                        result_kind = (result or {}).get("kind")
+                        if result_kind == "project":
+                            realtime_kind = (
+                                "project_create"
+                                if (result or {}).get("created")
+                                else "project_update"
+                            )
+                        else:
+                            realtime_kind = event_u.lower()
+                        publish_portal_event(
+                            client_id,
+                            {
+                                "kind": realtime_kind,
+                                "project_id": (result or {}).get("project_id"),
+                            },
                         )
-                    else:
-                        realtime_kind = event_u.lower()
-                    publish_portal_event(
-                        client_id,
-                        {
-                            "kind": realtime_kind,
-                            "project_id": (result or {}).get("project_id"),
-                        },
-                    )
-                elif portal.role == PortalModel.Role.CLIENT:
-                    publish_portal_event(portal.id, {"kind": event_u.lower()})
+                    elif portal.role == PortalModel.Role.CLIENT:
+                        publish_portal_event(portal.id, {"kind": event_u.lower()})
         except Exception:
             pass
         return Response(result)
