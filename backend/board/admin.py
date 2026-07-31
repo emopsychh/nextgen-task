@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from .models import (
     Attachment,
+    BacklogItem,
     Comment,
     Project,
     SupportTicket,
@@ -118,3 +119,11 @@ class SupportTicketAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("subject", "body")
     inlines = [SupportTicketMessageInline]
+
+
+@admin.register(BacklogItem)
+class BacklogItemAdmin(admin.ModelAdmin):
+    list_display = ("id", "portal", "title", "created_by", "updated_at")
+    list_filter = ("portal",)
+    search_fields = ("title", "notes")
+    readonly_fields = ("created_at", "updated_at")

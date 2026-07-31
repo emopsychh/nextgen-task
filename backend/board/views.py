@@ -15,14 +15,25 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from portals.models import Portal, PortalLink
-from portals.permissions import IsPortalAuthenticated, can_access_client_portal
+from portals.permissions import IsAgencyPortal, IsPortalAuthenticated, can_access_client_portal
 
 from .events import append_task_change_events
-from .models import Attachment, Comment, Project, SupportTicket, SupportTicketMessage, Task, TimeEntry, WorkReport
+from .models import (
+    Attachment,
+    BacklogItem,
+    Comment,
+    Project,
+    SupportTicket,
+    SupportTicketMessage,
+    Task,
+    TimeEntry,
+    WorkReport,
+)
 from .naming import display_attachment_name
 from .serializers import (
     ATTACHMENT_SIGN_SALT,
     AttachmentSerializer,
+    BacklogItemSerializer,
     CommentSerializer,
     ProjectSerializer,
     SupportTicketCreateSerializer,
@@ -1255,3 +1266,74 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
             .get(pk=ticket.pk)
         )
         return Response(SupportTicketSerializer(ticket, context={"request": request}).data)
+
+
+class BacklogItemViewSet(viewsets.ModelViewSet):
+    """Agency-only internal backlog notes for a linked client portal."""
+
+    permission_classes = [IsPortalAuthenticated, IsAgencyPortal]
+    serializer_class = BacklogItemSerializer
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_queryset(self):
+        return BacklogItem.objects.select_related("portal", "created_by").all()
+
+    def _portal_from_request(self, portal_id):
+        try:
+            portal = Portal.objects.get(pk=portal_id)
+        except (Portal.DoesNotExist, TypeError, ValueError):
+            return None
+        if not can_access_client_portal(self.request.user, portal):
+            raise PermissionDenied("No access to this portal")
+        return portal
+
+    def list(self, request, *args, **kwargs):
+        portal_id = request.query_params.get("portal")
+        if not portal_id:
+            return Response({"detail": "Query parameter portal is required"}, status=400)
+        portal = self._portal_from_request(portal_id)
+        if portal is None:
+            return Response({"detail": "Portal not found"}, status=404)
+        qs = self.get_queryset().filter(portal=portal)
+        return Response(BacklogItemSerializer(qs, many=True).data)
+
+    def create(self, request, *args, **kwargs):
+        ser = BacklogItemSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        portal = self._portal_from_request(ser.validated_data["portal"].pk)
+        if portal is None:
+            return Response({"detail": "Portal not found"}, status=404)
+        item = BacklogItem.objects.create(
+            portal=portal,
+            title=ser.validated_data["title"].strip(),
+            notes=(ser.validated_data.get("notes") or "").strip(),
+            created_by=getattr(request.user, "bitrix_user", None),
+        )
+        return Response(BacklogItemSerializer(item).data, status=201)
+
+    def retrieve(self, request, *args, **kwargs):
+        item = self.get_object()
+        if not can_access_client_portal(request.user, item.portal):
+            raise PermissionDenied("No access to this portal")
+        return Response(BacklogItemSerializer(item).data)
+
+    def partial_update(self, request, *args, **kwargs):
+        item = self.get_object()
+        if not can_access_client_portal(request.user, item.portal):
+            raise PermissionDenied("No access to this portal")
+        ser = BacklogItemSerializer(item, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        if "title" in ser.validated_data:
+            item.title = ser.validated_data["title"].strip()
+        if "notes" in ser.validated_data:
+            item.notes = (ser.validated_data["notes"] or "").strip()
+        # Ignore portal reassignment — stay on the original client.
+        item.save(update_fields=["title", "notes", "updated_at"])
+        return Response(BacklogItemSerializer(item).data)
+
+    def destroy(self, request, *args, **kwargs):
+        item = self.get_object()
+        if not can_access_client_portal(request.user, item.portal):
+            raise PermissionDenied("No access to this portal")
+        item.delete()
+        return Response(status=204)

@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     ActivityFeedView,
     AttachmentViewSet,
+    BacklogItemViewSet,
     CommentViewSet,
     ProjectViewSet,
     SupportTicketViewSet,
@@ -19,6 +20,7 @@ router.register("comments", CommentViewSet, basename="comment")
 router.register("attachments", AttachmentViewSet, basename="attachment")
 router.register("reports", WorkReportViewSet, basename="report")
 router.register("tickets", SupportTicketViewSet, basename="ticket")
+router.register("backlog-items", BacklogItemViewSet, basename="backlog-item")
 
 urlpatterns = [
     path("activity/", ActivityFeedView.as_view(), name="activity-feed"),

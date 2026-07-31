@@ -255,6 +255,17 @@ export type SupportTicket = {
   closed_at: string | null;
 };
 
+export type BacklogItem = {
+  id: number;
+  portal: number;
+  title: string;
+  notes: string;
+  created_by: number | null;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type DealBinding = {
   id: number;
   agency_portal: number;

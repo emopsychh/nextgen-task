@@ -12,6 +12,7 @@ import {
 } from "./components/support/SupportWidgetContext";
 import { LoginPage } from "./pages/LoginPage";
 import { AgencyHome } from "./pages/agency/AgencyHome";
+import { ClientBacklog } from "./pages/agency/ClientBacklog";
 import { ClientProjects } from "./pages/client/ClientProjects";
 import { ProjectReports } from "./pages/shared/ProjectReports";
 import { ProjectsList } from "./pages/shared/ProjectsList";
@@ -130,6 +131,18 @@ export default function App() {
         <Route
           path="portals/:portalId/projects"
           element={<RouteDataBoundary><ProjectsList /></RouteDataBoundary>}
+        />
+        <Route
+          path="portals/:portalId/backlog"
+          element={
+            isAgency ? (
+              <RouteDataBoundary>
+                <ClientBacklog />
+              </RouteDataBoundary>
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
         />
         <Route path="projects" element={isAgency ? <Navigate to="/" replace /> : <ProjectsList />} />
         <Route

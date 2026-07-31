@@ -314,6 +314,29 @@ class WorkReportLineAttachment(models.Model):
         return self.original_name or self.file.name
 
 
+class BacklogItem(models.Model):
+    """Agency-only internal notes for a client portal (not synced to Bitrix / clients)."""
+
+    portal = models.ForeignKey(Portal, on_delete=models.CASCADE, related_name="backlog_items")
+    title = models.CharField(max_length=500)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        BitrixUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_backlog_items",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+
+    def __str__(self):
+        return f"BacklogItem#{self.pk} {self.title[:40]}"
+
+
 class SupportTicket(models.Model):
     """Client support ticket for a portal — separate from task chat."""
 

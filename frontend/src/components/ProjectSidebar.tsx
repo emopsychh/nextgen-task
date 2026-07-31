@@ -459,6 +459,24 @@ export function ProjectSidebarNav() {
           </span>
         ) : null}
       </NavLink>
+      {isAgency ? (
+        <NavLink
+          to={`/portals/${contextPortalId}/backlog`}
+          className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
+        >
+          <span className="feed-nav-icon" aria-hidden>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </span>
+          <span className="feed-nav-label">Бэклог</span>
+        </NavLink>
+      ) : null}
       {ticketsLink}
     </div>
   );
