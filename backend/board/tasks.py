@@ -234,8 +234,8 @@ def _ensure_project_agency_parent(project) -> tuple[str, str]:
     if not agency:
         raise BitrixAPIError("Клиент не привязан к агентству")
 
-    # Revalidate against the active deal on every outbound sync. A persisted
-    # Project.group_id may belong to a previous/manual binding.
+    # Revalidate against CRM company (deal when bound, else portal-link) on every
+    # outbound sync. A persisted Project.group_id may belong to a previous binding.
     group_id = resolve_bitrix_group_id(
         agency_portal=agency, client_portal=project.portal
     )

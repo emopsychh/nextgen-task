@@ -3,11 +3,13 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase, override_settings
 
 from board.tests.helpers import make_link, make_portal
+from portals.bitrix import BitrixAPIError
 from portals.deal_resolve import (
     deactivate_bindings_for_deal,
     portal_link_matches,
     portal_link_value_matches,
     resolve_bitrix_group_id,
+    resolve_group_id_from_company_portal_link,
     resolve_or_refresh_binding,
 )
 from portals.models import PortalDealBinding
@@ -214,3 +216,114 @@ class DealBindingIsolationTests(TestCase):
         self.assertFalse(
             PortalDealBinding.objects.get(client_portal=self.test, deal_id="158").is_active
         )
+
+    @patch("portals.deal_resolve.BitrixClient")
+    def test_group_id_without_deal_uses_company_portal_link(self, client_cls):
+        """Tasks/projects can sync before accompaniment deal is chosen."""
+        link = self.newbie.agency_links.get(agency_portal=self.agency)
+        bx = MagicMock()
+        client_cls.return_value = bx
+
+        def call(method, params=None):
+            if method == "crm.company.list":
+                return [
+                    {
+                        "ID": "77",
+                        "TITLE": "Newbie Co",
+                        "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+                        "UF_CRM_PROJECT_ID": "GROUP-NEWBIE",
+                    }
+                ]
+            if method == "crm.deal.list":
+                return []
+            return {}
+
+        bx.call.side_effect = call
+        bx.get_company.return_value = {
+            "ID": "77",
+            "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+            "UF_CRM_PROJECT_ID": "GROUP-NEWBIE",
+        }
+
+        group_id = resolve_bitrix_group_id(
+            agency_portal=self.agency,
+            client_portal=self.newbie,
+        )
+
+        self.assertEqual(group_id, "GROUP-NEWBIE")
+        link.refresh_from_db()
+        self.assertEqual(link.bitrix_company_id, "77")
+        self.assertEqual(link.bitrix_group_id, "GROUP-NEWBIE")
+        bx.get_deal.assert_not_called()
+
+    @patch("portals.deal_resolve.BitrixClient")
+    def test_group_id_without_deal_requires_company_project_id(self, client_cls):
+        bx = MagicMock()
+        client_cls.return_value = bx
+
+        def call(method, params=None):
+            if method == "crm.company.list":
+                return [
+                    {
+                        "ID": "77",
+                        "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+                        "UF_CRM_PROJECT_ID": "",
+                    }
+                ]
+            if method == "crm.deal.list":
+                return []
+            return {}
+
+        bx.call.side_effect = call
+        bx.get_company.return_value = {
+            "ID": "77",
+            "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+            "UF_CRM_PROJECT_ID": "",
+        }
+
+        with self.assertRaises(BitrixAPIError) as ctx:
+            resolve_bitrix_group_id(
+                agency_portal=self.agency,
+                client_portal=self.newbie,
+            )
+        self.assertIn("проекта сопровождения", str(ctx.exception).lower())
+
+    @patch("portals.deal_resolve.BitrixClient")
+    def test_company_fallback_prefers_cached_company_id(self, client_cls):
+        link = self.newbie.agency_links.get(agency_portal=self.agency)
+        link.bitrix_company_id = "99"
+        link.save(update_fields=["bitrix_company_id"])
+        bx = MagicMock()
+        client_cls.return_value = bx
+
+        def call(method, params=None):
+            if method == "crm.company.list":
+                return [
+                    {
+                        "ID": "77",
+                        "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+                        "UF_CRM_PROJECT_ID": "G77",
+                    },
+                    {
+                        "ID": "99",
+                        "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+                        "UF_CRM_PROJECT_ID": "G99",
+                    },
+                ]
+            return {}
+
+        bx.call.side_effect = call
+        bx.get_company.return_value = {
+            "ID": "99",
+            "UF_CRM_PORTAL": "https://newbie.bitrix24.ru",
+            "UF_CRM_PROJECT_ID": "G99",
+        }
+
+        group_id = resolve_group_id_from_company_portal_link(
+            agency_portal=self.agency,
+            client_portal=self.newbie,
+            link=link,
+            client=bx,
+        )
+        self.assertEqual(group_id, "G99")
+        bx.get_company.assert_called_with("99")
