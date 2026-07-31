@@ -7782,7 +7782,10 @@ button.nav-item {
   text-align: left;
   width: min(560px, 100%);
   max-height: min(88vh, 820px);
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 18px;
 }
 
 .backlog-modal-head {
@@ -7790,7 +7793,8 @@ button.nav-item {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  flex: 0 0 auto;
+  padding-bottom: 4px;
 }
 
 .backlog-modal-head .modal-title {
@@ -7806,8 +7810,29 @@ button.nav-item {
   letter-spacing: 0.04em;
 }
 
+.backlog-modal-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 4px 6px 8px 0;
+  scrollbar-gutter: stable;
+}
+
+.backlog-modal-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.backlog-modal-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
 .backlog-modal-body {
-  margin: 12px 0 18px;
+  margin: 0;
+  padding-right: 4px;
 }
 
 .backlog-modal-body .field input,
@@ -7822,8 +7847,37 @@ button.nav-item {
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 12px;
-  padding-top: 4px;
+  flex: 0 0 auto;
+  margin-top: 12px;
+  padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+.backlog-tag-hint {
+  margin: 6px 0 0;
+  font-size: 0.8rem;
+}
+
+.backlog-tag-legend {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f6f8f7;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.backlog-tag-legend li {
+  margin: 0;
+}
+
+.backlog-tag-legend strong {
+  color: var(--ink);
+  font-weight: 700;
 }
 
 .backlog-pin {

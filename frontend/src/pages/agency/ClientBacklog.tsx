@@ -30,7 +30,68 @@ const PRIORITY_OPTIONS: { id: BacklogPriority; label: string }[] = [
   { id: 0, label: "Низкий" },
 ];
 
-const PRESET_TAGS = ["upsell", "баг", "контент"];
+/** Stable tag ids stored in API; labels shown in UI. */
+const PRESET_TAGS: { id: string; label: string; hint: string }[] = [
+  {
+    id: "upsell",
+    label: "Допродажа",
+    hint: "Можно предложить клиенту доп. работы или пакет",
+  },
+  {
+    id: "bug",
+    label: "Баг",
+    hint: "Ошибка, поломка или регресс",
+  },
+  {
+    id: "content",
+    label: "Контент",
+    hint: "Тексты, дизайн, материалы, наполнение",
+  },
+  {
+    id: "integration",
+    label: "Интеграция",
+    hint: "Bitrix, CRM, сервисы и связки",
+  },
+  {
+    id: "process",
+    label: "Процесс",
+    hint: "Как работаем внутри, а не фича продукта",
+  },
+];
+
+const LEGACY_TAG_MAP: Record<string, string> = {
+  upsell: "upsell",
+  баг: "bug",
+  bug: "bug",
+  контент: "content",
+  content: "content",
+  интеграция: "integration",
+  integration: "integration",
+  процесс: "process",
+  process: "process",
+  допродажа: "upsell",
+};
+
+function normalizeTag(raw: string): string {
+  const key = (raw || "").trim().toLowerCase();
+  return LEGACY_TAG_MAP[key] || LEGACY_TAG_MAP[raw] || key;
+}
+
+function tagLabel(id: string): string {
+  const normalized = normalizeTag(id);
+  return PRESET_TAGS.find((t) => t.id === normalized)?.label || id;
+}
+
+function itemHasTag(item: BacklogItem, tagId: string): boolean {
+  return (item.tags || []).some((t) => normalizeTag(t) === tagId);
+}
+
+function toggleTagList(current: string[], tagId: string): string[] {
+  const normalized = [...new Set((current || []).map(normalizeTag).filter(Boolean))];
+  return normalized.includes(tagId)
+    ? normalized.filter((t) => t !== tagId)
+    : [...normalized, tagId];
+}
 
 function sortItems(list: BacklogItem[]): BacklogItem[] {
   return [...list].sort((a, b) => {
@@ -86,17 +147,15 @@ export function ClientBacklog() {
   const load = useCallback(
     async (signal?: AbortSignal) => {
       if (!token || !portalId) return;
-      const params = new URLSearchParams({ portal: String(portalId) });
-      if (tagFilter) params.set("tag", tagFilter);
       const data = await api<BacklogItem[]>(
-        `/api/backlog-items/?${params}`,
+        `/api/backlog-items/?portal=${portalId}`,
         { signal },
         token
       );
       if (signal?.aborted) return;
       setItems(sortItems(Array.isArray(data) ? data : []));
     },
-    [token, portalId, tagFilter]
+    [token, portalId]
   );
 
   useEffect(() => {
@@ -149,14 +208,6 @@ export function ClientBacklog() {
     return () => ac.abort();
   }, [token, portalId, isAgency]);
 
-  const allTags = useMemo(() => {
-    const set = new Set<string>(PRESET_TAGS);
-    for (const item of items) {
-      for (const t of item.tags || []) set.add(t);
-    }
-    return [...set];
-  }, [items]);
-
   const visibleStages = useMemo(
     () =>
       hideClosed
@@ -165,15 +216,20 @@ export function ClientBacklog() {
     [hideClosed]
   );
 
+  const visibleItems = useMemo(() => {
+    if (!tagFilter) return items;
+    return items.filter((item) => itemHasTag(item, tagFilter));
+  }, [items, tagFilter]);
+
   const columns = useMemo(() => {
     const map = Object.fromEntries(
       FUNNEL_STAGES.map((s) => [s.id, [] as BacklogItem[]])
     ) as Record<BacklogStatus, BacklogItem[]>;
-    for (const item of items) {
+    for (const item of visibleItems) {
       (map[item.status] || map.idea).push(item);
     }
     return map;
-  }, [items]);
+  }, [visibleItems]);
 
   const selected = useMemo(
     () => (selectedId == null ? null : items.find((i) => i.id === selectedId) || null),
@@ -187,10 +243,8 @@ export function ClientBacklog() {
     return <Navigate to="/" replace />;
   }
 
-  function toggleCreateTag(tag: string) {
-    setCreateTags((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-    );
+  function toggleCreateTag(tagId: string) {
+    setCreateTags((prev) => toggleTagList(prev, tagId));
   }
 
   async function createItem() {
@@ -475,16 +529,18 @@ export function ClientBacklog() {
             <div className="backlog-tag-picks">
               {PRESET_TAGS.map((tag) => (
                 <button
-                  key={tag}
+                  key={tag.id}
                   type="button"
-                  className={`backlog-tag${createTags.includes(tag) ? " is-on" : ""}`}
-                  onClick={() => toggleCreateTag(tag)}
+                  className={`backlog-tag${createTags.includes(tag.id) ? " is-on" : ""}`}
+                  title={tag.hint}
+                  onClick={() => toggleCreateTag(tag.id)}
                   disabled={creating}
                 >
-                  {tag}
+                  {tag.label}
                 </button>
               ))}
             </div>
+            <p className="backlog-tag-hint muted">Наведите на тег — краткое пояснение</p>
           </div>
           <button
             type="submit"
@@ -507,15 +563,16 @@ export function ClientBacklog() {
           >
             Все теги
           </button>
-          {allTags.map((t) => (
+          {PRESET_TAGS.map((t) => (
             <button
-              key={t}
+              key={t.id}
               type="button"
-              className={`task-filter-chip${tagFilter === t ? " active" : ""}`}
-              aria-pressed={tagFilter === t}
-              onClick={() => setTagFilter(t)}
+              className={`task-filter-chip${tagFilter === t.id ? " active" : ""}`}
+              aria-pressed={tagFilter === t.id}
+              title={t.hint}
+              onClick={() => setTagFilter(t.id)}
             >
-              {t}
+              {t.label}
             </button>
           ))}
         </div>
@@ -635,11 +692,20 @@ export function ClientBacklog() {
                           </div>
                           {(item.tags || []).length > 0 ? (
                             <div className="backlog-card-tags">
-                              {(item.tags || []).map((tag) => (
-                                <span key={tag} className="backlog-tag is-on">
-                                  {tag}
-                                </span>
-                              ))}
+                              {[...new Set((item.tags || []).map(normalizeTag))].map(
+                                (tag) => (
+                                  <span
+                                    key={tag}
+                                    className="backlog-tag is-on"
+                                    title={
+                                      PRESET_TAGS.find((t) => t.id === tag)?.hint ||
+                                      undefined
+                                    }
+                                  >
+                                    {tagLabel(tag)}
+                                  </span>
+                                )
+                              )}
                             </div>
                           ) : null}
                         </article>
@@ -691,84 +757,93 @@ export function ClientBacklog() {
               </button>
             </div>
 
-            <div className="stack backlog-modal-body">
-              <div className="field">
-                <label>Заголовок</label>
-                <input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  disabled={savingId === selected.id}
-                  autoFocus
-                />
-              </div>
-              <div className="field">
-                <label>Заметки</label>
-                <textarea
-                  value={editNotes}
-                  onChange={(e) => setEditNotes(e.target.value)}
-                  rows={4}
-                  disabled={savingId === selected.id}
-                  placeholder="Контекст, ссылки, детали…"
-                />
-              </div>
-              <div className="field">
-                <label>Этап</label>
-                <div className="task-filters">
-                  {FUNNEL_STAGES.map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      className={`task-filter-chip${
-                        selected.status === s.id ? " active" : ""
-                      }`}
-                      disabled={savingId === selected.id || converting}
-                      onClick={() => void patchItem(selected.id, { status: s.id })}
-                    >
-                      {s.label}
-                    </button>
-                  ))}
+            <div className="backlog-modal-scroll">
+              <div className="stack backlog-modal-body">
+                <div className="field">
+                  <label>Заголовок</label>
+                  <input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    disabled={savingId === selected.id}
+                    autoFocus
+                  />
                 </div>
-              </div>
-              <div className="field">
-                <label>Приоритет</label>
-                <div className="task-filters">
-                  {PRIORITY_OPTIONS.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className={`task-filter-chip${
-                        selected.priority === p.id ? " active" : ""
-                      }`}
-                      disabled={savingId === selected.id}
-                      onClick={() => void patchItem(selected.id, { priority: p.id })}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
+                <div className="field">
+                  <label>Заметки</label>
+                  <textarea
+                    value={editNotes}
+                    onChange={(e) => setEditNotes(e.target.value)}
+                    rows={4}
+                    disabled={savingId === selected.id}
+                    placeholder="Контекст, ссылки, детали…"
+                  />
                 </div>
-              </div>
-              <div className="field">
-                <label>Теги</label>
-                <div className="backlog-tag-picks">
-                  {PRESET_TAGS.map((tag) => {
-                    const on = (selected.tags || []).includes(tag);
-                    return (
+                <div className="field">
+                  <label>Этап</label>
+                  <div className="task-filters">
+                    {FUNNEL_STAGES.map((s) => (
                       <button
-                        key={tag}
+                        key={s.id}
                         type="button"
-                        className={`backlog-tag${on ? " is-on" : ""}`}
-                        disabled={savingId === selected.id}
-                        onClick={() => {
-                          const next = on
-                            ? (selected.tags || []).filter((t) => t !== tag)
-                            : [...(selected.tags || []), tag];
-                          void patchItem(selected.id, { tags: next });
-                        }}
+                        className={`task-filter-chip${
+                          selected.status === s.id ? " active" : ""
+                        }`}
+                        disabled={savingId === selected.id || converting}
+                        onClick={() => void patchItem(selected.id, { status: s.id })}
                       >
-                        {tag}
+                        {s.label}
                       </button>
-                    );
-                  })}
+                    ))}
+                  </div>
+                </div>
+                <div className="field">
+                  <label>Приоритет</label>
+                  <div className="task-filters">
+                    {PRIORITY_OPTIONS.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className={`task-filter-chip${
+                          selected.priority === p.id ? " active" : ""
+                        }`}
+                        disabled={savingId === selected.id}
+                        onClick={() => void patchItem(selected.id, { priority: p.id })}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="field">
+                  <label>Теги</label>
+                  <div className="backlog-tag-picks">
+                    {PRESET_TAGS.map((tag) => {
+                      const on = itemHasTag(selected, tag.id);
+                      return (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          className={`backlog-tag${on ? " is-on" : ""}`}
+                          title={tag.hint}
+                          disabled={savingId === selected.id}
+                          onClick={() => {
+                            void patchItem(selected.id, {
+                              tags: toggleTagList(selected.tags || [], tag.id),
+                            });
+                          }}
+                        >
+                          {tag.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <ul className="backlog-tag-legend muted">
+                    {PRESET_TAGS.map((tag) => (
+                      <li key={tag.id}>
+                        <strong>{tag.label}</strong> — {tag.hint}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
             </div>
