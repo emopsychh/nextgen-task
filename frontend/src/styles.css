@@ -7590,23 +7590,28 @@ button.nav-item {
 }
 
 .backlog-funnel {
-  display: grid;
-  grid-template-columns: repeat(var(--funnel-cols, 3), minmax(220px, 1fr));
+  display: flex;
   gap: 12px;
   align-items: stretch;
+  width: 100%;
   overflow-x: auto;
   padding-bottom: 8px;
+  box-sizing: border-box;
 }
 
 .backlog-funnel-col {
   display: flex;
   flex-direction: column;
+  flex: 1 1 0;
+  min-width: 200px;
   min-height: 420px;
   border-radius: 18px;
   border: 1px solid var(--line);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(244, 246, 245, 0.9) 100%);
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .backlog-funnel-col.is-drop {
@@ -7647,6 +7652,7 @@ button.nav-item {
   gap: 8px;
   padding: 14px 14px 10px;
   border-bottom: 1px solid rgba(230, 235, 233, 0.9);
+  min-width: 0;
 }
 
 .backlog-funnel-step {
@@ -7654,6 +7660,7 @@ button.nav-item {
   gap: 10px;
   align-items: flex-start;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .backlog-funnel-num {
@@ -7676,11 +7683,17 @@ button.nav-item {
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .backlog-funnel-hint {
   margin: 2px 0 0;
   font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .backlog-funnel-count {
@@ -7700,21 +7713,30 @@ button.nav-item {
 .backlog-funnel-cards {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   padding: 12px;
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .backlog-funnel-empty {
+  display: block;
+  width: 100%;
   margin: 0;
   padding: 18px 8px;
   text-align: center;
   font-size: 0.85rem;
   border: 1px dashed #d5ddd9;
   border-radius: 14px;
+  box-sizing: border-box;
 }
 
 .backlog-card {
+  width: 100%;
+  box-sizing: border-box;
   padding: 12px;
   border-radius: 14px;
   background: #fff;
@@ -7738,27 +7760,15 @@ button.nav-item {
   opacity: 0.45;
 }
 
-.backlog-card.is-expanded {
-  cursor: default;
-}
-
 .backlog-card-top {
   display: flex;
   align-items: flex-start;
   gap: 6px;
 }
 
-.backlog-card-title-btn {
-  appearance: none;
-  border: none;
-  background: transparent;
-  padding: 0;
-  margin: 0;
-  text-align: left;
+.backlog-card-top .backlog-item-title {
   flex: 1 1 auto;
   min-width: 0;
-  cursor: pointer;
-  color: inherit;
 }
 
 .backlog-card-tags {
@@ -7768,18 +7778,52 @@ button.nav-item {
   margin-top: 8px;
 }
 
-.backlog-card-assignee {
-  margin: 8px 0 0;
-  font-size: 0.8rem;
+.backlog-item-modal {
+  text-align: left;
+  width: min(560px, 100%);
+  max-height: min(88vh, 820px);
+  overflow: auto;
 }
 
-.backlog-card-body {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
+.backlog-modal-head {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.backlog-modal-head .modal-title {
+  margin: 0;
+  text-align: left;
+}
+
+.backlog-modal-stage {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.backlog-modal-body {
+  margin: 12px 0 18px;
+}
+
+.backlog-modal-body .field input,
+.backlog-modal-body .field textarea,
+.backlog-modal-body .field select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.backlog-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
 }
 
 .backlog-pin {
@@ -7871,9 +7915,9 @@ button.nav-item {
 }
 
 @media (max-width: 960px) {
-  .backlog-funnel {
-    grid-template-columns: repeat(var(--funnel-cols, 3), minmax(240px, 1fr));
-    padding-bottom: 4px;
+  .backlog-funnel-col {
+    min-width: 240px;
+    flex: 1 0 240px;
   }
 }
 

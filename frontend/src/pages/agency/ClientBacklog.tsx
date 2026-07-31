@@ -4,7 +4,6 @@ import {
   api,
   isAbortError,
   unwrapList,
-  type BacklogAssigneeOption,
   type BacklogItem,
   type BacklogPriority,
   type BacklogStatus,
@@ -59,7 +58,6 @@ export function ClientBacklog() {
 
   const [items, setItems] = useState<BacklogItem[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [assignees, setAssignees] = useState<BacklogAssigneeOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState("");
@@ -72,8 +70,7 @@ export function ClientBacklog() {
   const [createTags, setCreateTags] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 
-  const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editNotes, setEditNotes] = useState("");
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -109,6 +106,19 @@ export function ClientBacklog() {
   }, [portalId]);
 
   useEffect(() => {
+    if (selectedId == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSelectedId(null);
+        setEditTitle("");
+        setEditNotes("");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedId]);
+
+  useEffect(() => {
     if (!token || !portalId || !isAgency) return;
     setLoading(true);
     setError(null);
@@ -126,18 +136,14 @@ export function ClientBacklog() {
   useEffect(() => {
     if (!token || !portalId || !isAgency) return;
     const ac = new AbortController();
-    void Promise.all([
-      api<Project[] | Paginated<Project>>(
-        `/api/projects/?portal=${portalId}`,
-        { signal: ac.signal },
-        token
-      ),
-      api<BacklogAssigneeOption[]>("/api/backlog-items/assignees/", { signal: ac.signal }, token),
-    ])
-      .then(([projectsData, assigneesData]) => {
+    void api<Project[] | Paginated<Project>>(
+      `/api/projects/?portal=${portalId}`,
+      { signal: ac.signal },
+      token
+    )
+      .then((projectsData) => {
         if (ac.signal.aborted) return;
         setProjects(unwrapList(projectsData).filter((p) => p.portal === portalId));
-        setAssignees(Array.isArray(assigneesData) ? assigneesData : []);
       })
       .catch(() => undefined);
     return () => ac.abort();
@@ -168,6 +174,11 @@ export function ClientBacklog() {
     }
     return map;
   }, [items]);
+
+  const selected = useMemo(
+    () => (selectedId == null ? null : items.find((i) => i.id === selectedId) || null),
+    [items, selectedId]
+  );
 
   if (!isAgency) {
     return <Navigate to="/" replace />;
@@ -302,24 +313,30 @@ export function ClientBacklog() {
     await persistOrder(ordered);
   }
 
-  function startEdit(item: BacklogItem) {
-    setExpandedId(item.id);
-    setEditingId(item.id);
+  function openItem(item: BacklogItem) {
+    setSelectedId(item.id);
     setEditTitle(item.title);
     setEditNotes(item.notes || "");
   }
 
-  function cancelEdit() {
-    setEditingId(null);
+  function closeItem() {
+    setSelectedId(null);
     setEditTitle("");
     setEditNotes("");
   }
 
-  async function saveEdit(id: number) {
+  async function saveSelected() {
+    if (selectedId == null) return;
     const t = editTitle.trim();
     if (!t) return;
-    await patchItem(id, { title: t, notes: editNotes.trim() });
-    cancelEdit();
+    const updated = await patchItem(selectedId, {
+      title: t,
+      notes: editNotes.trim(),
+    });
+    if (updated) {
+      setEditTitle(updated.title);
+      setEditNotes(updated.notes || "");
+    }
   }
 
   async function confirmDelete() {
@@ -329,8 +346,7 @@ export function ClientBacklog() {
     try {
       await api(`/api/backlog-items/${pendingDelete.id}/`, { method: "DELETE" }, token);
       setItems((prev) => prev.filter((it) => it.id !== pendingDelete.id));
-      if (editingId === pendingDelete.id) cancelEdit();
-      if (expandedId === pendingDelete.id) setExpandedId(null);
+      if (selectedId === pendingDelete.id) closeItem();
       setPendingDelete(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось удалить");
@@ -529,10 +545,7 @@ export function ClientBacklog() {
           <p className="muted">Загружаем воронку…</p>
         </div>
       ) : (
-        <div
-          className="backlog-funnel"
-          style={{ ["--funnel-cols" as string]: String(visibleStages.length) }}
-        >
+        <div className="backlog-funnel">
           {visibleStages.map((stage, stageIndex) => {
             const colItems = columns[stage.id] || [];
             return (
@@ -569,15 +582,13 @@ export function ClientBacklog() {
                   ) : (
                     colItems.map((item) => {
                       const busy = savingId === item.id || converting;
-                      const expanded = expandedId === item.id;
-                      const editing = editingId === item.id;
                       return (
                         <article
                           key={item.id}
                           className={`backlog-card${item.is_pinned ? " is-pinned" : ""}${
                             dragId === item.id ? " is-dragging" : ""
-                          }${expanded ? " is-expanded" : ""}`}
-                          draggable={!editing}
+                          }`}
+                          draggable
                           onDragStart={(e) => {
                             e.dataTransfer.effectAllowed = "move";
                             setDragId(item.id);
@@ -592,6 +603,15 @@ export function ClientBacklog() {
                             e.stopPropagation();
                             void dropOnStage(stage.id, item.id);
                           }}
+                          onClick={() => openItem(item)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openItem(item);
+                            }
+                          }}
+                          role="button"
+                          tabIndex={0}
                         >
                           <div className="backlog-card-top">
                             <button
@@ -599,21 +619,14 @@ export function ClientBacklog() {
                               className={`backlog-pin${item.is_pinned ? " is-on" : ""}`}
                               title={item.is_pinned ? "Открепить" : "Закрепить"}
                               disabled={busy}
-                              onClick={() =>
-                                void patchItem(item.id, { is_pinned: !item.is_pinned })
-                              }
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void patchItem(item.id, { is_pinned: !item.is_pinned });
+                              }}
                             >
                               {item.is_pinned ? "★" : "☆"}
                             </button>
-                            <button
-                              type="button"
-                              className="backlog-card-title-btn"
-                              onClick={() =>
-                                setExpandedId((cur) => (cur === item.id ? null : item.id))
-                              }
-                            >
-                              <strong className="backlog-item-title">{item.title}</strong>
-                            </button>
+                            <strong className="backlog-item-title">{item.title}</strong>
                             <span
                               className={`backlog-priority backlog-priority-${item.priority}`}
                             >
@@ -629,175 +642,6 @@ export function ClientBacklog() {
                               ))}
                             </div>
                           ) : null}
-                          {item.assignee_name ? (
-                            <p className="backlog-card-assignee muted">{item.assignee_name}</p>
-                          ) : null}
-
-                          {expanded ? (
-                            <div className="backlog-card-body">
-                              {editing ? (
-                                <div className="backlog-item-edit">
-                                  <input
-                                    className="backlog-composer-title"
-                                    value={editTitle}
-                                    onChange={(e) => setEditTitle(e.target.value)}
-                                    disabled={busy}
-                                  />
-                                  <textarea
-                                    className="backlog-composer-notes"
-                                    value={editNotes}
-                                    onChange={(e) => setEditNotes(e.target.value)}
-                                    disabled={busy}
-                                    rows={3}
-                                  />
-                                  <div className="backlog-item-actions">
-                                    <button
-                                      type="button"
-                                      className="btn btn-accent"
-                                      disabled={busy || !editTitle.trim()}
-                                      onClick={() => void saveEdit(item.id)}
-                                    >
-                                      Сохранить
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-ghost"
-                                      disabled={busy}
-                                      onClick={cancelEdit}
-                                    >
-                                      Отмена
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <>
-                                  {item.notes ? (
-                                    <p className="backlog-item-notes">{item.notes}</p>
-                                  ) : (
-                                    <p className="muted">Без заметок</p>
-                                  )}
-                                  <div className="backlog-item-controls">
-                                    <select
-                                      value={item.priority}
-                                      disabled={busy}
-                                      aria-label="Приоритет"
-                                      onChange={(e) =>
-                                        void patchItem(item.id, {
-                                          priority: Number(e.target.value) as BacklogPriority,
-                                        })
-                                      }
-                                    >
-                                      {PRIORITY_OPTIONS.map((p) => (
-                                        <option key={p.id} value={p.id}>
-                                          {p.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    <select
-                                      value={item.assignee ?? ""}
-                                      disabled={busy}
-                                      aria-label="Ответственный"
-                                      onChange={(e) =>
-                                        void patchItem(item.id, {
-                                          assignee: e.target.value
-                                            ? Number(e.target.value)
-                                            : null,
-                                        })
-                                      }
-                                    >
-                                      <option value="">Без ответственного</option>
-                                      {assignees.map((a) => (
-                                        <option key={a.id} value={a.id}>
-                                          {a.display_name}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </div>
-                                  <div className="backlog-tag-picks">
-                                    {PRESET_TAGS.map((tag) => {
-                                      const on = (item.tags || []).includes(tag);
-                                      return (
-                                        <button
-                                          key={tag}
-                                          type="button"
-                                          className={`backlog-tag${on ? " is-on" : ""}`}
-                                          disabled={busy}
-                                          onClick={() => {
-                                            const next = on
-                                              ? (item.tags || []).filter((t) => t !== tag)
-                                              : [...(item.tags || []), tag];
-                                            void patchItem(item.id, { tags: next });
-                                          }}
-                                        >
-                                          {tag}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                  <div className="backlog-item-actions">
-                                    {item.converted_project ? (
-                                      <Link
-                                        className="btn btn-ghost backlog-item-btn"
-                                        to={`/projects/${item.converted_project}`}
-                                      >
-                                        Проект
-                                      </Link>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        className="btn btn-ghost backlog-item-btn"
-                                        disabled={busy}
-                                        onClick={() => void convertToProject(item.id)}
-                                      >
-                                        В проект
-                                      </button>
-                                    )}
-                                    {item.converted_task ? (
-                                      <Link
-                                        className="btn btn-ghost backlog-item-btn"
-                                        to={`/tasks/${item.converted_task}`}
-                                      >
-                                        Задача
-                                      </Link>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        className="btn btn-ghost backlog-item-btn"
-                                        disabled={busy}
-                                        onClick={() => {
-                                          setConvertTaskFor(item.id);
-                                          setConvertProjectId(projects[0]?.id ?? "");
-                                        }}
-                                      >
-                                        В задачу
-                                      </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      className="btn btn-ghost backlog-item-btn"
-                                      disabled={busy}
-                                      onClick={() => startEdit(item)}
-                                    >
-                                      Изменить
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-ghost backlog-item-btn"
-                                      disabled={busy}
-                                      onClick={() =>
-                                        setPendingDelete({
-                                          id: item.id,
-                                          title: item.title,
-                                        })
-                                      }
-                                    >
-                                      Удалить
-                                    </button>
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          ) : null}
                         </article>
                       );
                     })
@@ -808,6 +652,206 @@ export function ClientBacklog() {
           })}
         </div>
       )}
+
+      {selected ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={() => {
+            if (savingId == null && !converting) closeItem();
+          }}
+        >
+          <div
+            className="modal-card modal-card-wide backlog-item-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="backlog-item-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="backlog-modal-head">
+              <div>
+                <p className="backlog-modal-stage muted">
+                  {FUNNEL_STAGES.find((s) => s.id === selected.status)?.label ||
+                    selected.status}
+                </p>
+                <h3 id="backlog-item-title" className="modal-title">
+                  Идея в бэклоге
+                </h3>
+              </div>
+              <button
+                type="button"
+                className={`backlog-pin${selected.is_pinned ? " is-on" : ""}`}
+                title={selected.is_pinned ? "Открепить" : "Закрепить"}
+                disabled={savingId === selected.id}
+                onClick={() =>
+                  void patchItem(selected.id, { is_pinned: !selected.is_pinned })
+                }
+              >
+                {selected.is_pinned ? "★" : "☆"}
+              </button>
+            </div>
+
+            <div className="stack backlog-modal-body">
+              <div className="field">
+                <label>Заголовок</label>
+                <input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  disabled={savingId === selected.id}
+                  autoFocus
+                />
+              </div>
+              <div className="field">
+                <label>Заметки</label>
+                <textarea
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  rows={4}
+                  disabled={savingId === selected.id}
+                  placeholder="Контекст, ссылки, детали…"
+                />
+              </div>
+              <div className="field">
+                <label>Этап</label>
+                <div className="task-filters">
+                  {FUNNEL_STAGES.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className={`task-filter-chip${
+                        selected.status === s.id ? " active" : ""
+                      }`}
+                      disabled={savingId === selected.id || converting}
+                      onClick={() => void patchItem(selected.id, { status: s.id })}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="field">
+                <label>Приоритет</label>
+                <div className="task-filters">
+                  {PRIORITY_OPTIONS.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`task-filter-chip${
+                        selected.priority === p.id ? " active" : ""
+                      }`}
+                      disabled={savingId === selected.id}
+                      onClick={() => void patchItem(selected.id, { priority: p.id })}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="field">
+                <label>Теги</label>
+                <div className="backlog-tag-picks">
+                  {PRESET_TAGS.map((tag) => {
+                    const on = (selected.tags || []).includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        className={`backlog-tag${on ? " is-on" : ""}`}
+                        disabled={savingId === selected.id}
+                        onClick={() => {
+                          const next = on
+                            ? (selected.tags || []).filter((t) => t !== tag)
+                            : [...(selected.tags || []), tag];
+                          void patchItem(selected.id, { tags: next });
+                        }}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="backlog-modal-actions">
+              <div className="backlog-item-actions">
+                {selected.converted_project ? (
+                  <Link
+                    className="btn btn-ghost"
+                    to={`/projects/${selected.converted_project}`}
+                    onClick={closeItem}
+                  >
+                    Открыть проект
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={converting || savingId === selected.id}
+                    onClick={() => void convertToProject(selected.id)}
+                  >
+                    В проект
+                  </button>
+                )}
+                {selected.converted_task ? (
+                  <Link
+                    className="btn btn-ghost"
+                    to={`/tasks/${selected.converted_task}`}
+                    onClick={closeItem}
+                  >
+                    Открыть задачу
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={converting || savingId === selected.id}
+                    onClick={() => {
+                      setConvertTaskFor(selected.id);
+                      setConvertProjectId(projects[0]?.id ?? "");
+                    }}
+                  >
+                    В задачу
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={converting || savingId === selected.id}
+                  onClick={() =>
+                    setPendingDelete({ id: selected.id, title: selected.title })
+                  }
+                >
+                  Удалить
+                </button>
+              </div>
+              <div className="backlog-item-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={savingId === selected.id}
+                  onClick={closeItem}
+                >
+                  Закрыть
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-accent"
+                  disabled={
+                    savingId === selected.id ||
+                    !editTitle.trim() ||
+                    (editTitle.trim() === selected.title &&
+                      editNotes.trim() === (selected.notes || "").trim())
+                  }
+                  onClick={() => void saveSelected()}
+                >
+                  {savingId === selected.id ? "Сохраняем…" : "Сохранить"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <ConfirmDialog
         open={Boolean(pendingDelete)}
