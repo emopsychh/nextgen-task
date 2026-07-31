@@ -236,6 +236,48 @@ export function ClientBacklog() {
     [items, selectedId]
   );
 
+  // Title / notes autosave — same as chips (status, priority, tags).
+  useEffect(() => {
+    if (!isAgency || selectedId == null || !selected) return;
+    const nextTitle = editTitle.trim();
+    const nextNotes = editNotes.trim();
+    if (!nextTitle) return;
+    if (
+      nextTitle === selected.title &&
+      nextNotes === (selected.notes || "").trim()
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (!token) return;
+      setSavingId(selectedId);
+      void api<BacklogItem>(
+        `/api/backlog-items/${selectedId}/`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ title: nextTitle, notes: nextNotes }),
+        },
+        token
+      )
+        .then((updated) => {
+          setItems((prev) => sortItems(prev.map((it) => (it.id === selectedId ? updated : it))));
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Не удалось сохранить");
+        })
+        .finally(() => setSavingId((cur) => (cur === selectedId ? null : cur)));
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [
+    isAgency,
+    token,
+    editTitle,
+    editNotes,
+    selectedId,
+    selected?.title,
+    selected?.notes,
+  ]);
+
   if (!isAgency) {
     return <Navigate to="/" replace />;
   }
@@ -377,20 +419,6 @@ export function ClientBacklog() {
     setSelectedId(null);
     setEditTitle("");
     setEditNotes("");
-  }
-
-  async function saveSelected() {
-    if (selectedId == null) return;
-    const t = editTitle.trim();
-    if (!t) return;
-    const updated = await patchItem(selectedId, {
-      title: t,
-      notes: editNotes.trim(),
-    });
-    if (updated) {
-      setEditTitle(updated.title);
-      setEditNotes(updated.notes || "");
-    }
   }
 
   async function confirmDelete() {
@@ -739,6 +767,7 @@ export function ClientBacklog() {
                 <p className="backlog-modal-stage muted">
                   {FUNNEL_STAGES.find((s) => s.id === selected.status)?.label ||
                     selected.status}
+                  {savingId === selected.id ? " · сохраняем…" : ""}
                 </p>
                 <h3 id="backlog-item-title" className="modal-title">
                   Идея в бэклоге
@@ -837,19 +866,15 @@ export function ClientBacklog() {
                       );
                     })}
                   </div>
-                  <ul className="backlog-tag-legend muted">
-                    {PRESET_TAGS.map((tag) => (
-                      <li key={tag.id}>
-                        <strong>{tag.label}</strong> — {tag.hint}
-                      </li>
-                    ))}
-                  </ul>
+                  <p className="backlog-tag-hint muted">
+                    Подсказка по тегу — при наведении
+                  </p>
                 </div>
               </div>
             </div>
 
             <div className="backlog-modal-actions">
-              <div className="backlog-item-actions">
+              <div className="backlog-modal-actions-primary">
                 {selected.converted_project ? (
                   <Link
                     className="btn btn-ghost"
@@ -889,9 +914,11 @@ export function ClientBacklog() {
                     В задачу
                   </button>
                 )}
+              </div>
+              <div className="backlog-modal-actions-secondary">
                 <button
                   type="button"
-                  className="btn btn-ghost"
+                  className="btn btn-ghost backlog-btn-danger"
                   disabled={converting || savingId === selected.id}
                   onClick={() =>
                     setPendingDelete({ id: selected.id, title: selected.title })
@@ -899,28 +926,12 @@ export function ClientBacklog() {
                 >
                   Удалить
                 </button>
-              </div>
-              <div className="backlog-item-actions">
                 <button
                   type="button"
-                  className="btn btn-ghost"
-                  disabled={savingId === selected.id}
+                  className="btn btn-primary"
                   onClick={closeItem}
                 >
-                  Закрыть
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-accent"
-                  disabled={
-                    savingId === selected.id ||
-                    !editTitle.trim() ||
-                    (editTitle.trim() === selected.title &&
-                      editNotes.trim() === (selected.notes || "").trim())
-                  }
-                  onClick={() => void saveSelected()}
-                >
-                  {savingId === selected.id ? "Сохраняем…" : "Сохранить"}
+                  Готово
                 </button>
               </div>
             </div>

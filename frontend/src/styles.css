@@ -7595,7 +7595,8 @@ button.nav-item {
   align-items: stretch;
   width: 100%;
   overflow-x: auto;
-  padding-bottom: 8px;
+  overflow-y: hidden;
+  padding: 2px 2px 8px;
   box-sizing: border-box;
 }
 
@@ -7606,18 +7607,21 @@ button.nav-item {
   min-width: 200px;
   min-height: 420px;
   border-radius: 18px;
-  border: 1px solid var(--line);
+  border: 1.5px solid var(--line);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(244, 246, 245, 0.9) 100%);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
   box-sizing: border-box;
   overflow: hidden;
+  /* Avoid native DnD + transform creating a “ghost” that spills out of the board */
+  transform: none !important;
 }
 
 .backlog-funnel-col.is-drop {
-  border-color: rgba(31, 158, 138, 0.45);
-  box-shadow: 0 0 0 3px rgba(31, 158, 138, 0.12);
-  transform: translateY(-1px);
+  border-color: rgba(31, 158, 138, 0.55);
+  background:
+    linear-gradient(180deg, rgba(216, 243, 238, 0.55) 0%, rgba(255, 255, 255, 0.96) 42%),
+    #fff;
 }
 
 .backlog-funnel-col-idea {
@@ -7757,7 +7761,9 @@ button.nav-item {
 }
 
 .backlog-card.is-dragging {
-  opacity: 0.45;
+  opacity: 0.35;
+  /* Keep the source card still while the browser shows its drag preview */
+  transform: none !important;
 }
 
 .backlog-card-top {
@@ -7845,39 +7851,39 @@ button.nav-item {
 .backlog-modal-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 12px 16px;
   flex: 0 0 auto;
   margin-top: 12px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
 
+.backlog-modal-actions-primary,
+.backlog-modal-actions-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.backlog-modal-actions-secondary {
+  margin-left: auto;
+}
+
+.backlog-btn-danger {
+  color: var(--danger);
+  border-color: rgba(209, 67, 67, 0.28);
+}
+
+.backlog-btn-danger:hover {
+  background: #fff1f1;
+}
+
 .backlog-tag-hint {
   margin: 6px 0 0;
   font-size: 0.8rem;
-}
-
-.backlog-tag-legend {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: #f6f8f7;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 0.82rem;
-  line-height: 1.35;
-}
-
-.backlog-tag-legend li {
-  margin: 0;
-}
-
-.backlog-tag-legend strong {
-  color: var(--ink);
-  font-weight: 700;
 }
 
 .backlog-pin {
