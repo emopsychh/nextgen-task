@@ -17,12 +17,12 @@ import { getPortalLabel } from "../../lib/portalLabelCache";
 
 type PendingDelete = { id: number; title: string };
 
-const STATUS_OPTIONS: { id: BacklogStatus; label: string }[] = [
-  { id: "idea", label: "Идея" },
-  { id: "in_progress", label: "В работе" },
-  { id: "deferred", label: "Отложено" },
-  { id: "done", label: "Сделано" },
-  { id: "converted", label: "В проект/задачу" },
+const FUNNEL_STAGES: { id: BacklogStatus; label: string; hint: string }[] = [
+  { id: "idea", label: "Идея", hint: "Новые мысли" },
+  { id: "in_progress", label: "В работе", hint: "Разбираем" },
+  { id: "deferred", label: "Отложено", hint: "На потом" },
+  { id: "done", label: "Готово", hint: "Закрыто" },
+  { id: "converted", label: "В работу", hint: "Проект / задача" },
 ];
 
 const PRIORITY_OPTIONS: { id: BacklogPriority; label: string }[] = [
@@ -33,19 +33,13 @@ const PRIORITY_OPTIONS: { id: BacklogPriority; label: string }[] = [
 
 const PRESET_TAGS = ["upsell", "баг", "контент"];
 
-function formatUpdated(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString("ru-RU", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
+function sortItems(list: BacklogItem[]): BacklogItem[] {
+  return [...list].sort((a, b) => {
+    if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+    if (a.priority !== b.priority) return b.priority - a.priority;
+    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
   });
-}
-
-function statusLabel(status: BacklogStatus): string {
-  return STATUS_OPTIONS.find((s) => s.id === status)?.label || status;
 }
 
 function priorityLabel(priority: BacklogPriority): string {
@@ -68,17 +62,18 @@ export function ClientBacklog() {
   const [assignees, setAssignees] = useState<BacklogAssigneeOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string>("active");
   const [tagFilter, setTagFilter] = useState("");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
+  const [hideClosed, setHideClosed] = useState(true);
 
+  const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
-  const [notesOpen, setNotesOpen] = useState(false);
   const [createPriority, setCreatePriority] = useState<BacklogPriority>(1);
   const [createTags, setCreateTags] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editNotes, setEditNotes] = useState("");
@@ -89,13 +84,13 @@ export function ClientBacklog() {
   const [convertProjectId, setConvertProjectId] = useState<number | "">("");
   const [converting, setConverting] = useState(false);
   const [dragId, setDragId] = useState<number | null>(null);
+  const [dragOverStage, setDragOverStage] = useState<BacklogStatus | null>(null);
   const [pageTitle, setPageTitle] = useState("Бэклог");
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
       if (!token || !portalId) return;
       const params = new URLSearchParams({ portal: String(portalId) });
-      if (statusFilter) params.set("status", statusFilter);
       if (tagFilter) params.set("tag", tagFilter);
       if (assigneeFilter !== "all") params.set("assignee", assigneeFilter);
       const data = await api<BacklogItem[]>(
@@ -104,9 +99,9 @@ export function ClientBacklog() {
         token
       );
       if (signal?.aborted) return;
-      setItems(Array.isArray(data) ? data : []);
+      setItems(sortItems(Array.isArray(data) ? data : []));
     },
-    [token, portalId, statusFilter, tagFilter, assigneeFilter]
+    [token, portalId, tagFilter, assigneeFilter]
   );
 
   useEffect(() => {
@@ -158,6 +153,24 @@ export function ClientBacklog() {
     return [...set];
   }, [items]);
 
+  const visibleStages = useMemo(
+    () =>
+      hideClosed
+        ? FUNNEL_STAGES.filter((s) => s.id !== "done" && s.id !== "converted")
+        : FUNNEL_STAGES,
+    [hideClosed]
+  );
+
+  const columns = useMemo(() => {
+    const map = Object.fromEntries(
+      FUNNEL_STAGES.map((s) => [s.id, [] as BacklogItem[]])
+    ) as Record<BacklogStatus, BacklogItem[]>;
+    for (const item of items) {
+      (map[item.status] || map.idea).push(item);
+    }
+    return map;
+  }, [items]);
+
   if (!isAgency) {
     return <Navigate to="/" replace />;
   }
@@ -194,9 +207,9 @@ export function ClientBacklog() {
       );
       setTitle("");
       setNotes("");
-      setNotesOpen(false);
       setCreatePriority(1);
       setCreateTags([]);
+      setShowCreate(false);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось создать");
@@ -206,7 +219,7 @@ export function ClientBacklog() {
   }
 
   async function patchItem(id: number, body: Record<string, unknown>) {
-    if (!token) return;
+    if (!token) return null;
     setSavingId(id);
     setError(null);
     try {
@@ -215,35 +228,84 @@ export function ClientBacklog() {
         { method: "PATCH", body: JSON.stringify(body) },
         token
       );
-      setItems((prev) => {
-        const next = prev.map((it) => (it.id === id ? updated : it));
-        next.sort((a, b) => {
-          if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
-          if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
-          if (a.priority !== b.priority) return b.priority - a.priority;
-          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-        });
-        return next;
-      });
-      // If filters hide the new state, refresh list.
-      if (
-        (statusFilter === "active" &&
-          (updated.status === "done" || updated.status === "converted")) ||
-        (statusFilter !== "active" &&
-          statusFilter &&
-          statusFilter !== updated.status) ||
-        (tagFilter && !(updated.tags || []).includes(tagFilter))
-      ) {
-        await load();
-      }
+      setItems((prev) => sortItems(prev.map((it) => (it.id === id ? updated : it))));
+      return updated;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось сохранить");
+      return null;
     } finally {
       setSavingId(null);
     }
   }
 
+  async function persistOrder(ordered: BacklogItem[]) {
+    if (!token || !portalId) return;
+    setItems(ordered);
+    try {
+      const data = await api<BacklogItem[]>(
+        "/api/backlog-items/reorder/",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            portal: portalId,
+            ordered_ids: ordered.map((i) => i.id),
+          }),
+        },
+        token
+      );
+      if (Array.isArray(data)) setItems(sortItems(data));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось изменить порядок");
+      await load();
+    }
+  }
+
+  async function dropOnStage(stage: BacklogStatus, beforeId?: number) {
+    if (dragId == null) return;
+    const moving = items.find((i) => i.id === dragId);
+    if (!moving) {
+      setDragId(null);
+      setDragOverStage(null);
+      return;
+    }
+
+    const others = items.filter((i) => i.id !== dragId);
+    const targetCol = others.filter((i) => i.status === stage);
+    const rest = others.filter((i) => i.status !== stage);
+    let insertAt = targetCol.length;
+    if (beforeId != null) {
+      const idx = targetCol.findIndex((i) => i.id === beforeId);
+      if (idx >= 0) insertAt = idx;
+    }
+    const moved = { ...moving, status: stage };
+    targetCol.splice(insertAt, 0, moved);
+    const next = sortItems([...rest, ...targetCol]).map((it, index) => ({
+      ...it,
+      sort_order: index,
+    }));
+    // Keep funnel order stable: reorder by stage then sort_order within.
+    const byStage: BacklogItem[] = [];
+    for (const s of FUNNEL_STAGES) {
+      byStage.push(...next.filter((i) => i.status === s.id));
+    }
+    const ordered = byStage.map((it, index) => ({ ...it, sort_order: index }));
+
+    setItems(ordered);
+    setDragId(null);
+    setDragOverStage(null);
+
+    if (moving.status !== stage) {
+      const ok = await patchItem(moving.id, { status: stage });
+      if (!ok) {
+        await load();
+        return;
+      }
+    }
+    await persistOrder(ordered);
+  }
+
   function startEdit(item: BacklogItem) {
+    setExpandedId(item.id);
     setEditingId(item.id);
     setEditTitle(item.title);
     setEditNotes(item.notes || "");
@@ -270,6 +332,7 @@ export function ClientBacklog() {
       await api(`/api/backlog-items/${pendingDelete.id}/`, { method: "DELETE" }, token);
       setItems((prev) => prev.filter((it) => it.id !== pendingDelete.id));
       if (editingId === pendingDelete.id) cancelEdit();
+      if (expandedId === pendingDelete.id) setExpandedId(null);
       setPendingDelete(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось удалить");
@@ -321,422 +384,472 @@ export function ClientBacklog() {
     }
   }
 
-  async function onDropReorder(targetId: number) {
-    if (!token || !portalId || dragId == null || dragId === targetId) {
-      setDragId(null);
-      return;
-    }
-    const from = items.findIndex((i) => i.id === dragId);
-    const to = items.findIndex((i) => i.id === targetId);
-    if (from < 0 || to < 0) {
-      setDragId(null);
-      return;
-    }
-    const next = [...items];
-    const [moved] = next.splice(from, 1);
-    next.splice(to, 0, moved);
-    setItems(next);
-    setDragId(null);
-    try {
-      const data = await api<BacklogItem[]>(
-        "/api/backlog-items/reorder/",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            portal: portalId,
-            ordered_ids: next.map((i) => i.id),
-          }),
-        },
-        token
-      );
-      if (Array.isArray(data)) setItems(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось изменить порядок");
-      await load();
-    }
-  }
-
   return (
     <div className="tasks-page backlog-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{pageTitle}</h1>
-          <p className="page-sub">Идеи и черновики только для агентства</p>
+          <p className="page-sub">Воронка идей — тяните карточки по этапам</p>
         </div>
-        {!loading && items.length > 0 ? (
-          <span className="backlog-count muted">{items.length}</span>
-        ) : null}
+        <div className="backlog-header-actions">
+          {!loading && items.length > 0 ? (
+            <span className="backlog-count muted">{items.length}</span>
+          ) : null}
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setShowCreate((v) => !v)}
+          >
+            {showCreate ? "Закрыть" : "Новая идея"}
+          </button>
+        </div>
       </div>
 
       {error ? <div className="error-banner">{error}</div> : null}
 
-      <div className="backlog-filters">
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          aria-label="Фильтр статуса"
+      {showCreate ? (
+        <form
+          className="connect-panel create-backlog-panel stack"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void createItem();
+          }}
         >
-          <option value="active">Активные</option>
-          <option value="">Все статусы</option>
-          {STATUS_OPTIONS.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={tagFilter}
-          onChange={(e) => setTagFilter(e.target.value)}
-          aria-label="Фильтр тега"
-        >
-          <option value="">Все теги</option>
-          {allTags.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-        <select
-          value={assigneeFilter}
-          onChange={(e) => setAssigneeFilter(e.target.value)}
-          aria-label="Фильтр ответственного"
-        >
-          <option value="all">Все ответственные</option>
-          <option value="me">Мои</option>
-          {assignees.map((a) => (
-            <option key={a.id} value={String(a.id)}>
-              {a.display_name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <form
-        className="backlog-composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void createItem();
-        }}
-      >
-        <div className="backlog-composer-main">
-          <input
-            className="backlog-composer-title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void createItem();
-              }
-            }}
-            placeholder="Быстрая идея…"
-            aria-label="Заголовок"
-            autoFocus
-            disabled={creating}
-          />
-          {notesOpen ? (
+          <div>
+            <h2 className="section-title">Новая идея</h2>
+            <p className="muted">Попадёт в этап «Идея». Клиент и Bitrix не видят.</p>
+          </div>
+          <div className="field">
+            <label>Заголовок</label>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Например, Доработать отчёты"
+              required
+              autoFocus
+              disabled={creating}
+            />
+          </div>
+          <div className="field">
+            <label>Заметки</label>
             <textarea
-              className="backlog-composer-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Контекст, ссылки, детали…"
-              aria-label="Заметки"
               rows={3}
               disabled={creating}
             />
-          ) : null}
-        </div>
-        <div className="backlog-composer-meta">
-          <select
-            value={createPriority}
-            onChange={(e) => setCreatePriority(Number(e.target.value) as BacklogPriority)}
-            aria-label="Приоритет"
-            disabled={creating}
+          </div>
+          <div className="field">
+            <label>Приоритет</label>
+            <div className="task-filters">
+              {PRIORITY_OPTIONS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`task-filter-chip${createPriority === p.id ? " active" : ""}`}
+                  disabled={creating}
+                  onClick={() => setCreatePriority(p.id)}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label>Теги</label>
+            <div className="backlog-tag-picks">
+              {PRESET_TAGS.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  className={`backlog-tag${createTags.includes(tag) ? " is-on" : ""}`}
+                  onClick={() => toggleCreateTag(tag)}
+                  disabled={creating}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button
+            type="submit"
+            className="btn btn-accent"
+            disabled={creating || !title.trim()}
+            style={{ alignSelf: "start" }}
           >
-            {PRIORITY_OPTIONS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          <div className="backlog-tag-picks">
-            {PRESET_TAGS.map((tag) => (
+            {creating ? "Создаём…" : "Добавить в бэклог"}
+          </button>
+        </form>
+      ) : null}
+
+      <div className="backlog-filters">
+        <div className="backlog-filter-group" role="group" aria-label="Теги">
+          <span className="backlog-filter-label">Теги</span>
+          <div className="task-filters">
+            <button
+              type="button"
+              className={`task-filter-chip${tagFilter === "" ? " active" : ""}`}
+              aria-pressed={tagFilter === ""}
+              onClick={() => setTagFilter("")}
+            >
+              Все
+            </button>
+            {allTags.map((t) => (
               <button
-                key={tag}
+                key={t}
                 type="button"
-                className={`backlog-tag${createTags.includes(tag) ? " is-on" : ""}`}
-                onClick={() => toggleCreateTag(tag)}
-                disabled={creating}
+                className={`task-filter-chip${tagFilter === t ? " active" : ""}`}
+                aria-pressed={tagFilter === t}
+                onClick={() => setTagFilter(t)}
               >
-                {tag}
+                {t}
               </button>
             ))}
           </div>
         </div>
-        <div className="backlog-composer-bar">
-          <button
-            type="button"
-            className={`backlog-notes-toggle${notesOpen || notes ? " is-on" : ""}`}
-            onClick={() => setNotesOpen((v) => !v)}
-            disabled={creating}
-          >
-            {notesOpen ? "Скрыть заметку" : notes.trim() ? "Заметка · есть текст" : "Заметка"}
-          </button>
-          <button
-            type="submit"
-            className="btn btn-accent backlog-composer-submit"
-            disabled={creating || !title.trim()}
-          >
-            {creating ? "…" : "Добавить"}
-          </button>
+        <div className="backlog-filter-group" role="group" aria-label="Ответственный">
+          <span className="backlog-filter-label">Кто</span>
+          <div className="task-filters">
+            <button
+              type="button"
+              className={`task-filter-chip${assigneeFilter === "all" ? " active" : ""}`}
+              aria-pressed={assigneeFilter === "all"}
+              onClick={() => setAssigneeFilter("all")}
+            >
+              Все
+            </button>
+            <button
+              type="button"
+              className={`task-filter-chip${assigneeFilter === "me" ? " active" : ""}`}
+              aria-pressed={assigneeFilter === "me"}
+              onClick={() => setAssigneeFilter("me")}
+            >
+              Мои
+            </button>
+            {assignees.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className={`task-filter-chip${
+                  assigneeFilter === String(a.id) ? " active" : ""
+                }`}
+                aria-pressed={assigneeFilter === String(a.id)}
+                onClick={() => setAssigneeFilter(String(a.id))}
+              >
+                {a.display_name}
+              </button>
+            ))}
+          </div>
         </div>
-      </form>
+        <div className="backlog-filter-group">
+          <span className="backlog-filter-label">Вид</span>
+          <div className="task-filters">
+            <button
+              type="button"
+              className={`task-filter-chip${hideClosed ? " active" : ""}`}
+              aria-pressed={hideClosed}
+              onClick={() => setHideClosed(true)}
+            >
+              Активная воронка
+            </button>
+            <button
+              type="button"
+              className={`task-filter-chip${!hideClosed ? " active" : ""}`}
+              aria-pressed={!hideClosed}
+              onClick={() => setHideClosed(false)}
+            >
+              Все этапы
+            </button>
+          </div>
+        </div>
+      </div>
 
-      <section className="backlog-list-section">
-        {loading ? (
-          <div className="empty-linked workspace-empty data-loading-state">
-            <span className="data-loading-spinner" aria-hidden />
-            <p className="muted">Загружаем бэклог…</p>
-          </div>
-        ) : items.length === 0 ? (
-          <div className="backlog-empty">
-            <p className="muted">Пока пусто — набросайте первую идею сверху.</p>
-          </div>
-        ) : (
-          <ul className="backlog-list">
-            {items.map((item) => {
-              const editing = editingId === item.id;
-              const busy = savingId === item.id || converting;
-              return (
-                <li
-                  key={item.id}
-                  className={`backlog-item${editing ? " is-editing" : ""}${
-                    item.is_pinned ? " is-pinned" : ""
-                  }${dragId === item.id ? " is-dragging" : ""}`}
-                  draggable={!editing}
-                  onDragStart={() => setDragId(item.id)}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={() => void onDropReorder(item.id)}
-                  onDragEnd={() => setDragId(null)}
-                >
-                  {editing ? (
-                    <div className="backlog-item-edit">
-                      <input
-                        className="backlog-composer-title"
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        disabled={busy}
-                        aria-label="Заголовок"
-                      />
-                      <textarea
-                        className="backlog-composer-notes"
-                        value={editNotes}
-                        onChange={(e) => setEditNotes(e.target.value)}
-                        disabled={busy}
-                        rows={3}
-                        aria-label="Заметки"
-                      />
-                      <div className="backlog-item-actions">
-                        <button
-                          type="button"
-                          className="btn btn-accent"
-                          disabled={busy || !editTitle.trim()}
-                          onClick={() => void saveEdit(item.id)}
-                        >
-                          Сохранить
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          disabled={busy}
-                          onClick={cancelEdit}
-                        >
-                          Отмена
-                        </button>
-                      </div>
+      {loading ? (
+        <div className="empty-linked workspace-empty data-loading-state">
+          <span className="data-loading-spinner" aria-hidden />
+          <p className="muted">Загружаем воронку…</p>
+        </div>
+      ) : (
+        <div
+          className="backlog-funnel"
+          style={{ ["--funnel-cols" as string]: String(visibleStages.length) }}
+        >
+          {visibleStages.map((stage, stageIndex) => {
+            const colItems = columns[stage.id] || [];
+            return (
+              <section
+                key={stage.id}
+                className={`backlog-funnel-col backlog-funnel-col-${stage.id}${
+                  dragOverStage === stage.id ? " is-drop" : ""
+                }`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOverStage(stage.id);
+                }}
+                onDragLeave={() => {
+                  setDragOverStage((cur) => (cur === stage.id ? null : cur));
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  void dropOnStage(stage.id);
+                }}
+              >
+                <header className="backlog-funnel-head">
+                  <div className="backlog-funnel-step">
+                    <span className="backlog-funnel-num">{stageIndex + 1}</span>
+                    <div>
+                      <h2 className="backlog-funnel-title">{stage.label}</h2>
+                      <p className="backlog-funnel-hint muted">{stage.hint}</p>
                     </div>
+                  </div>
+                  <span className="backlog-funnel-count">{colItems.length}</span>
+                </header>
+                <div className="backlog-funnel-cards">
+                  {colItems.length === 0 ? (
+                    <p className="backlog-funnel-empty muted">Перетащите сюда</p>
                   ) : (
-                    <>
-                      <div className="backlog-item-top">
-                        <div className="backlog-item-heading">
-                          <span className="backlog-drag" title="Перетащить" aria-hidden>
-                            ⋮⋮
-                          </span>
-                          <button
-                            type="button"
-                            className={`backlog-pin${item.is_pinned ? " is-on" : ""}`}
-                            title={item.is_pinned ? "Открепить" : "Закрепить"}
-                            disabled={busy}
-                            onClick={() =>
-                              void patchItem(item.id, { is_pinned: !item.is_pinned })
-                            }
-                          >
-                            {item.is_pinned ? "★" : "☆"}
-                          </button>
-                          <strong className="backlog-item-title">{item.title}</strong>
-                          <span
-                            className={`backlog-priority backlog-priority-${item.priority}`}
-                            title={priorityLabel(item.priority)}
-                          >
-                            {priorityLabel(item.priority)}
-                          </span>
-                        </div>
-                        <time className="backlog-item-time muted" dateTime={item.updated_at}>
-                          {formatUpdated(item.updated_at)}
-                        </time>
-                      </div>
-                      {item.notes ? (
-                        <p className="backlog-item-notes">{item.notes}</p>
-                      ) : null}
-                      <div className="backlog-item-controls">
-                        <select
-                          value={item.status}
-                          disabled={busy}
-                          aria-label="Статус"
-                          onChange={(e) =>
-                            void patchItem(item.id, {
-                              status: e.target.value as BacklogStatus,
-                            })
-                          }
+                    colItems.map((item) => {
+                      const busy = savingId === item.id || converting;
+                      const expanded = expandedId === item.id;
+                      const editing = editingId === item.id;
+                      return (
+                        <article
+                          key={item.id}
+                          className={`backlog-card${item.is_pinned ? " is-pinned" : ""}${
+                            dragId === item.id ? " is-dragging" : ""
+                          }${expanded ? " is-expanded" : ""}`}
+                          draggable={!editing}
+                          onDragStart={(e) => {
+                            e.dataTransfer.effectAllowed = "move";
+                            setDragId(item.id);
+                          }}
+                          onDragEnd={() => {
+                            setDragId(null);
+                            setDragOverStage(null);
+                          }}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void dropOnStage(stage.id, item.id);
+                          }}
                         >
-                          {STATUS_OPTIONS.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={item.priority}
-                          disabled={busy}
-                          aria-label="Приоритет"
-                          onChange={(e) =>
-                            void patchItem(item.id, {
-                              priority: Number(e.target.value) as BacklogPriority,
-                            })
-                          }
-                        >
-                          {PRIORITY_OPTIONS.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.label}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          value={item.assignee ?? ""}
-                          disabled={busy}
-                          aria-label="Ответственный"
-                          onChange={(e) =>
-                            void patchItem(item.id, {
-                              assignee: e.target.value ? Number(e.target.value) : null,
-                            })
-                          }
-                        >
-                          <option value="">Без ответственного</option>
-                          {assignees.map((a) => (
-                            <option key={a.id} value={a.id}>
-                              {a.display_name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="backlog-tag-picks">
-                        {PRESET_TAGS.map((tag) => {
-                          const on = (item.tags || []).includes(tag);
-                          return (
+                          <div className="backlog-card-top">
                             <button
-                              key={tag}
                               type="button"
-                              className={`backlog-tag${on ? " is-on" : ""}`}
+                              className={`backlog-pin${item.is_pinned ? " is-on" : ""}`}
+                              title={item.is_pinned ? "Открепить" : "Закрепить"}
                               disabled={busy}
-                              onClick={() => {
-                                const next = on
-                                  ? (item.tags || []).filter((t) => t !== tag)
-                                  : [...(item.tags || []), tag];
-                                void patchItem(item.id, { tags: next });
-                              }}
+                              onClick={() =>
+                                void patchItem(item.id, { is_pinned: !item.is_pinned })
+                              }
                             >
-                              {tag}
+                              {item.is_pinned ? "★" : "☆"}
                             </button>
-                          );
-                        })}
-                        {(item.tags || [])
-                          .filter((t) => !PRESET_TAGS.includes(t))
-                          .map((tag) => (
-                            <span key={tag} className="backlog-tag is-on">
-                              {tag}
+                            <button
+                              type="button"
+                              className="backlog-card-title-btn"
+                              onClick={() =>
+                                setExpandedId((cur) => (cur === item.id ? null : item.id))
+                              }
+                            >
+                              <strong className="backlog-item-title">{item.title}</strong>
+                            </button>
+                            <span
+                              className={`backlog-priority backlog-priority-${item.priority}`}
+                            >
+                              {priorityLabel(item.priority)}
                             </span>
-                          ))}
-                      </div>
-                      <div className="backlog-item-meta">
-                        <span className="muted">
-                          {item.assignee_name || item.created_by_name || statusLabel(item.status)}
-                        </span>
-                        <div className="backlog-item-actions">
-                          {item.converted_project ? (
-                            <Link
-                              className="btn btn-ghost backlog-item-btn"
-                              to={`/projects/${item.converted_project}`}
-                            >
-                              Проект
-                            </Link>
-                          ) : (
-                            <button
-                              type="button"
-                              className="btn btn-ghost backlog-item-btn"
-                              disabled={busy}
-                              onClick={() => void convertToProject(item.id)}
-                            >
-                              В проект
-                            </button>
-                          )}
-                          {item.converted_task ? (
-                            <Link
-                              className="btn btn-ghost backlog-item-btn"
-                              to={`/tasks/${item.converted_task}`}
-                            >
-                              Задача
-                            </Link>
-                          ) : (
-                            <button
-                              type="button"
-                              className="btn btn-ghost backlog-item-btn"
-                              disabled={busy}
-                              onClick={() => {
-                                setConvertTaskFor(item.id);
-                                setConvertProjectId(projects[0]?.id ?? "");
-                              }}
-                            >
-                              В задачу
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className="btn btn-ghost backlog-item-btn"
-                            disabled={busy}
-                            onClick={() => startEdit(item)}
-                          >
-                            Изменить
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-ghost backlog-item-btn"
-                            disabled={busy}
-                            onClick={() =>
-                              setPendingDelete({ id: item.id, title: item.title })
-                            }
-                          >
-                            Удалить
-                          </button>
-                        </div>
-                      </div>
-                    </>
+                          </div>
+                          {(item.tags || []).length > 0 ? (
+                            <div className="backlog-card-tags">
+                              {(item.tags || []).map((tag) => (
+                                <span key={tag} className="backlog-tag is-on">
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {item.assignee_name ? (
+                            <p className="backlog-card-assignee muted">{item.assignee_name}</p>
+                          ) : null}
+
+                          {expanded ? (
+                            <div className="backlog-card-body">
+                              {editing ? (
+                                <div className="backlog-item-edit">
+                                  <input
+                                    className="backlog-composer-title"
+                                    value={editTitle}
+                                    onChange={(e) => setEditTitle(e.target.value)}
+                                    disabled={busy}
+                                  />
+                                  <textarea
+                                    className="backlog-composer-notes"
+                                    value={editNotes}
+                                    onChange={(e) => setEditNotes(e.target.value)}
+                                    disabled={busy}
+                                    rows={3}
+                                  />
+                                  <div className="backlog-item-actions">
+                                    <button
+                                      type="button"
+                                      className="btn btn-accent"
+                                      disabled={busy || !editTitle.trim()}
+                                      onClick={() => void saveEdit(item.id)}
+                                    >
+                                      Сохранить
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost"
+                                      disabled={busy}
+                                      onClick={cancelEdit}
+                                    >
+                                      Отмена
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  {item.notes ? (
+                                    <p className="backlog-item-notes">{item.notes}</p>
+                                  ) : (
+                                    <p className="muted">Без заметок</p>
+                                  )}
+                                  <div className="backlog-item-controls">
+                                    <select
+                                      value={item.priority}
+                                      disabled={busy}
+                                      aria-label="Приоритет"
+                                      onChange={(e) =>
+                                        void patchItem(item.id, {
+                                          priority: Number(e.target.value) as BacklogPriority,
+                                        })
+                                      }
+                                    >
+                                      {PRIORITY_OPTIONS.map((p) => (
+                                        <option key={p.id} value={p.id}>
+                                          {p.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <select
+                                      value={item.assignee ?? ""}
+                                      disabled={busy}
+                                      aria-label="Ответственный"
+                                      onChange={(e) =>
+                                        void patchItem(item.id, {
+                                          assignee: e.target.value
+                                            ? Number(e.target.value)
+                                            : null,
+                                        })
+                                      }
+                                    >
+                                      <option value="">Без ответственного</option>
+                                      {assignees.map((a) => (
+                                        <option key={a.id} value={a.id}>
+                                          {a.display_name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div className="backlog-tag-picks">
+                                    {PRESET_TAGS.map((tag) => {
+                                      const on = (item.tags || []).includes(tag);
+                                      return (
+                                        <button
+                                          key={tag}
+                                          type="button"
+                                          className={`backlog-tag${on ? " is-on" : ""}`}
+                                          disabled={busy}
+                                          onClick={() => {
+                                            const next = on
+                                              ? (item.tags || []).filter((t) => t !== tag)
+                                              : [...(item.tags || []), tag];
+                                            void patchItem(item.id, { tags: next });
+                                          }}
+                                        >
+                                          {tag}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  <div className="backlog-item-actions">
+                                    {item.converted_project ? (
+                                      <Link
+                                        className="btn btn-ghost backlog-item-btn"
+                                        to={`/projects/${item.converted_project}`}
+                                      >
+                                        Проект
+                                      </Link>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost backlog-item-btn"
+                                        disabled={busy}
+                                        onClick={() => void convertToProject(item.id)}
+                                      >
+                                        В проект
+                                      </button>
+                                    )}
+                                    {item.converted_task ? (
+                                      <Link
+                                        className="btn btn-ghost backlog-item-btn"
+                                        to={`/tasks/${item.converted_task}`}
+                                      >
+                                        Задача
+                                      </Link>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost backlog-item-btn"
+                                        disabled={busy}
+                                        onClick={() => {
+                                          setConvertTaskFor(item.id);
+                                          setConvertProjectId(projects[0]?.id ?? "");
+                                        }}
+                                      >
+                                        В задачу
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost backlog-item-btn"
+                                      disabled={busy}
+                                      onClick={() => startEdit(item)}
+                                    >
+                                      Изменить
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost backlog-item-btn"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        setPendingDelete({
+                                          id: item.id,
+                                          title: item.title,
+                                        })
+                                      }
+                                    >
+                                      Удалить
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ) : null}
+                        </article>
+                      );
+                    })
                   )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
 
       <ConfirmDialog
         open={Boolean(pendingDelete)}
