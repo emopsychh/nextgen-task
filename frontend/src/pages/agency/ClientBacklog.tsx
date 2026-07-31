@@ -63,7 +63,6 @@ export function ClientBacklog() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState("");
-  const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [hideClosed, setHideClosed] = useState(true);
 
   const [showCreate, setShowCreate] = useState(false);
@@ -92,7 +91,6 @@ export function ClientBacklog() {
       if (!token || !portalId) return;
       const params = new URLSearchParams({ portal: String(portalId) });
       if (tagFilter) params.set("tag", tagFilter);
-      if (assigneeFilter !== "all") params.set("assignee", assigneeFilter);
       const data = await api<BacklogItem[]>(
         `/api/backlog-items/?${params}`,
         { signal },
@@ -101,7 +99,7 @@ export function ClientBacklog() {
       if (signal?.aborted) return;
       setItems(sortItems(Array.isArray(data) ? data : []));
     },
-    [token, portalId, tagFilter, assigneeFilter]
+    [token, portalId, tagFilter]
   );
 
   useEffect(() => {
@@ -483,85 +481,45 @@ export function ClientBacklog() {
         </form>
       ) : null}
 
-      <div className="backlog-filters">
-        <div className="backlog-filter-group" role="group" aria-label="Теги">
-          <span className="backlog-filter-label">Теги</span>
-          <div className="task-filters">
+      <div className="backlog-toolbar">
+        <div className="task-filters" role="group" aria-label="Теги">
+          <button
+            type="button"
+            className={`task-filter-chip${tagFilter === "" ? " active" : ""}`}
+            aria-pressed={tagFilter === ""}
+            onClick={() => setTagFilter("")}
+          >
+            Все теги
+          </button>
+          {allTags.map((t) => (
             <button
+              key={t}
               type="button"
-              className={`task-filter-chip${tagFilter === "" ? " active" : ""}`}
-              aria-pressed={tagFilter === ""}
-              onClick={() => setTagFilter("")}
+              className={`task-filter-chip${tagFilter === t ? " active" : ""}`}
+              aria-pressed={tagFilter === t}
+              onClick={() => setTagFilter(t)}
             >
-              Все
+              {t}
             </button>
-            {allTags.map((t) => (
-              <button
-                key={t}
-                type="button"
-                className={`task-filter-chip${tagFilter === t ? " active" : ""}`}
-                aria-pressed={tagFilter === t}
-                onClick={() => setTagFilter(t)}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
+          ))}
         </div>
-        <div className="backlog-filter-group" role="group" aria-label="Ответственный">
-          <span className="backlog-filter-label">Кто</span>
-          <div className="task-filters">
-            <button
-              type="button"
-              className={`task-filter-chip${assigneeFilter === "all" ? " active" : ""}`}
-              aria-pressed={assigneeFilter === "all"}
-              onClick={() => setAssigneeFilter("all")}
-            >
-              Все
-            </button>
-            <button
-              type="button"
-              className={`task-filter-chip${assigneeFilter === "me" ? " active" : ""}`}
-              aria-pressed={assigneeFilter === "me"}
-              onClick={() => setAssigneeFilter("me")}
-            >
-              Мои
-            </button>
-            {assignees.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                className={`task-filter-chip${
-                  assigneeFilter === String(a.id) ? " active" : ""
-                }`}
-                aria-pressed={assigneeFilter === String(a.id)}
-                onClick={() => setAssigneeFilter(String(a.id))}
-              >
-                {a.display_name}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="backlog-filter-group">
-          <span className="backlog-filter-label">Вид</span>
-          <div className="task-filters">
-            <button
-              type="button"
-              className={`task-filter-chip${hideClosed ? " active" : ""}`}
-              aria-pressed={hideClosed}
-              onClick={() => setHideClosed(true)}
-            >
-              Активная воронка
-            </button>
-            <button
-              type="button"
-              className={`task-filter-chip${!hideClosed ? " active" : ""}`}
-              aria-pressed={!hideClosed}
-              onClick={() => setHideClosed(false)}
-            >
-              Все этапы
-            </button>
-          </div>
+        <div className="task-filters backlog-view-toggle" role="group" aria-label="Вид воронки">
+          <button
+            type="button"
+            className={`task-filter-chip${hideClosed ? " active" : ""}`}
+            aria-pressed={hideClosed}
+            onClick={() => setHideClosed(true)}
+          >
+            Активные
+          </button>
+          <button
+            type="button"
+            className={`task-filter-chip${!hideClosed ? " active" : ""}`}
+            aria-pressed={!hideClosed}
+            onClick={() => setHideClosed(false)}
+          >
+            Все этапы
+          </button>
         </div>
       </div>
 

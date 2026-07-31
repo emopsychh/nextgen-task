@@ -7535,37 +7535,21 @@ button.nav-item {
   box-shadow: 0 0 0 3px rgba(31, 158, 138, 0.12);
 }
 
-.backlog-filters {
+.backlog-toolbar {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid var(--line);
+  flex-wrap: wrap;
+  margin-bottom: 14px;
 }
 
-.backlog-filter-group {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  min-width: 0;
-}
-
-.backlog-filter-label {
-  flex: 0 0 4.5rem;
-  padding-top: 9px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-muted);
-}
-
-.backlog-filters .task-filters {
+.backlog-toolbar .task-filters {
   margin: 0;
-  flex: 1 1 auto;
+}
+
+.backlog-view-toggle {
+  flex: 0 0 auto;
 }
 
 .backlog-item-controls select {
@@ -7578,17 +7562,6 @@ button.nav-item {
   font-size: 0.88rem;
   color: var(--ink);
   cursor: pointer;
-}
-
-@media (max-width: 640px) {
-  .backlog-filter-group {
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .backlog-filter-label {
-    padding-top: 0;
-  }
 }
 
 .backlog-tag-picks {
