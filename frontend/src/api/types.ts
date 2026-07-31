@@ -255,15 +255,39 @@ export type SupportTicket = {
   closed_at: string | null;
 };
 
+export type BacklogStatus =
+  | "idea"
+  | "in_progress"
+  | "deferred"
+  | "done"
+  | "converted";
+
+export type BacklogPriority = 0 | 1 | 2;
+
 export type BacklogItem = {
   id: number;
   portal: number;
   title: string;
   notes: string;
+  status: BacklogStatus;
+  priority: BacklogPriority;
+  sort_order: number;
+  is_pinned: boolean;
+  tags: string[];
+  assignee: number | null;
+  assignee_name: string;
+  converted_project: number | null;
+  converted_task: number | null;
   created_by: number | null;
   created_by_name: string;
   created_at: string;
   updated_at: string;
+};
+
+export type BacklogAssigneeOption = {
+  id: number;
+  display_name: string;
+  bitrix_id: string;
 };
 
 export type DealBinding = {

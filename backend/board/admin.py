@@ -123,7 +123,16 @@ class SupportTicketAdmin(admin.ModelAdmin):
 
 @admin.register(BacklogItem)
 class BacklogItemAdmin(admin.ModelAdmin):
-    list_display = ("id", "portal", "title", "created_by", "updated_at")
-    list_filter = ("portal",)
+    list_display = (
+        "id",
+        "portal",
+        "title",
+        "status",
+        "priority",
+        "is_pinned",
+        "assignee",
+        "updated_at",
+    )
+    list_filter = ("portal", "status", "priority", "is_pinned")
     search_fields = ("title", "notes")
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("created_at", "updated_at", "converted_project", "converted_task")

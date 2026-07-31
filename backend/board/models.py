@@ -317,9 +317,47 @@ class WorkReportLineAttachment(models.Model):
 class BacklogItem(models.Model):
     """Agency-only internal notes for a client portal (not synced to Bitrix / clients)."""
 
+    class Status(models.TextChoices):
+        IDEA = "idea", "Идея"
+        IN_PROGRESS = "in_progress", "В работе"
+        DEFERRED = "deferred", "Отложено"
+        DONE = "done", "Сделано"
+        CONVERTED = "converted", "В проект/задачу"
+
+    class Priority(models.IntegerChoices):
+        LOW = 0, "Низкий"
+        NORMAL = 1, "Обычный"
+        HIGH = 2, "Высокий"
+
     portal = models.ForeignKey(Portal, on_delete=models.CASCADE, related_name="backlog_items")
     title = models.CharField(max_length=500)
     notes = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.IDEA, db_index=True)
+    priority = models.PositiveSmallIntegerField(choices=Priority.choices, default=Priority.NORMAL)
+    sort_order = models.IntegerField(default=0, db_index=True)
+    is_pinned = models.BooleanField(default=False)
+    tags = models.JSONField(default=list, blank=True)
+    assignee = models.ForeignKey(
+        BitrixUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_backlog_items",
+    )
+    converted_project = models.ForeignKey(
+        "Project",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="from_backlog_items",
+    )
+    converted_task = models.ForeignKey(
+        "Task",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="from_backlog_items",
+    )
     created_by = models.ForeignKey(
         BitrixUser,
         on_delete=models.SET_NULL,
@@ -331,7 +369,7 @@ class BacklogItem(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-updated_at", "-id"]
+        ordering = ["-is_pinned", "sort_order", "-priority", "-updated_at", "-id"]
 
     def __str__(self):
         return f"BacklogItem#{self.pk} {self.title[:40]}"

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 
 type ConfirmDialogProps = {
   open: boolean;
@@ -7,6 +7,7 @@ type ConfirmDialogProps = {
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  children?: ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -18,6 +19,7 @@ export function ConfirmDialog({
   confirmLabel = "Подтвердить",
   cancelLabel = "Отмена",
   danger = false,
+  children,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -68,6 +70,7 @@ export function ConfirmDialog({
             {description}
           </p>
         ) : null}
+        {children}
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>
             {cancelLabel}

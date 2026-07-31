@@ -832,6 +832,12 @@ class SupportTicketSerializer(serializers.ModelSerializer):
 
 class BacklogItemSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
+    assignee_name = serializers.SerializerMethodField()
+    tags = serializers.ListField(
+        child=serializers.CharField(max_length=40, trim_whitespace=True),
+        required=False,
+        allow_empty=True,
+    )
 
     class Meta:
         model = BacklogItem
@@ -840,17 +846,66 @@ class BacklogItemSerializer(serializers.ModelSerializer):
             "portal",
             "title",
             "notes",
+            "status",
+            "priority",
+            "sort_order",
+            "is_pinned",
+            "tags",
+            "assignee",
+            "assignee_name",
+            "converted_project",
+            "converted_task",
             "created_by",
             "created_by_name",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "created_by", "created_by_name", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "sort_order",
+            "converted_project",
+            "converted_task",
+            "created_by",
+            "created_by_name",
+            "assignee_name",
+            "created_at",
+            "updated_at",
+        )
 
     def get_created_by_name(self, obj):
         if obj.created_by_id:
             return obj.created_by.display_name
         return ""
+
+    def get_assignee_name(self, obj):
+        if obj.assignee_id:
+            return obj.assignee.display_name
+        return ""
+
+    def validate_tags(self, value):
+        cleaned = []
+        seen = set()
+        for raw in value or []:
+            tag = (raw or "").strip().lower()[:40]
+            if not tag or tag in seen:
+                continue
+            seen.add(tag)
+            cleaned.append(tag)
+            if len(cleaned) >= 8:
+                break
+        return cleaned
+
+    def validate_status(self, value):
+        allowed = {c.value for c in BacklogItem.Status}
+        if value not in allowed:
+            raise serializers.ValidationError("Некорректный статус")
+        return value
+
+    def validate_priority(self, value):
+        allowed = {c.value for c in BacklogItem.Priority}
+        if value not in allowed:
+            raise serializers.ValidationError("Некорректный приоритет")
+        return value
 
 
 class SupportTicketCreateSerializer(serializers.Serializer):

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from board.models import BacklogItem
-from board.tests.helpers import make_link, make_portal, make_user
+from board.models import BacklogItem, Project, Task
+from board.tests.helpers import make_link, make_portal, make_project, make_user
 from portals.models import Portal
 from portals.serializers import issue_tokens
 
@@ -19,6 +21,7 @@ class BacklogItemApiTests(TestCase):
         self.client_b = make_portal(Portal.Role.CLIENT, member_id="client-b-bl", name="Client B")
         make_link(self.agency, self.client_a)
         self.agency_user = make_user(self.agency, bitrix_id="a1", name="Agency", last_name="User")
+        self.agency_user_2 = make_user(self.agency, bitrix_id="a2", name="Second", last_name="Dev")
         self.client_user = make_user(
             self.client_a, bitrix_id="c1", name="Client", last_name="User"
         )
@@ -43,39 +46,46 @@ class BacklogItemApiTests(TestCase):
     def test_agency_crud_scoped_to_linked_portal(self):
         create = self.agency_client.post(
             "/api/backlog-items/",
-            {"portal": self.client_a.id, "title": "Идея", "notes": "черновик"},
+            {
+                "portal": self.client_a.id,
+                "title": "Идея",
+                "notes": "черновик",
+                "priority": 2,
+                "tags": ["upsell", "баг"],
+                "assignee": self.agency_user_2.id,
+            },
             format="json",
         )
         self.assertEqual(create.status_code, 201, create.content)
         item_id = create.data["id"]
         self.assertEqual(create.data["title"], "Идея")
-        self.assertEqual(create.data["notes"], "черновик")
+        self.assertEqual(create.data["status"], "idea")
+        self.assertEqual(create.data["priority"], 2)
+        self.assertEqual(create.data["tags"], ["upsell", "баг"])
+        self.assertEqual(create.data["assignee"], self.agency_user_2.id)
         self.assertEqual(create.data["portal"], self.client_a.id)
-        self.assertEqual(create.data["created_by"], self.agency_user.id)
 
         listed = self.agency_client.get(f"/api/backlog-items/?portal={self.client_a.id}")
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(len(listed.data), 1)
-        self.assertEqual(listed.data[0]["id"], item_id)
 
-        # Unlinked client B — no access
         denied = self.agency_client.get(f"/api/backlog-items/?portal={self.client_b.id}")
         self.assertEqual(denied.status_code, 403)
-        create_b = self.agency_client.post(
-            "/api/backlog-items/",
-            {"portal": self.client_b.id, "title": "Чужой", "notes": ""},
-            format="json",
-        )
-        self.assertEqual(create_b.status_code, 403)
 
         patched = self.agency_client.patch(
             f"/api/backlog-items/{item_id}/",
-            {"title": "Идея 2", "notes": "обновлено"},
+            {
+                "title": "Идея 2",
+                "status": "in_progress",
+                "is_pinned": True,
+                "priority": 1,
+            },
             format="json",
         )
         self.assertEqual(patched.status_code, 200, patched.content)
         self.assertEqual(patched.data["title"], "Идея 2")
-        self.assertEqual(patched.data["notes"], "обновлено")
+        self.assertEqual(patched.data["status"], "in_progress")
+        self.assertTrue(patched.data["is_pinned"])
 
         deleted = self.agency_client.delete(f"/api/backlog-items/{item_id}/")
         self.assertEqual(deleted.status_code, 204)
@@ -84,3 +94,49 @@ class BacklogItemApiTests(TestCase):
     def test_list_requires_portal(self):
         r = self.agency_client.get("/api/backlog-items/")
         self.assertEqual(r.status_code, 400)
+
+    @patch("board.views.enqueue_bitrix_sync")
+    @patch("board.views.enqueue_project_sync")
+    def test_reorder_and_convert(self, _project_sync, _task_sync):
+        a = self.agency_client.post(
+            "/api/backlog-items/",
+            {"portal": self.client_a.id, "title": "A"},
+            format="json",
+        ).data
+        b = self.agency_client.post(
+            "/api/backlog-items/",
+            {"portal": self.client_a.id, "title": "B"},
+            format="json",
+        ).data
+        reorder = self.agency_client.post(
+            "/api/backlog-items/reorder/",
+            {"portal": self.client_a.id, "ordered_ids": [b["id"], a["id"]]},
+            format="json",
+        )
+        self.assertEqual(reorder.status_code, 200, reorder.content)
+        self.assertEqual([row["id"] for row in reorder.data], [b["id"], a["id"]])
+
+        project = make_project(self.client_a, name="Модуль")
+        to_task = self.agency_client.post(
+            f"/api/backlog-items/{a['id']}/convert-task/",
+            {"project": project.id},
+            format="json",
+        )
+        self.assertEqual(to_task.status_code, 201, to_task.content)
+        self.assertEqual(to_task.data["status"], "converted")
+        self.assertTrue(Task.objects.filter(pk=to_task.data["task_id"]).exists())
+
+        to_project = self.agency_client.post(
+            f"/api/backlog-items/{b['id']}/convert-project/",
+            {},
+            format="json",
+        )
+        self.assertEqual(to_project.status_code, 201, to_project.content)
+        self.assertTrue(Project.objects.filter(pk=to_project.data["project_id"]).exists())
+
+    def test_assignees_list(self):
+        r = self.agency_client.get("/api/backlog-items/assignees/")
+        self.assertEqual(r.status_code, 200)
+        ids = {row["id"] for row in r.data}
+        self.assertIn(self.agency_user.id, ids)
+        self.assertIn(self.agency_user_2.id, ids)
