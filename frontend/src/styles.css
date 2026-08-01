@@ -1423,6 +1423,7 @@ a {
 .activity-detail {
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -2874,6 +2875,7 @@ a.task-card.is-done:hover,
   line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -6656,6 +6658,7 @@ a.task-card.is-done:hover,
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
@@ -6765,7 +6768,9 @@ a.task-card.is-done:hover,
   display: grid;
   grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   gap: 0;
-  min-height: min(70vh, 720px);
+  height: min(86vh, 920px);
+  min-height: min(78vh, 820px);
+  max-height: calc(100vh - 140px);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #fff;
@@ -7059,7 +7064,9 @@ a.task-card.is-done:hover,
 @media (max-width: 860px) {
   .tickets-layout {
     grid-template-columns: 1fr;
+    height: auto;
     min-height: 0;
+    max-height: none;
   }
 
   .tickets-list-pane {
