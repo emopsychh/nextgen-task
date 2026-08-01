@@ -82,6 +82,10 @@
   gap: 10px;
 }
 
+.onboard-tip-actions.is-nav-only {
+  justify-content: flex-end;
+}
+
 .onboard-skip {
   padding: 6px 10px;
   font-size: 0.8rem;
@@ -93,6 +97,10 @@
   flex-wrap: wrap;
   gap: 8px;
   margin-left: auto;
+}
+
+.onboard-tip-actions.is-nav-only .onboard-nav {
+  margin-left: 0;
 }
 
 .onboard-next {

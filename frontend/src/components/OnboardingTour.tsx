@@ -71,15 +71,24 @@ function tipPosition(rect: DOMRect, tipW: number, tipH: number, preferred: TourP
   return { top, left, placement };
 }
 
-async function resolveClientWorkspace(token: string): Promise<string | null> {
+async function resolveClientPortalId(token: string): Promise<number | null> {
   try {
     const data = await api<LinkRow[] | { results: LinkRow[] }>("/api/portal-links/", {}, token);
     const first = unwrapList(data)[0];
-    if (first?.client_portal?.id) return `/portals/${first.client_portal.id}`;
+    return first?.client_portal?.id ?? null;
   } catch {
-    /* ignore */
+    return null;
   }
-  return null;
+}
+
+function missingTargetBody(step: TourStep): string {
+  if (step.route === "client-workspace" || step.route === "client-projects") {
+    return "Сначала привяжите клиента (шаг с «Подключить») — тогда откроется его кабинет. Пока можно продолжить тур.";
+  }
+  if (step.id === "hours") {
+    return "Блок часов появится после привязки сделки сопровождения. Пока можно продолжить тур.";
+  }
+  return step.body;
 }
 
 export function OnboardingTour() {
@@ -152,11 +161,26 @@ export function OnboardingTour() {
       if (!step) return;
       if (step.route === "home") {
         navigate("/");
-      } else if (step.route === "client-workspace" && role === "agency") {
-        const path = await resolveClientWorkspace(token!);
-        if (path) navigate(path);
-        else navigate("/");
-      } else if (step.route && step.route !== "home" && step.route !== "client-workspace") {
+      } else if (
+        (step.route === "client-workspace" || step.route === "client-projects") &&
+        role === "agency"
+      ) {
+        const clientId = await resolveClientPortalId(token!);
+        if (clientId) {
+          navigate(
+            step.route === "client-projects"
+              ? `/portals/${clientId}/projects`
+              : `/portals/${clientId}`
+          );
+        } else {
+          navigate("/");
+        }
+      } else if (
+        step.route &&
+        step.route !== "home" &&
+        step.route !== "client-workspace" &&
+        step.route !== "client-projects"
+      ) {
         navigate(step.route);
       }
 
@@ -243,21 +267,21 @@ export function OnboardingTour() {
             {step.title}
           </h2>
           <p className="onboard-tip-body">
-            {missingTarget && step.route === "client-workspace"
-              ? "Сначала привяжите клиента (шаг с «Подключить») — тогда откроется его кабинет с этой кнопкой. Пока можно продолжить тур."
-              : step.body}
+            {missingTarget ? missingTargetBody(step) : step.body}
           </p>
 
-          <div className="onboard-tip-actions">
-            <button type="button" className="btn btn-ghost onboard-skip" onClick={finish}>
-              Мне не нужно обучение
-            </button>
+          <div className={`onboard-tip-actions${index === 0 ? "" : " is-nav-only"}`}>
+            {index === 0 ? (
+              <button type="button" className="btn btn-ghost onboard-skip" onClick={finish}>
+                Пропустить обучение
+              </button>
+            ) : null}
             <div className="onboard-nav">
-              {index > 0 && (
+              {index > 0 ? (
                 <button type="button" className="btn btn-ghost" onClick={back}>
                   Назад
                 </button>
-              )}
+              ) : null}
               <button type="button" className="btn btn-accent onboard-next" onClick={next}>
                 {isLast ? "Начать работу" : "Далее"}
               </button>

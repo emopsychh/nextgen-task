@@ -8,7 +8,7 @@ export type TourStep = {
   body: string;
   placement?: TourPlacement;
   /** Navigate before showing this step */
-  route?: string | "home" | "client-workspace";
+  route?: string | "home" | "client-workspace" | "client-projects";
 };
 
 export const AGENCY_STEPS: TourStep[] = [
@@ -16,7 +16,7 @@ export const AGENCY_STEPS: TourStep[] = [
     id: "welcome",
     target: null,
     title: "Добро пожаловать в кабинет агентства",
-    body: "Короткий тур подсветит реальные кнопки и панели. Можно пропускать шаги или закрыть обучение целиком.",
+    body: "Короткий тур подсветит реальные кнопки и панели. На этом шаге можно полностью пропустить обучение.",
   },
   {
     id: "rail",
@@ -45,16 +45,16 @@ export const AGENCY_STEPS: TourStep[] = [
   {
     id: "workspace",
     target: "tour-new-project",
-    title: "Рабочее пространство клиента",
-    body: "В кабинете клиента создавайте проекты — модули работ. В Bitrix это задачи внутри проекта компании.",
+    title: "Проекты клиента",
+    body: "В списке проектов создавайте модули работ («Новый проект»). В Bitrix это задачи внутри проекта компании.",
     placement: "bottom",
-    route: "client-workspace",
+    route: "client-projects",
   },
   {
     id: "sidebar",
     target: "tour-sidebar",
-    title: "Проекты слева",
-    body: "В боковой панели — список проектов. Отсюда быстро попадаете в задачи.",
+    title: "Кабинет клиента слева",
+    body: "В боковой панели — обзор, проекты, отчёты и бэклог выбранного клиента.",
     placement: "right",
     route: "client-workspace",
   },
@@ -62,7 +62,7 @@ export const AGENCY_STEPS: TourStep[] = [
     id: "focus",
     target: "tour-agency-focus",
     title: "Что важно сейчас",
-    body: "Здесь пакет часов, обращения по отчётам, задачи от клиента и то, что горит по срокам.",
+    body: "На обзоре — обращения по отчётам, активные проекты и то, что горит по срокам.",
     placement: "left",
     route: "client-workspace",
   },
@@ -87,13 +87,13 @@ export const CLIENT_STEPS: TourStep[] = [
     id: "welcome",
     target: null,
     title: "Добро пожаловать",
-    body: "Это ваше пространство для задач агентству. Тур покажет кнопки, которыми вы будете пользоваться каждый день.",
+    body: "Это ваше пространство для задач агентству. Тур покажет кнопки на каждый день. На этом шаге обучение можно пропустить.",
   },
   {
     id: "sidebar",
     target: "tour-sidebar",
-    title: "Ваши проекты",
-    body: "Слева — список проектов. Проекты создаёт агентство; вы работаете с задачами внутри них.",
+    title: "Ваш кабинет слева",
+    body: "Слева — обзор, проекты и отчёты. Проекты создаёт агентство; вы работаете с задачами внутри них.",
     placement: "right",
     route: "home",
   },
@@ -108,8 +108,8 @@ export const CLIENT_STEPS: TourStep[] = [
   {
     id: "waiting",
     target: "tour-waiting-for-you",
-    title: "Ждёт вас",
-    body: "Сверху пакет часов. Ниже два столбца: отчёты на согласование и недавно завершённые задачи.",
+    title: "Обзор пространства",
+    body: "Здесь проекты в работе и недавно завершённые задачи — быстрый вход в нужный модуль.",
     placement: "top",
     route: "home",
   },
@@ -125,6 +125,6 @@ export const CLIENT_STEPS: TourStep[] = [
     id: "done",
     target: null,
     title: "Можно начинать",
-    body: "Откройте проект слева и создайте задачу, когда нужна работа от команды.",
+    body: "Откройте проект и создайте задачу, когда нужна работа от команды.",
   },
 ];
