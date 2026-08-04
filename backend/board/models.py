@@ -74,6 +74,13 @@ class Task(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["agency_bitrix_task_id"],
+                condition=~models.Q(agency_bitrix_task_id=""),
+                name="uniq_task_agency_bitrix_id",
+            ),
+        ]
 
     def __str__(self):
         return self.title

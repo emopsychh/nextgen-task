@@ -539,8 +539,14 @@ def _sync_one_portal(
     group_id: str | None = None,
     parent_id: str | None = None,
     crm_bindings: list[str] | None = None,
+    create_only: bool = False,
 ) -> str:
-    """Create/update Bitrix task on a portal; return bitrix task id."""
+    """Create/update Bitrix task on a portal; return bitrix task id.
+
+    ``create_only=True`` stops right after tasks.task.add so the caller can
+    commit ``agency_bitrix_task_id`` before RESPONSIBLE/status updates (those
+    fire OnTaskUpdate and must not race an unbound local row).
+    """
     if not portal.access_token:
         raise BitrixAPIError(f"Нет токена Bitrix у портала {portal.domain or portal.id}")
 
@@ -591,6 +597,23 @@ def _sync_one_portal(
                 existing_id,
                 exc,
             )
+        # After create_only phase, reassign away from OAuth user if needed.
+        oauth_uid = _bitrix_user_id(client.get_current_user())
+        if (
+            responsible_id
+            and oauth_uid
+            and responsible_id != oauth_uid
+        ):
+            try:
+                client.update_task(existing_id, {"RESPONSIBLE_ID": responsible_id})
+            except BitrixAPIError as exc:
+                logger.info(
+                    "reassign RESPONSIBLE to %s failed bitrix=%s (%s) — keep oauth=%s",
+                    responsible_id,
+                    existing_id,
+                    exc,
+                    oauth_uid,
+                )
         try:
             apply_bitrix_status(client, existing_id, task.status)
         except BitrixAPIError as exc:
@@ -619,6 +642,9 @@ def _sync_one_portal(
     bitrix_id = _extract_bitrix_id(result)
     if not bitrix_id:
         raise BitrixAPIError("Bitrix не вернул id созданной задачи")
+
+    if create_only:
+        return bitrix_id
 
     try:
         client.get_task(bitrix_id)
@@ -789,32 +815,64 @@ def _sync_task_locked(task) -> dict:
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def sync_task_to_bitrix(self, task_id: int):
     """
-    Sync task:
-    - client Bitrix: flat task (no GROUP/PARENT)
-    - agency Bitrix: subtask under Project parent (PARENT_ID + GROUP_ID)
+    Sync task to agency Bitrix as a subtask under the Project parent.
 
-    Runs under a per-task row lock so overlapping jobs (rapid create+edit, or a
-    retry racing a fresh enqueue) can never create duplicate Bitrix tasks.
+    Two-phase so OnTaskAdd/OnTaskUpdate cannot invent duplicate locals:
+      1) create Bitrix row (if needed) and *commit* agency_bitrix_task_id
+      2) push fields / RESPONSIBLE / status (webhooks now find the same row)
     """
     from django.db import transaction
 
     from board.models import Task
 
+    def _locked_task():
+        return (
+            Task.objects.select_for_update(of=("self",))
+            .select_related("project", "project__portal", "created_by")
+            .get(pk=task_id)
+        )
+
     try:
+        # Phase 1 — create + commit id before webhook-triggering updates.
         with transaction.atomic():
             try:
-                # Lock ONLY the task row. `created_by` is nullable, so
-                # select_related() adds a LEFT OUTER JOIN and Postgres refuses
-                # "FOR UPDATE" on the nullable side of an outer join. of=("self",)
-                # restricts the lock to the Task table and avoids that error.
-                task = (
-                    Task.objects.select_for_update(of=("self",))
-                    .select_related("project", "project__portal", "created_by")
-                    .get(pk=task_id)
+                task = _locked_task()
+            except Task.DoesNotExist:
+                return {"ok": False, "reason": "missing"}
+            client_portal = task.project.portal
+            agency = _agency_portal_for_client(client_portal)
+            if (
+                agency
+                and agency.id != client_portal.id
+                and not (task.agency_bitrix_task_id or "").strip()
+            ):
+                parent_id, group_id = _ensure_project_agency_parent(task.project)
+                crm_bindings = _crm_deal_uf_bindings(client_portal)
+                new_id = _sync_one_portal(
+                    task,
+                    agency,
+                    existing_id="",
+                    group_id=group_id,
+                    parent_id=parent_id,
+                    crm_bindings=crm_bindings or None,
+                    create_only=True,
                 )
+                task.agency_bitrix_task_id = new_id
+                task.save(update_fields=["agency_bitrix_task_id", "updated_at"])
+
+        # Phase 2 — full field/status sync (id already visible to other txs).
+        with transaction.atomic():
+            try:
+                task = _locked_task()
             except Task.DoesNotExist:
                 return {"ok": False, "reason": "missing"}
             outcome = _sync_task_locked(task)
+    except BitrixAPIError as exc:
+        logger.info("sync_task_to_bitrix bitrix error task=%s: %s", task_id, exc)
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": str(exc)}
     except Exception as exc:
         # Unexpected failure around the locked section — let Celery retry.
         logger.exception("sync_task_to_bitrix crashed task=%s", task_id)

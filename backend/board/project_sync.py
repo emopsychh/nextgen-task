@@ -148,7 +148,17 @@ def upsert_project_from_bitrix(*, client_portal, task_data: dict, group_id: str 
 
 
 def upsert_task_from_bitrix_subtask(*, project, task_data: dict, agency: bool = True):
-    """Create/update app Task from a Bitrix subtask under a Project parent."""
+    """Create/update app Task from a Bitrix subtask under a Project parent.
+
+    Outbound sync creates the Bitrix row *before* ``agency_bitrix_task_id`` is
+    committed, so OnTaskAdd/OnTaskUpdate can race in. We must claim the local
+    PENDING task instead of inserting duplicates.
+    """
+    from datetime import timedelta
+
+    from django.db import IntegrityError, transaction
+    from django.utils import timezone
+
     from board.models import Task
     from board.status_sync import (
         bitrix_task_is_important,
@@ -166,53 +176,132 @@ def upsert_task_from_bitrix_subtask(*, project, task_data: dict, agency: bool = 
     due = parse_bitrix_deadline(task_data)
     important = bitrix_task_is_important(task_data)
 
-    qs = Task.objects.filter(project=project)
-    if agency:
-        task = qs.filter(agency_bitrix_task_id=bitrix_id).first()
-    else:
-        task = qs.filter(bitrix_task_id=bitrix_id).first()
-
-    if task:
-        changed = False
+    def _apply_fields(task, *, created: bool) -> tuple:
+        changed = created
         if task.title != title:
             task.title = title
             changed = True
         if description and task.description != description:
             task.description = description
             changed = True
-        if task.status != status:
-            task.status = status
-            changed = True
+        # Do not clobber a pending local status/importance with a mid-flight echo.
+        if task.sync_status != Task.SyncStatus.PENDING:
+            if task.status != status:
+                task.status = status
+                changed = True
+            if important is not None and task.is_important != important:
+                task.is_important = important
+                changed = True
         if task.due_date != due:
             task.due_date = due
-            changed = True
-        if important is not None and task.is_important != important:
-            task.is_important = important
             changed = True
         if agency and task.agency_bitrix_task_id != bitrix_id:
             task.agency_bitrix_task_id = bitrix_id
             changed = True
-        if changed:
-            task.sync_status = Task.SyncStatus.SYNCED
-            task.sync_error = ""
+        if not agency and task.bitrix_task_id != bitrix_id:
+            task.bitrix_task_id = bitrix_id
+            changed = True
+        if changed and not created:
+            if task.sync_status != Task.SyncStatus.PENDING:
+                task.sync_status = Task.SyncStatus.SYNCED
+                task.sync_error = ""
             task.save()
-        return task, False
+        return task, created
 
-    kwargs = {
-        "project": project,
-        "title": title,
-        "description": description,
-        "status": status,
-        "due_date": due,
-        "is_important": bool(important),
-        "sync_status": Task.SyncStatus.SYNCED,
-    }
-    if agency:
-        kwargs["agency_bitrix_task_id"] = bitrix_id
-    else:
-        kwargs["bitrix_task_id"] = bitrix_id
-    task = Task.objects.create(**kwargs)
-    return task, True
+    with transaction.atomic():
+        # 1) Exact Bitrix id match (any project — id is globally unique per portal).
+        if agency:
+            task = (
+                Task.objects.select_for_update(of=("self",))
+                .filter(agency_bitrix_task_id=bitrix_id)
+                .first()
+            )
+        else:
+            task = (
+                Task.objects.select_for_update(of=("self",))
+                .filter(bitrix_task_id=bitrix_id)
+                .first()
+            )
+        if task:
+            return _apply_fields(task, created=False)
+
+        # 2) Claim outbound-pending local row (echo of our own create).
+        if agency:
+            cutoff = timezone.now() - timedelta(minutes=15)
+            pending = (
+                Task.objects.select_for_update(of=("self",))
+                .filter(
+                    project=project,
+                    agency_bitrix_task_id="",
+                    title=title,
+                    created_at__gte=cutoff,
+                    sync_status__in=[
+                        Task.SyncStatus.PENDING,
+                        Task.SyncStatus.ERROR,
+                    ],
+                )
+                .order_by("id")
+                .first()
+            )
+            if pending is None:
+                # Single recent unsynced task in the project — still claim it.
+                recent = list(
+                    Task.objects.select_for_update(of=("self",))
+                    .filter(
+                        project=project,
+                        agency_bitrix_task_id="",
+                        created_at__gte=cutoff,
+                        sync_status__in=[
+                            Task.SyncStatus.PENDING,
+                            Task.SyncStatus.ERROR,
+                        ],
+                    )
+                    .order_by("id")[:2]
+                )
+                if len(recent) == 1:
+                    pending = recent[0]
+            if pending is not None:
+                pending.agency_bitrix_task_id = bitrix_id
+                pending.save(update_fields=["agency_bitrix_task_id", "updated_at"])
+                return _apply_fields(pending, created=False)
+
+        # 3) Lost the race to another ingest — re-check id before insert.
+        if agency:
+            task = Task.objects.filter(agency_bitrix_task_id=bitrix_id).first()
+        else:
+            task = Task.objects.filter(bitrix_task_id=bitrix_id).first()
+        if task:
+            task = Task.objects.select_for_update(of=("self",)).get(pk=task.pk)
+            return _apply_fields(task, created=False)
+
+        kwargs = {
+            "project": project,
+            "title": title,
+            "description": description,
+            "status": status,
+            "due_date": due,
+            "is_important": bool(important),
+            "sync_status": Task.SyncStatus.SYNCED,
+        }
+        if agency:
+            kwargs["agency_bitrix_task_id"] = bitrix_id
+        else:
+            kwargs["bitrix_task_id"] = bitrix_id
+        try:
+            task = Task.objects.create(**kwargs)
+        except IntegrityError:
+            lookup = (
+                {"agency_bitrix_task_id": bitrix_id}
+                if agency
+                else {"bitrix_task_id": bitrix_id}
+            )
+            task = (
+                Task.objects.select_for_update(of=("self",)).filter(**lookup).first()
+            )
+            if not task:
+                raise
+            return _apply_fields(task, created=False)
+        return task, True
 
 
 def pull_projects_from_bitrix(client_portal) -> dict:
