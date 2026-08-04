@@ -85,7 +85,7 @@ class OutboundStatusPushTests(TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(
             client.update_task.call_args.args[1]["ALLOW_TIME_TRACKING"],
-            "Y",
+            "N",
         )
         client.complete_task.assert_called()
         client.pause_task.assert_called()

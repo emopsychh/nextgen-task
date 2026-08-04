@@ -385,10 +385,10 @@ def upsert_comment_from_bitrix_payload(
         apply_status_from_bitrix_system_comment(task, text)
         return False
 
-    # Skip our own spent-time completion line (already in app as is_system).
-    from board.completion import TIME_SPENT_MARKER
+    # Skip our own completion-duration line (already in app as is_system).
+    from board.completion import is_completion_time_message
 
-    if text.startswith(TIME_SPENT_MARKER) or TIME_SPENT_MARKER in text:
+    if is_completion_time_message(text):
         return False
 
     # Skip our own file-sync posts (file already exists as Attachment in app).

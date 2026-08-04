@@ -51,8 +51,7 @@ def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: boo
     entry.ended_at = end
     entry.duration_seconds = duration
     entry.save(update_fields=["ended_at", "duration_seconds", "updated_at"])
-    # Individual pauses stay local. Completion posts only the missing final
-    # total to Bitrix, preventing one elapsed row per pause.
+    # Bitrix «Учёт времени» is filled manually; app timers stay local.
     _ = sync_bitrix
     if bill and duration > 0 and getattr(entry, "billed_to_deal_at", None) is None:
         enqueue_time_entry_billing(entry.id)

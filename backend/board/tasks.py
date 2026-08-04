@@ -157,9 +157,9 @@ def _task_fields(
         fields["GROUP_ID"] = group_id
     if parent_id:
         fields["PARENT_ID"] = parent_id
-    # Never run a second live timer in Bitrix. Enable elapsed items only after
-    # completion, when Nextgen writes the final total through the API.
-    fields["ALLOW_TIME_TRACKING"] = "Y" if task.status == "done" else "N"
+    # Never drive a second live timer in Bitrix. «Учёт времени» is filled
+    # manually after completion; Nextgen only announces duration in chat.
+    fields["ALLOW_TIME_TRACKING"] = "N"
     # Bitrix PRIORITY: 2 = High («важная»), 1 = Normal. Mirror the local flag.
     fields["PRIORITY"] = "2" if getattr(task, "is_important", False) else "1"
     if crm_bindings:
@@ -580,10 +580,13 @@ def sync_comment_to_bitrix(self, comment_id: int):
     except Comment.DoesNotExist:
         return {"ok": False, "reason": "missing"}
 
-    # System lines stay app-local; completion time is written to Bitrix
-    # «Учёт времени», never duplicated as a chat message.
+    # System lines stay app-local, except the completion-duration announcement
+    # which must also appear in the Bitrix task chat.
     if comment.is_system:
-        return {"ok": True, "skipped": "system"}
+        from board.completion import is_completion_time_message
+
+        if not is_completion_time_message(comment.text or ""):
+            return {"ok": True, "skipped": "system"}
 
     author_name = comment.author_name or (
         comment.author.display_name if comment.author else "Участник"
@@ -1035,64 +1038,8 @@ def _extract_elapsed_id(result) -> str:
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def sync_completion_time_to_bitrix(self, task_id: int):
-    """Fill Bitrix elapsed time up to the final total tracked in Nextgen."""
-    from django.db import transaction
-
-    from board.models import Task
-    from board.timeutils import task_tracked_seconds
-
-    try:
-        with transaction.atomic():
-            task = (
-                Task.objects.select_for_update()
-                .select_related("project", "project__portal")
-                .get(pk=task_id)
-            )
-            agency = _agency_portal_for_client(task.project.portal)
-            bitrix_id = str(task.agency_bitrix_task_id or "")
-            if not agency or not agency.access_token or not bitrix_id:
-                raise BitrixAPIError("Нет связанной задачи на портале агентства")
-
-            local_total = int(task_tracked_seconds(task, include_running=False))
-            if local_total <= 0:
-                return {"ok": True, "skipped": "no_time", "seconds": 0}
-
-            client = BitrixClient(agency)
-            client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
-            bitrix_total = client.get_task_elapsed_seconds(bitrix_id)
-            if bitrix_total is None:
-                raise BitrixAPIError("Не удалось прочитать Учёт времени из Bitrix")
-
-            missing = max(0, local_total - int(bitrix_total))
-            if missing <= 0:
-                return {
-                    "ok": True,
-                    "skipped": "already_filled",
-                    "seconds": local_total,
-                    "bitrix_seconds": int(bitrix_total),
-                }
-
-            user_id = _bitrix_user_id(client.get_current_user()) or None
-            result = client.add_elapsed_item(
-                bitrix_id,
-                missing,
-                comment="",
-                user_id=user_id,
-            )
-            return {
-                "ok": True,
-                "seconds": local_total,
-                "bitrix_seconds_before": int(bitrix_total),
-                "added_seconds": missing,
-                "elapsed_id": _extract_elapsed_id(result),
-            }
-    except Task.DoesNotExist:
-        return {"ok": False, "reason": "missing"}
-    except BitrixAPIError as exc:
-        try:
-            raise self.retry(exc=exc)
-        except self.MaxRetriesExceededError:
-            return {"ok": False, "error": str(exc)}
+    """Deprecated no-op: Bitrix time is filled manually; completion posts a chat message instead."""
+    return {"ok": True, "skipped": "bitrix_time_manual", "task_id": task_id}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=5)
