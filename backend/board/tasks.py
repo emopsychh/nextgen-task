@@ -70,15 +70,37 @@ def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
     return ""
 
 
+def _oauth_user_label(client: BitrixClient) -> str:
+    """Short label for the Bitrix user behind the app token (not the Nextgen clicker)."""
+    try:
+        me = client.get_current_user() or {}
+    except BitrixAPIError:
+        return "id=?"
+    uid = _bitrix_user_id(me) or "?"
+    name = " ".join(
+        str(me.get(k) or "").strip()
+        for k in ("NAME", "name", "LAST_NAME", "lastName")
+        if me.get(k)
+    ).strip()
+    email = str(me.get("EMAIL") or me.get("email") or "").strip()
+    if name and email:
+        return f"id={uid} ({name}, {email})"
+    if name:
+        return f"id={uid} ({name})"
+    if email:
+        return f"id={uid} ({email})"
+    return f"id={uid}"
+
+
 def _task_invisible_hint(client: BitrixClient, bitrix_task_id: str, exc: BaseException) -> str:
     if "недоступна токену" not in str(exc).lower() and "пустой" not in str(exc).lower():
         return str(exc)
-    uid = _bitrix_user_id(client.get_current_user())
+    who = _oauth_user_label(client)
     return (
-        f"задача {bitrix_task_id} не видна токену приложения "
-        f"(Bitrix user id={uid or '?'}). Добавьте этого пользователя "
-        f"соисполнителем или наблюдателем в карточке Bitrix, "
-        f"либо создайте задачу заново из приложения после обновления"
+        f"задача {bitrix_task_id} не видна пользователю токена приложения ({who}). "
+        f"Это НЕ тот, кто нажал кнопку в Nextgen — все вызовы Bitrix идут от "
+        f"пользователя, под которым установлено/авторизовано приложение. "
+        f"Создайте задачу заново после обновления (постановщик в Bitrix будет он)"
     )
 
 
@@ -575,13 +597,16 @@ def _sync_one_portal(
             raise BitrixAPIError(f"не удалось сменить статус в Bitrix: {hint}") from exc
         return existing_id
 
-    # Never send CREATED_BY / ACCOMPLICES / AUDITORS on create:
-    # - foreign CREATED_BY → «Недостаточно прав для создания задачи» (needs admin)
-    # - or create works but token then gets empty tasks.task.get
-    # Bitrix sets постановщик = OAuth user automatically; RESPONSIBLE stays human.
+    # Create under the OAuth token user so the app can always get/start/complete.
+    # Then try to reassign RESPONSIBLE to the human author (Nextgen clicker).
+    # Sending a foreign CREATED_BY / creating only for another responsible often
+    # yields empty tasks.task.get for the token («задача не видна»).
+    oauth_uid = _bitrix_user_id(client.get_current_user())
+    desired_responsible = responsible_id
+    create_responsible = oauth_uid or desired_responsible
     fields = _task_fields(
         task,
-        responsible_id=responsible_id,
+        responsible_id=create_responsible,
         creator_id=None,
         group_id=group_id,
         parent_id=parent_id,
@@ -591,7 +616,31 @@ def _sync_one_portal(
     fields["TITLE"] = title
     result = client.create_task(fields)
     bitrix_id = _extract_bitrix_id(result)
-    if bitrix_id and task.status != "todo":
+    if not bitrix_id:
+        raise BitrixAPIError("Bitrix не вернул id созданной задачи")
+
+    try:
+        client.get_task(bitrix_id)
+    except BitrixAPIError as exc:
+        raise BitrixAPIError(_task_invisible_hint(client, bitrix_id, exc)) from exc
+
+    if (
+        desired_responsible
+        and oauth_uid
+        and desired_responsible != oauth_uid
+    ):
+        try:
+            client.update_task(bitrix_id, {"RESPONSIBLE_ID": desired_responsible})
+        except BitrixAPIError as exc:
+            logger.info(
+                "reassign RESPONSIBLE to %s failed bitrix=%s (%s) — keep oauth=%s",
+                desired_responsible,
+                bitrix_id,
+                exc,
+                oauth_uid,
+            )
+
+    if task.status != "todo":
         try:
             apply_bitrix_status(client, bitrix_id, task.status)
         except BitrixAPIError as exc:

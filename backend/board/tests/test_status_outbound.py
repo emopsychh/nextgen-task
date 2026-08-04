@@ -278,8 +278,8 @@ class OutboundStatusPushTests(TestCase):
         agency_client.get_current_user.assert_not_called()
 
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
-    def test_agency_author_create_omits_created_by(self):
-        """No CREATED_BY on create — Bitrix defaults to OAuth; human = RESPONSIBLE."""
+    def test_agency_author_create_owned_by_oauth_then_reassign(self):
+        """Create as token user, then move RESPONSIBLE to the human author."""
         task = make_task(
             self.project,
             created_by=self.agency_user,
@@ -287,14 +287,15 @@ class OutboundStatusPushTests(TestCase):
             sync_status=Task.SyncStatus.PENDING,
         )
         client = _mock_client(bitrix_status="2")
-        client.get_current_user.return_value = {"ID": "99"}
+        client.get_current_user.return_value = {"ID": "99", "NAME": "App", "LAST_NAME": "User"}
         client.create_task.return_value = {"task": {"id": "300"}}
         with patch.object(board_tasks, "BitrixClient", return_value=client):
             res = board_tasks.sync_task_to_bitrix(task.id)
         self.assertTrue(res["ok"], res)
         fields = client.create_task.call_args.args[0]
         self.assertNotIn("CREATED_BY", fields)
-        self.assertEqual(fields["RESPONSIBLE_ID"], "42")
+        self.assertEqual(fields["RESPONSIBLE_ID"], "99")
+        client.update_task.assert_any_call("300", {"RESPONSIBLE_ID": "42"})
         self.assertNotIn("ACCOMPLICES", fields)
         self.assertNotIn("AUDITORS", fields)
 

@@ -60,11 +60,12 @@ class SyncTaskIdempotencyTests(TestCase):
         self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
         self.assertEqual(client.create_task.call_count, 1)
         created_fields = client.create_task.call_args.args[0]
-        # Omit CREATED_BY — Bitrix assigns the OAuth user (keeps edit rights).
+        # Create under OAuth (42); human author pin (99) is applied via update.
         self.assertNotIn("CREATED_BY", created_fields)
-        self.assertEqual(created_fields["RESPONSIBLE_ID"], "99")
+        self.assertEqual(created_fields["RESPONSIBLE_ID"], "42")
         self.assertEqual(created_fields["ALLOW_TIME_TRACKING"], "Y")
         self.assertNotIn("ACCOMPLICES", created_fields)
+        client.update_task.assert_any_call("999", {"RESPONSIBLE_ID": "99"})
 
         Task.objects.filter(pk=task.pk).update(sync_status=Task.SyncStatus.PENDING)
         with patch.object(board_tasks, "BitrixClient", return_value=client):
