@@ -376,6 +376,9 @@ export function refreshAccessToken(): Promise<string | null> {
       );
       return data.access;
     } catch {
+      // Network / gateway errors leave a zombie "logged in" session if we only
+      // return null — every PATCH keeps failing until a full Bitrix reopen.
+      window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
       return null;
     } finally {
       refreshInFlight = null;
@@ -394,31 +397,61 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
+const DEFAULT_API_TIMEOUT_MS = 25_000;
+
+function withTimeoutSignal(
+  userSignal: AbortSignal | null | undefined,
+  ms: number
+): { signal: AbortSignal; clear: () => void } {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), ms);
+  const onUserAbort = () => controller.abort();
+  if (userSignal) {
+    if (userSignal.aborted) controller.abort();
+    else userSignal.addEventListener("abort", onUserAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    clear: () => {
+      window.clearTimeout(timer);
+      userSignal?.removeEventListener("abort", onUserAbort);
+    },
+  };
+}
+
 export async function api<T>(
   path: string,
   options: RequestInit = {},
   token?: string | null
 ): Promise<T> {
+  const { signal, clear } = withTimeoutSignal(
+    options.signal,
+    DEFAULT_API_TIMEOUT_MS
+  );
   const send = (bearer?: string | null) => {
     const headers = new Headers(options.headers || {});
     if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
     if (!(options.body instanceof FormData) && !headers.has("Content-Type") && options.body) {
       headers.set("Content-Type", "application/json");
     }
-    return fetch(`${API_BASE}${path}`, { ...options, headers });
+    return fetch(`${API_BASE}${path}`, { ...options, headers, signal });
   };
 
-  let res = await send(token);
-  // Transparently refresh a short-lived access token once on 401, then retry.
-  if (res.status === 401 && token) {
-    const fresh = await refreshAccessToken();
-    if (fresh) res = await send(fresh);
+  try {
+    let res = await send(token);
+    // Transparently refresh a short-lived access token once on 401, then retry.
+    if (res.status === 401 && token) {
+      const fresh = await refreshAccessToken();
+      if (fresh) res = await send(fresh);
+    }
+    if (!res.ok) {
+      throw new Error(await parseError(res));
+    }
+    if (res.status === 204) return undefined as T;
+    return res.json();
+  } finally {
+    clear();
   }
-  if (!res.ok) {
-    throw new Error(await parseError(res));
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json();
 }
 
 /** True when fetch was cancelled via AbortController (safe to ignore). */

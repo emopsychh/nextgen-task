@@ -737,6 +737,28 @@ def apply_inbound_importance(task, is_important, *, allow_while_pending: bool = 
     return True
 
 
+def apply_inbound_title(task, raw_title: str, *, allow_while_pending: bool = True) -> bool:
+    """
+    Apply title from Bitrix (after stripping portal prefixes).
+    When allow_while_pending=False, skip while local outbound sync is in flight —
+    otherwise a mid-flight pull restores the old Bitrix title and the UI reverts.
+    """
+    from board.models import Task
+    from board.titles import strip_portal_title_prefix
+
+    raw = str(raw_title or "").strip()
+    if not raw:
+        return False
+    if task.sync_status == Task.SyncStatus.PENDING and not allow_while_pending:
+        return False
+    new_title = strip_portal_title_prefix(raw, task.project.portal)
+    if not new_title or new_title == task.title:
+        return False
+    task.title = new_title
+    task.save(update_fields=["title", "updated_at"])
+    return True
+
+
 def apply_inbound_deadline(task, new_due, *, allow_while_pending: bool = True) -> bool:
     """Apply deadline from Bitrix. Returns True if changed."""
     from board.models import Task
@@ -993,8 +1015,6 @@ def pull_task_status_from_bitrix(task) -> bool:
     Single resolve path (no second Bitrix scan). Start and completion are
     mirrored; pause remains independent.
     """
-    from board.titles import strip_portal_title_prefix
-
     status, data, portal, bitrix_id = resolve_inbound_status_from_sources(task)
     work = status if status in ("in_progress", "done") else None
     if not data or not portal or not bitrix_id:
@@ -1037,23 +1057,20 @@ def pull_task_status_from_bitrix(task) -> bool:
     changed = apply_inbound_importance(task, important, allow_while_pending=False) or changed
 
     raw_title = str(data.get("title") or data.get("TITLE") or "").strip()
-    if raw_title:
-        new_title = strip_portal_title_prefix(raw_title, task.project.portal)
-        if new_title and new_title != task.title:
-            task.title = new_title
-            task.save(update_fields=["title", "updated_at"])
-            changed = True
-            # Push cleaned title back so Bitrix drops legacy [portal] prefix
-            try:
-                from board.tasks import sync_task_to_bitrix
-                from django.conf import settings
+    title_changed = apply_inbound_title(task, raw_title, allow_while_pending=False)
+    if title_changed:
+        changed = True
+        # Push cleaned title back so Bitrix drops legacy [portal] prefix
+        try:
+            from board.tasks import sync_task_to_bitrix
+            from django.conf import settings
 
-                if settings.CELERY_TASK_ALWAYS_EAGER:
-                    sync_task_to_bitrix(task.id)
-                else:
-                    sync_task_to_bitrix.delay(task.id)
-            except Exception:
-                logger.exception("enqueue title cleanup sync failed task=%s", task.id)
+            if settings.CELERY_TASK_ALWAYS_EAGER:
+                sync_task_to_bitrix(task.id)
+            else:
+                sync_task_to_bitrix.delay(task.id)
+        except Exception:
+            logger.exception("enqueue title cleanup sync failed task=%s", task.id)
     return changed
 
 
@@ -1143,27 +1160,26 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
                         "finalize_task_completion failed id=%s", bitrix_task_id
                     )
 
-        # Title / description from Bitrix (strip legacy portal prefixes)
-        from board.titles import strip_portal_title_prefix
+        # Title / description from Bitrix (strip legacy portal prefixes).
+        # Skip title while PENDING — same race as importance (local rename vs stale pull).
+        from board.models import Task
 
         raw_title = str(
             merged.get("title") or merged.get("TITLE") or task.title or ""
         ).strip()
-        if raw_title:
-            new_title = strip_portal_title_prefix(raw_title, task.project.portal)
-            if new_title and new_title != task.title:
-                task.title = new_title
-                meta_changed = True
+        title_applied = apply_inbound_title(task, raw_title, allow_while_pending=False)
         raw_desc = merged.get("description")
         if raw_desc is None:
             raw_desc = merged.get("DESCRIPTION")
-        if raw_desc is not None:
+        desc_changed = False
+        if raw_desc is not None and task.sync_status != Task.SyncStatus.PENDING:
             new_desc = str(raw_desc).strip()
             if new_desc != (task.description or ""):
                 task.description = new_desc
-                meta_changed = True
-        if meta_changed:
-            task.save(update_fields=["title", "description", "updated_at"])
+                desc_changed = True
+        if desc_changed:
+            task.save(update_fields=["description", "updated_at"])
+        meta_changed = title_applied or desc_changed
 
         # Prefer get_task deadline; fall back to FIELDS_AFTER
         due = parse_bitrix_deadline(data) if data else None

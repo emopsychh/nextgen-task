@@ -1088,3 +1088,28 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str):
 def post_task_complete_to_deal(self, task_id: int):
     """Deprecated: hours are billed per TimeEntry. Kept as no-op for old queue messages."""
     return {"ok": True, "skipped": "deprecated_use_post_time_entry_to_deal", "task_id": task_id}
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=20)
+def ensure_portal_event_bindings(self, portal_id: int):
+    """
+    Subscribe portal to Bitrix task events in the background.
+
+    Must NOT run inside /api/bitrix/auth/ — event.get/bind can take minutes and
+    blocks Bitrix iframe boot («Идет загрузка приложения»).
+    """
+    from portals.models import Portal
+    from board.status_sync import ensure_task_event_bindings
+
+    try:
+        portal = Portal.objects.get(pk=portal_id)
+    except Portal.DoesNotExist:
+        return {"ok": False, "reason": "missing"}
+    try:
+        ok = ensure_task_event_bindings(portal)
+        return {"ok": bool(ok), "portal_id": portal_id}
+    except BitrixAPIError as exc:
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": str(exc), "portal_id": portal_id}

@@ -85,11 +85,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginBitrix = useCallback(
     async (payload: Record<string, unknown>) => {
       setError(null);
-      const session = await api<AuthSession>("/api/bitrix/auth/", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      persist(session);
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 20_000);
+      try {
+        const session = await api<AuthSession>("/api/bitrix/auth/", {
+          method: "POST",
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        persist(session);
+      } finally {
+        window.clearTimeout(timer);
+      }
     },
     [persist]
   );
@@ -110,21 +117,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function boot() {
       try {
         if (authId) {
-          await loginBitrix({
-            auth: {
-              AUTH_ID: authId,
-              REFRESH_ID: params.get("REFRESH_ID") || "",
-              AUTH_EXPIRES: params.get("AUTH_EXPIRES") || "3600",
+          // Prefer showing the stored session immediately if Bitrix re-auth is slow.
+          const hadSession = Boolean(loadStored()?.access);
+          if (hadSession) {
+            setLoading(false);
+          }
+          try {
+            await loginBitrix({
+              auth: {
+                AUTH_ID: authId,
+                REFRESH_ID: params.get("REFRESH_ID") || "",
+                AUTH_EXPIRES: params.get("AUTH_EXPIRES") || "3600",
+                member_id: memberId,
+                domain,
+              },
+              DOMAIN: domain,
               member_id: memberId,
-              domain,
-            },
-            DOMAIN: domain,
-            member_id: memberId,
-          });
-          window.history.replaceState({}, "", window.location.pathname);
+            });
+            window.history.replaceState({}, "", window.location.pathname);
+          } catch (e) {
+            // Keep stored session if re-auth timed out / failed.
+            if (!hadSession) {
+              setError(e instanceof Error ? e.message : "Bitrix auth failed");
+            }
+          }
         }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Bitrix auth failed");
       } finally {
         setLoading(false);
       }

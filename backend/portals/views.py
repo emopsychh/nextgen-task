@@ -179,14 +179,14 @@ class BitrixInstallView(APIView):
                     }
                 upsert_portal_from_auth(auth)
                 try:
-                    from board.status_sync import ensure_task_event_bindings
+                    from board.tasks import ensure_portal_event_bindings
                     from portals.models import Portal as PortalModel
 
                     mid = auth.get("member_id") or auth.get("MEMBER_ID")
                     if mid:
                         p = PortalModel.objects.filter(member_id=mid).first()
                         if p:
-                            ensure_task_event_bindings(p)
+                            ensure_portal_event_bindings.delay(p.id)
                 except Exception:
                     logger.exception("event.bind during install failed")
             except Exception:
@@ -230,12 +230,15 @@ class BitrixAuthView(APIView):
             client = BitrixClient(portal)
             user_data = client.get_current_user()
             bitrix_user = upsert_bitrix_user(portal, user_data)
+            # event.bind is slow (many Bitrix REST calls) — never block JWT issue.
             try:
-                from board.status_sync import ensure_task_event_bindings
+                from board.tasks import ensure_portal_event_bindings
 
-                ensure_task_event_bindings(portal)
+                ensure_portal_event_bindings.delay(portal.id)
             except Exception:
-                logger.exception("event.bind during auth failed for portal %s", portal.id)
+                logger.exception(
+                    "enqueue event.bind failed for portal %s", portal.id
+                )
         except (BitrixAPIError, Exception) as exc:
             return Response({"detail": str(exc)}, status=400)
 
