@@ -100,14 +100,16 @@ a {
   overflow: hidden;
 }
 
-.app-shell.with-client-rail,
-.app-shell.with-logout-rail {
+.app-shell.with-client-rail {
   grid-template-columns: 72px 272px 1fr;
 }
 
-/* Task detail: only client rail + full-width workspace (no Обзор sidebar). */
-.app-shell.with-client-rail.task-focus,
-.app-shell.with-logout-rail.task-focus {
+/* Task detail: full-width workspace (agency keeps client rail). */
+.app-shell.task-focus {
+  grid-template-columns: 1fr;
+}
+
+.app-shell.with-client-rail.task-focus {
   grid-template-columns: 72px 1fr;
 }
 
@@ -119,9 +121,8 @@ a {
 @media (max-width: 900px) {
   .app-shell,
 .app-shell.with-client-rail,
-.app-shell.with-logout-rail,
-.app-shell.with-client-rail.task-focus,
-.app-shell.with-logout-rail.task-focus {
+.app-shell.task-focus,
+.app-shell.with-client-rail.task-focus {
     grid-template-columns: 1fr;
   }
   .sidebar {
@@ -153,12 +154,30 @@ a {
 }
 
 .sidebar {
+  display: flex;
+  flex-direction: column;
   padding: 28px 22px;
   border-right: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(10px);
   min-height: 0;
   overflow-y: auto;
+}
+
+.sidebar-logout {
+  margin-top: auto;
+  align-self: flex-start;
+  padding: 8px 0;
+  border: none;
+  background: transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.sidebar-logout:hover {
+  color: var(--ink);
 }
 
 .brand-block {

@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Navigate, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
-  unwrapList,
   type BacklogItem,
   type BacklogPriority,
   type BacklogStatus,
-  type Paginated,
-  type Project,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
@@ -16,13 +13,17 @@ import { getPortalLabel } from "../../lib/portalLabelCache";
 
 type PendingDelete = { id: number; title: string };
 
+/** Kanban stages shown in UI. Legacy `converted` items map into «Готово». */
 const FUNNEL_STAGES: { id: BacklogStatus; label: string; hint: string }[] = [
   { id: "idea", label: "Идея", hint: "Новые мысли" },
   { id: "in_progress", label: "В работе", hint: "Разбираем" },
   { id: "deferred", label: "Отложено", hint: "На потом" },
   { id: "done", label: "Готово", hint: "Закрыто" },
-  { id: "converted", label: "В работу", hint: "Проект / задача" },
 ];
+
+function columnStatus(status: BacklogStatus): BacklogStatus {
+  return status === "converted" ? "done" : status;
+}
 
 const PRIORITY_OPTIONS: { id: BacklogPriority; label: string }[] = [
   { id: 2, label: "Высокий" },
@@ -108,7 +109,6 @@ function priorityLabel(priority: BacklogPriority): string {
 
 export function ClientBacklog() {
   const { portalId: routePortalId } = useParams();
-  const navigate = useNavigate();
   const { token, portal } = useAuth();
   const isAgency = portal?.role === "agency";
   const portalId = useMemo(() => {
@@ -118,7 +118,6 @@ export function ClientBacklog() {
   }, [routePortalId]);
 
   const [items, setItems] = useState<BacklogItem[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState("");
@@ -137,9 +136,6 @@ export function ClientBacklog() {
   const [savingId, setSavingId] = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [convertTaskFor, setConvertTaskFor] = useState<number | null>(null);
-  const [convertProjectId, setConvertProjectId] = useState<number | "">("");
-  const [converting, setConverting] = useState(false);
   const [dragId, setDragId] = useState<number | null>(null);
   const [dragOverStage, setDragOverStage] = useState<BacklogStatus | null>(null);
   const [pageTitle, setPageTitle] = useState("Бэклог");
@@ -192,27 +188,9 @@ export function ClientBacklog() {
     return () => ac.abort();
   }, [token, portalId, isAgency, load]);
 
-  useEffect(() => {
-    if (!token || !portalId || !isAgency) return;
-    const ac = new AbortController();
-    void api<Project[] | Paginated<Project>>(
-      `/api/projects/?portal=${portalId}`,
-      { signal: ac.signal },
-      token
-    )
-      .then((projectsData) => {
-        if (ac.signal.aborted) return;
-        setProjects(unwrapList(projectsData).filter((p) => p.portal === portalId));
-      })
-      .catch(() => undefined);
-    return () => ac.abort();
-  }, [token, portalId, isAgency]);
-
   const visibleStages = useMemo(
     () =>
-      hideClosed
-        ? FUNNEL_STAGES.filter((s) => s.id !== "done" && s.id !== "converted")
-        : FUNNEL_STAGES,
+      hideClosed ? FUNNEL_STAGES.filter((s) => s.id !== "done") : FUNNEL_STAGES,
     [hideClosed]
   );
 
@@ -226,7 +204,8 @@ export function ClientBacklog() {
       FUNNEL_STAGES.map((s) => [s.id, [] as BacklogItem[]])
     ) as Record<BacklogStatus, BacklogItem[]>;
     for (const item of visibleItems) {
-      (map[item.status] || map.idea).push(item);
+      const status = columnStatus(item.status);
+      (map[status] || map.idea).push(item);
     }
     return map;
   }, [visibleItems]);
@@ -437,49 +416,6 @@ export function ClientBacklog() {
     }
   }
 
-  async function convertToProject(id: number) {
-    if (!token) return;
-    setConverting(true);
-    setError(null);
-    try {
-      const res = await api<BacklogItem & { project_id: number }>(
-        `/api/backlog-items/${id}/convert-project/`,
-        { method: "POST", body: "{}" },
-        token
-      );
-      await load();
-      if (res.project_id) navigate(`/projects/${res.project_id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось создать проект");
-    } finally {
-      setConverting(false);
-    }
-  }
-
-  async function convertToTask() {
-    if (!token || !convertTaskFor || !convertProjectId) return;
-    setConverting(true);
-    setError(null);
-    try {
-      const res = await api<BacklogItem & { task_id: number }>(
-        `/api/backlog-items/${convertTaskFor}/convert-task/`,
-        {
-          method: "POST",
-          body: JSON.stringify({ project: convertProjectId }),
-        },
-        token
-      );
-      setConvertTaskFor(null);
-      setConvertProjectId("");
-      await load();
-      if (res.task_id) navigate(`/tasks/${res.task_id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось создать задачу");
-    } finally {
-      setConverting(false);
-    }
-  }
-
   return (
     <div className="tasks-page backlog-page">
       <div className="page-header">
@@ -666,7 +602,7 @@ export function ClientBacklog() {
                     <p className="backlog-funnel-empty muted">Перетащите сюда</p>
                   ) : (
                     colItems.map((item) => {
-                      const busy = savingId === item.id || converting;
+                      const busy = savingId === item.id;
                       return (
                         <article
                           key={item.id}
@@ -752,7 +688,7 @@ export function ClientBacklog() {
           className="modal-backdrop"
           role="presentation"
           onClick={() => {
-            if (savingId == null && !converting) closeItem();
+            if (savingId == null) closeItem();
           }}
         >
           <div
@@ -765,8 +701,8 @@ export function ClientBacklog() {
             <div className="backlog-modal-head">
               <div>
                 <p className="backlog-modal-stage muted">
-                  {FUNNEL_STAGES.find((s) => s.id === selected.status)?.label ||
-                    selected.status}
+                  {FUNNEL_STAGES.find((s) => s.id === columnStatus(selected.status))
+                    ?.label || selected.status}
                   {savingId === selected.id ? " · сохраняем…" : ""}
                 </p>
                 <h3 id="backlog-item-title" className="modal-title">
@@ -815,9 +751,9 @@ export function ClientBacklog() {
                         key={s.id}
                         type="button"
                         className={`task-filter-chip${
-                          selected.status === s.id ? " active" : ""
+                          columnStatus(selected.status) === s.id ? " active" : ""
                         }`}
-                        disabled={savingId === selected.id || converting}
+                        disabled={savingId === selected.id}
                         onClick={() => void patchItem(selected.id, { status: s.id })}
                       >
                         {s.label}
@@ -874,52 +810,11 @@ export function ClientBacklog() {
             </div>
 
             <div className="backlog-modal-actions">
-              <div className="backlog-modal-actions-primary">
-                {selected.converted_project ? (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/projects/${selected.converted_project}`}
-                    onClick={closeItem}
-                  >
-                    Открыть проект
-                  </Link>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    disabled={converting || savingId === selected.id}
-                    onClick={() => void convertToProject(selected.id)}
-                  >
-                    В проект
-                  </button>
-                )}
-                {selected.converted_task ? (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/tasks/${selected.converted_task}`}
-                    onClick={closeItem}
-                  >
-                    Открыть задачу
-                  </Link>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    disabled={converting || savingId === selected.id}
-                    onClick={() => {
-                      setConvertTaskFor(selected.id);
-                      setConvertProjectId(projects[0]?.id ?? "");
-                    }}
-                  >
-                    В задачу
-                  </button>
-                )}
-              </div>
               <div className="backlog-modal-actions-secondary">
                 <button
                   type="button"
                   className="btn btn-ghost backlog-btn-danger"
-                  disabled={converting || savingId === selected.id}
+                  disabled={savingId === selected.id}
                   onClick={() =>
                     setPendingDelete({ id: selected.id, title: selected.title })
                   }
@@ -953,41 +848,6 @@ export function ClientBacklog() {
         }}
         onConfirm={() => void confirmDelete()}
       />
-
-      <ConfirmDialog
-        open={convertTaskFor != null}
-        title="Создать задачу из бэклога"
-        description="Выберите проект клиента, в который попадёт задача."
-        confirmLabel={converting ? "Создаём…" : "Создать задачу"}
-        cancelLabel="Отмена"
-        onCancel={() => {
-          if (!converting) {
-            setConvertTaskFor(null);
-            setConvertProjectId("");
-          }
-        }}
-        onConfirm={() => void convertToTask()}
-      >
-        <div className="field" style={{ marginTop: 12 }}>
-          <label>Проект</label>
-          {projects.length === 0 ? (
-            <p className="muted">Сначала создайте проект у клиента.</p>
-          ) : (
-            <select
-              value={convertProjectId}
-              onChange={(e) =>
-                setConvertProjectId(e.target.value ? Number(e.target.value) : "")
-              }
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-      </ConfirmDialog>
     </div>
   );
 }

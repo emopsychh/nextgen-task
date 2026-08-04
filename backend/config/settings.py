@@ -196,6 +196,9 @@ BITRIX_CLIENT_SECRET = os.getenv("BITRIX_CLIENT_SECRET", "")
 BITRIX_APPLICATION_TOKEN = os.getenv("BITRIX_APPLICATION_TOKEN", "")
 # Agency-portal user shown as creator/author for client tasks and comments.
 BITRIX_CLIENT_TASK_AUTHOR_ID = os.getenv("BITRIX_CLIENT_TASK_AUTHOR_ID", "").strip()
+# Default Bitrix RESPONSIBLE_ID for client-originated agency tasks (and projects).
+# Falls back to BITRIX_CLIENT_TASK_AUTHOR_ID when empty.
+BITRIX_DEFAULT_RESPONSIBLE_ID = os.getenv("BITRIX_DEFAULT_RESPONSIBLE_ID", "").strip()
 # Custom deal number fields (UF_CRM_…) in воронка «Сопровождение»
 # Paid hours are never overwritten; remaining hours are decremented per closed timer session.
 BITRIX_DEAL_PAID_HOURS_FIELD = os.getenv("BITRIX_DEAL_PAID_HOURS_FIELD", "").strip()

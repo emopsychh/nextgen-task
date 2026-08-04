@@ -334,6 +334,27 @@ def serialize_deal_candidate(deal: dict, *, bound_client_portal_id: int | None =
     }
 
 
+def _deal_has_billed_time_entries(deal_id: str) -> bool:
+    """
+    True if any timer session was billed for a client bound to this deal
+    since that binding was created. Used to avoid reseeding remaining=0
+    after legitimate spend.
+    """
+    from board.models import TimeEntry
+    from portals.models import PortalDealBinding
+
+    for binding in PortalDealBinding.objects.filter(deal_id=str(deal_id)).only(
+        "client_portal_id", "created_at"
+    ):
+        if TimeEntry.objects.filter(
+            task__project__portal_id=binding.client_portal_id,
+            billed_to_deal_at__isnull=False,
+            billed_to_deal_at__gte=binding.created_at,
+        ).exists():
+            return True
+    return False
+
+
 def sync_deal_hours_meta(client: BitrixClient, deal_id: str, deal: dict | None = None) -> dict:
     """Title/category/stage/hours; seed remaining from paid when remaining is empty."""
     meta = {
@@ -358,7 +379,14 @@ def sync_deal_hours_meta(client: BitrixClient, deal_id: str, deal: dict | None =
         hours = read_deal_hours(deal)
         paid = hours.paid
         remaining = hours.remaining
-        if remaining is None and paid is not None:
+        should_seed = False
+        if paid is not None and paid > 0:
+            if remaining is None:
+                should_seed = True
+            elif remaining == 0 and not _deal_has_billed_time_entries(deal_id):
+                # Paid set to N while remaining stayed at 0 (seed only ran for null).
+                should_seed = True
+        if should_seed:
             client.update_deal(deal_id, remaining_update_fields(paid))
             remaining = paid
         meta["paid_hours"] = paid

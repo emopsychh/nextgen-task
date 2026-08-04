@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from board import tasks as board_tasks
 from board.models import Task
@@ -103,7 +103,11 @@ class OutboundStatusPushTests(TestCase):
         )
         client.start_task.assert_called()
 
-    def test_agency_responsible_is_agency_oauth_user_not_client_author(self):
+    @override_settings(
+        BITRIX_DEFAULT_RESPONSIBLE_ID="",
+        BITRIX_CLIENT_TASK_AUTHOR_ID="99",
+    )
+    def test_cross_portal_uses_configured_responsible_not_oauth(self):
         task = make_task(
             self.project,
             created_by=self.user,
@@ -114,9 +118,27 @@ class OutboundStatusPushTests(TestCase):
         resolved = board_tasks._resolve_responsible_id(
             agency_client, task, self.agency
         )
-        self.assertEqual(resolved, "42")
+        self.assertEqual(resolved, "99")
+        agency_client.get_current_user.assert_not_called()
 
-    def test_client_responsible_is_the_author(self):
+    @override_settings(
+        BITRIX_DEFAULT_RESPONSIBLE_ID="55",
+        BITRIX_CLIENT_TASK_AUTHOR_ID="99",
+    )
+    def test_cross_portal_prefers_default_responsible_over_author_id(self):
+        task = make_task(
+            self.project,
+            created_by=self.user,
+            status=Task.Status.TODO,
+        )
+        agency_client = MagicMock()
+        agency_client.get_current_user.return_value = {"ID": "42"}
+        resolved = board_tasks._resolve_responsible_id(
+            agency_client, task, self.agency
+        )
+        self.assertEqual(resolved, "55")
+
+    def test_same_portal_responsible_is_the_author(self):
         client = MagicMock()
         task = make_task(self.project, created_by=self.user, status=Task.Status.TODO)
         resolved = board_tasks._resolve_responsible_id(
@@ -124,6 +146,20 @@ class OutboundStatusPushTests(TestCase):
         )
         self.assertEqual(resolved, "7")
         client.get_current_user.assert_not_called()
+
+    def test_agency_author_is_responsible_on_agency_portal(self):
+        task = make_task(
+            self.project,
+            created_by=self.agency_user,
+            status=Task.Status.TODO,
+        )
+        agency_client = MagicMock()
+        agency_client.get_current_user.return_value = {"ID": "99"}
+        resolved = board_tasks._resolve_responsible_id(
+            agency_client, task, self.agency
+        )
+        self.assertEqual(resolved, "42")
+        agency_client.get_current_user.assert_not_called()
 
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
     def test_synced_status_not_pushed(self):

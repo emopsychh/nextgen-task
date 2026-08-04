@@ -30,6 +30,14 @@ def _bitrix_user_id(user_data: dict) -> str:
     return str(user_data.get("ID") or user_data.get("id") or "")
 
 
+def _configured_default_responsible_id() -> str:
+    """Stable agency user for client-originated tasks (not whoever last opened the app)."""
+    return (
+        (getattr(settings, "BITRIX_DEFAULT_RESPONSIBLE_ID", "") or "").strip()
+        or (settings.BITRIX_CLIENT_TASK_AUTHOR_ID or "").strip()
+    )
+
+
 def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
     """
     Bitrix requires RESPONSIBLE_ID to be a user of the SAME portal the task is
@@ -38,11 +46,10 @@ def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
 
     We resolve, in order:
       1) the task author, only if they belong to *this* portal;
-      2) the acting OAuth user of *this* portal (so the app can later
-         start/pause/complete the task — Bitrix forbids these actions for
-         non-participants, which is exactly the "Действие над задачей не
-         разрешено" error);
-      3) any stored user of this portal (admin first).
+      2) BITRIX_DEFAULT_RESPONSIBLE_ID or BITRIX_CLIENT_TASK_AUTHOR_ID
+         (stable pin for cross-portal / client-submitted tasks);
+      3) the acting OAuth user of *this* portal.
+    Never pick a random stored admin by id.
     """
     if (
         task.created_by_id
@@ -51,13 +58,16 @@ def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
         and task.created_by.bitrix_id
     ):
         return str(task.created_by.bitrix_id)
+
+    configured = _configured_default_responsible_id()
+    if configured:
+        return configured
+
     current = client.get_current_user()
     uid = _bitrix_user_id(current)
     if uid:
         return uid
-    # Fallback: any user stored for this portal
-    local = portal.users.order_by("-is_admin", "id").first()
-    return str(local.bitrix_id) if local else ""
+    return ""
 
 
 def _resolve_creator_id(task, portal, responsible_id: str) -> str:
@@ -274,8 +284,9 @@ def _sync_one_portal(
     creator_id = _resolve_creator_id(task, portal, responsible_id)
     if not responsible_id and not existing_id:
         raise BitrixAPIError(
-            f"Не указан исполнитель на {portal.domain}: откройте приложение на этом портале "
-            "и сохраните задачу снова"
+            f"Не указан исполнитель на {portal.domain}: задайте "
+            "BITRIX_DEFAULT_RESPONSIBLE_ID или BITRIX_CLIENT_TASK_AUTHOR_ID, "
+            "либо откройте приложение на этом портале и сохраните задачу снова"
         )
 
     # Never prefix with client portal name — context is the project/workgroup.
@@ -369,13 +380,14 @@ def _do_sync_project_to_bitrix(project_id: int) -> dict:
     )
 
     client = BitrixClient(agency)
-    responsible = _bitrix_user_id(client.get_current_user())
+    responsible = _configured_default_responsible_id()
     if not responsible:
-        local = agency.users.order_by("-is_admin", "id").first()
-        responsible = str(local.bitrix_id) if local else ""
+        responsible = _bitrix_user_id(client.get_current_user())
     if not responsible and not project.bitrix_task_id:
         raise BitrixAPIError(
-            f"Не указан исполнитель на {agency.domain}: откройте приложение на портале агентства"
+            f"Не указан исполнитель на {agency.domain}: задайте "
+            "BITRIX_DEFAULT_RESPONSIBLE_ID или BITRIX_CLIENT_TASK_AUTHOR_ID, "
+            "либо откройте приложение на портале агентства"
         )
 
     fields = {

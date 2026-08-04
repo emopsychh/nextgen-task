@@ -35,31 +35,12 @@ function RouteDataBoundary({ children }: { children: ReactNode }) {
   return <Fragment key={key}>{children}</Fragment>;
 }
 
-function LogoutRail() {
+function ClientSidebarLogout() {
   const { logout } = useAuth();
   return (
-    <aside className="client-rail client-rail-logout-only" aria-label="Выход">
-      <button type="button" className="client-avatar logout" title="Выйти" onClick={logout}>
-        <span className="client-avatar-face">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-            <path
-              d="M10 7V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-1"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M15 12H3m0 0 3-3m-3 3 3 3"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </span>
-      </button>
-    </aside>
+    <button type="button" className="sidebar-logout" onClick={logout}>
+      Выйти
+    </button>
   );
 }
 
@@ -83,13 +64,14 @@ function AppLayout() {
   return (
     <SupportWidgetProvider>
       <div
-        className={`app-shell${isAgency ? " with-client-rail" : " with-logout-rail"}${taskFocus ? " task-focus" : ""}`}
+        className={`app-shell${isAgency ? " with-client-rail" : ""}${taskFocus ? " task-focus" : ""}`}
       >
-        {isAgency ? <ClientRail /> : <LogoutRail />}
+        {isAgency ? <ClientRail /> : null}
         {!taskFocus ? (
           <aside className="sidebar">
             <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
             <ProjectSidebarNav />
+            {!isAgency ? <ClientSidebarLogout /> : null}
           </aside>
         ) : null}
         <main className="main">
