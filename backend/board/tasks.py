@@ -1301,8 +1301,40 @@ def sync_completion_time_to_bitrix(self, task_id: int):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=15)
-def sync_timer_to_bitrix(self, entry_id: int, action: str = "add"):
-    """Push a closed TimeEntry into Bitrix «Учёт времени» (task.elapseditem.add)."""
+def cleanup_bitrix_elapsed_items(self, task_id: int, elapsed_ids: list):
+    """Delete stale Bitrix elapsed rows after absolute time was rewritten."""
+    from board.models import Task
+
+    try:
+        task = Task.objects.select_related("project", "project__portal").get(pk=task_id)
+    except Task.DoesNotExist:
+        return {"ok": False, "reason": "missing"}
+    agency = _agency_portal_for_client(task.project.portal)
+    bitrix_id = str(task.agency_bitrix_task_id or "")
+    if not agency or not agency.access_token or not bitrix_id:
+        return {"ok": False, "reason": "no_bitrix"}
+    client = BitrixClient(agency)
+    deleted = 0
+    for elapsed_id in elapsed_ids or []:
+        if not elapsed_id:
+            continue
+        try:
+            client.delete_elapsed_item(bitrix_id, elapsed_id)
+            deleted += 1
+        except BitrixAPIError as exc:
+            logger.info(
+                "elapseditem.delete failed task=%s bitrix=%s item=%s: %s",
+                task_id,
+                bitrix_id,
+                elapsed_id,
+                exc,
+            )
+    return {"ok": True, "deleted": deleted}
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=15)
+def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
+    """Push absolute TimeEntry duration into Bitrix «Учёт времени»."""
     from django.db import transaction
 
     from board.models import TimeEntry
@@ -1320,12 +1352,6 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "add"):
                 )
                 .get(pk=entry_id)
             )
-            if entry.bitrix_elapsed_id:
-                return {
-                    "ok": True,
-                    "skipped": "already_synced",
-                    "elapsed_id": entry.bitrix_elapsed_id,
-                }
 
             seconds = int(entry.duration_seconds or 0)
             if seconds <= 0 or entry.ended_at is None:
@@ -1337,14 +1363,12 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "add"):
             if not agency or not agency.access_token:
                 raise BitrixAPIError("Нет связанной задачи на портале агентства")
             if not bitrix_id:
-                # Task may still be creating in Bitrix — force a sync then retry.
                 raise BitrixAPIError("Нет agency_bitrix_task_id — задача ещё не в Bitrix")
 
             client = BitrixClient(agency)
             try:
                 client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
             except BitrixAPIError as exc:
-                # Status sync may still work; elapsed add often works without this.
                 logger.info(
                     "ALLOW_TIME_TRACKING=Y failed task=%s bitrix=%s: %s",
                     task.id,
@@ -1352,7 +1376,36 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "add"):
                     exc,
                 )
 
-            # USER_ID for another employee often needs admin. Prefer OAuth / omit.
+            # Absolute set: update existing Bitrix row when we already posted one.
+            if entry.bitrix_elapsed_id:
+                try:
+                    client.update_elapsed_item(
+                        bitrix_id,
+                        entry.bitrix_elapsed_id,
+                        seconds,
+                        comment=entry.note or "",
+                    )
+                    return {
+                        "ok": True,
+                        "updated": True,
+                        "seconds": seconds,
+                        "elapsed_id": entry.bitrix_elapsed_id,
+                        "bitrix_task_id": bitrix_id,
+                    }
+                except BitrixAPIError as exc:
+                    logger.info(
+                        "elapseditem.update failed task=%s item=%s: %s — re-add",
+                        task.id,
+                        entry.bitrix_elapsed_id,
+                        exc,
+                    )
+                    try:
+                        client.delete_elapsed_item(bitrix_id, entry.bitrix_elapsed_id)
+                    except BitrixAPIError:
+                        pass
+                    entry.bitrix_elapsed_id = ""
+                    entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
+
             candidates: list[str | None] = []
             oauth_uid = _bitrix_user_id(client.get_current_user()) or None
             if oauth_uid:
@@ -1389,8 +1442,6 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "add"):
                 raise last_exc or BitrixAPIError("Не удалось добавить учёт времени")
             elapsed_id = _extract_elapsed_id(result)
             if not elapsed_id and result not in (None, "", {}, []):
-                # Some portals return bare truthy / odd shapes — keep a marker
-                # so we do not double-post on retry.
                 elapsed_id = str(result)[:64] if not isinstance(result, dict) else "ok"
             if elapsed_id:
                 entry.bitrix_elapsed_id = elapsed_id

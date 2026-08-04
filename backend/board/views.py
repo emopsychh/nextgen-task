@@ -494,8 +494,8 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="time")
     def add_time(self, request, pk=None):
-        """Manually add spent time (hours + minutes), like Bitrix «Учёт времени»."""
-        from board.timeutils import add_manual_time_entry
+        """Set spent time to absolute hours + minutes (replaces previous total)."""
+        from board.timeutils import set_manual_time_entry
 
         if not request.user.is_agency:
             raise PermissionDenied("Only agency can track time")
@@ -516,8 +516,6 @@ class TaskViewSet(viewsets.ModelViewSet):
         if minutes >= 60:
             return Response({"detail": "Минуты должны быть от 0 до 59"}, status=400)
         seconds = hours * 3600 + minutes * 60
-        if seconds <= 0:
-            return Response({"detail": "Укажите время больше нуля"}, status=400)
         if seconds > 7 * 24 * 3600:
             return Response({"detail": "Слишком большой интервал (макс. 7 суток)"}, status=400)
 
@@ -525,7 +523,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         if not isinstance(note, str):
             note = str(note)
 
-        add_manual_time_entry(
+        set_manual_time_entry(
             task,
             author=request.user.bitrix_user,
             duration_seconds=seconds,

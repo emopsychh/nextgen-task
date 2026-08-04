@@ -300,6 +300,39 @@ class BitrixClient:
                 )
             raise
 
+    def update_elapsed_item(
+        self,
+        task_id: int | str,
+        elapsed_id: int | str,
+        seconds: int,
+        *,
+        comment: str = "",
+    ) -> dict | str | int:
+        fields: dict = {
+            "SECONDS": max(0, int(seconds)),
+            "COMMENT_TEXT": (comment or "").strip() or " ",
+        }
+        try:
+            return self.call(
+                "task.elapseditem.update",
+                {"TASKID": task_id, "ITEMID": elapsed_id, "ARFIELDS": fields},
+            )
+        except BitrixAPIError as exc:
+            if "arfields" in str(exc).lower() or "fields" in str(exc).lower():
+                return self.call(
+                    "task.elapseditem.update",
+                    {"TASKID": task_id, "ITEMID": elapsed_id, "FIELDS": fields},
+                )
+            raise
+
+    def delete_elapsed_item(
+        self, task_id: int | str, elapsed_id: int | str
+    ) -> dict | str | int | bool:
+        return self.call(
+            "task.elapseditem.delete",
+            {"TASKID": task_id, "ITEMID": elapsed_id},
+        )
+
     def add_task_comment(self, task_id: int | str, message: str, author_id: str | None = None) -> dict | str | int:
         fields: dict = {"POST_MESSAGE": message}
         if author_id:

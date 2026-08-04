@@ -3,24 +3,33 @@ import { formatDuration } from "../../lib/format";
 
 type Props = {
   totalSeconds: number;
-  canAdd: boolean;
+  canEdit: boolean;
   busy?: boolean;
-  onAddTime: (hours: number, minutes: number) => Promise<void> | void;
+  onSetTime: (hours: number, minutes: number) => Promise<void> | void;
 };
 
-export function TaskTimer({ totalSeconds, canAdd, busy, onAddTime }: Props) {
+function splitSeconds(totalSeconds: number): { hours: string; minutes: string } {
+  const s = Math.max(0, Math.floor(totalSeconds || 0));
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  return { hours: String(hours), minutes: String(minutes) };
+}
+
+export function TaskTimer({ totalSeconds, canEdit, busy, onSetTime }: Props) {
   const [open, setOpen] = useState(false);
-  const [hours, setHours] = useState("0");
-  const [minutes, setMinutes] = useState("30");
+  const initial = splitSeconds(totalSeconds);
+  const [hours, setHours] = useState(initial.hours);
+  const [minutes, setMinutes] = useState(initial.minutes);
   const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
-      setHours("0");
-      setMinutes("30");
+      const next = splitSeconds(totalSeconds);
+      setHours(next.hours);
+      setMinutes(next.minutes);
       setLocalError(null);
     }
-  }, [open]);
+  }, [open, totalSeconds]);
 
   const clock = formatDuration(totalSeconds);
 
@@ -36,12 +45,8 @@ export function TaskTimer({ totalSeconds, canAdd, busy, onAddTime }: Props) {
       setLocalError("Минуты — от 0 до 59");
       return;
     }
-    if (h * 60 + m <= 0) {
-      setLocalError("Укажите время больше нуля");
-      return;
-    }
     setLocalError(null);
-    await onAddTime(h, m);
+    await onSetTime(h, m);
     setOpen(false);
   }
 
@@ -49,7 +54,7 @@ export function TaskTimer({ totalSeconds, canAdd, busy, onAddTime }: Props) {
     <div className="task-timer-scale" title={`Затрачено на задачу: ${clock}`}>
       <div className="task-timer-scale-line">
         <span className="task-timer-scale-clock">{clock}</span>
-        {canAdd ? (
+        {canEdit ? (
           <button
             type="button"
             className="task-timer-add-btn"
@@ -93,7 +98,7 @@ export function TaskTimer({ totalSeconds, canAdd, busy, onAddTime }: Props) {
               />
             </label>
             <button type="submit" className="btn btn-accent task-time-submit" disabled={busy}>
-              Добавить
+              Сохранить
             </button>
           </div>
           {localError ? <p className="task-time-form-error">{localError}</p> : null}

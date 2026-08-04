@@ -1,4 +1,4 @@
-"""Manual time entry replaces the live stopwatch."""
+"""Manual time sets absolute hours/minutes (does not accumulate)."""
 
 from __future__ import annotations
 
@@ -30,10 +30,10 @@ class ManualTimeApiTests(TestCase):
         self.agency_client.credentials(HTTP_AUTHORIZATION=f"Bearer {agency_tokens['access']}")
         self.client_client.credentials(HTTP_AUTHORIZATION=f"Bearer {client_tokens['access']}")
 
-    def test_agency_adds_manual_time(self):
+    def test_agency_sets_manual_time(self):
         from unittest.mock import patch
 
-        with patch("board.timeutils.enqueue_time_entry_billing"), patch(
+        with patch("board.timeutils._bill_absolute_time"), patch(
             "board.timeutils.enqueue_timer_bitrix_sync"
         ) as enqueue_bx, patch("board.views.publish_task_event"):
             res = self.agency_client.post(
@@ -47,7 +47,29 @@ class ManualTimeApiTests(TestCase):
         entry = TimeEntry.objects.get(task=self.task)
         self.assertEqual(entry.duration_seconds, 5400)
         self.assertIsNotNone(entry.ended_at)
-        enqueue_bx.assert_called_once_with(entry.id, "add")
+        enqueue_bx.assert_called_once_with(entry.id, "set")
+
+    def test_set_time_replaces_previous_total(self):
+        from unittest.mock import patch
+
+        with patch("board.timeutils._bill_absolute_time"), patch(
+            "board.timeutils.enqueue_timer_bitrix_sync"
+        ), patch("board.views.publish_task_event"):
+            first = self.agency_client.post(
+                f"/api/tasks/{self.task.id}/time/",
+                {"hours": 0, "minutes": 30},
+                format="json",
+            )
+            self.assertEqual(first.status_code, 200, first.content)
+            second = self.agency_client.post(
+                f"/api/tasks/{self.task.id}/time/",
+                {"hours": 1, "minutes": 0},
+                format="json",
+            )
+        self.assertEqual(second.status_code, 200, second.content)
+        self.assertEqual(second.data["total_tracked_seconds"], 3600)
+        self.assertEqual(TimeEntry.objects.filter(task=self.task).count(), 1)
+        self.assertEqual(TimeEntry.objects.get(task=self.task).duration_seconds, 3600)
 
     def test_manual_time_pushes_elapsed_to_bitrix(self):
         from unittest.mock import MagicMock, patch
@@ -63,7 +85,7 @@ class ManualTimeApiTests(TestCase):
         client.get_current_user.return_value = {"ID": "42"}
         client.add_elapsed_item.return_value = "501"
 
-        with patch("board.timeutils.enqueue_time_entry_billing"), patch(
+        with patch("board.timeutils._bill_absolute_time"), patch(
             "board.views.publish_task_event"
         ), patch.object(board_tasks, "BitrixClient", return_value=client):
             res = self.agency_client.post(
@@ -78,16 +100,25 @@ class ManualTimeApiTests(TestCase):
             "108",
             2700,
             comment="",
-            user_id="42",  # OAuth app user (safe for elapseditem.add)
+            user_id="42",
         )
         entry = TimeEntry.objects.get(task=self.task)
         self.assertEqual(entry.bitrix_elapsed_id, "501")
 
-        # Idempotent: second sync does not add again
+        # Second set updates the same Bitrix elapsed row.
         client.reset_mock()
-        with patch.object(board_tasks, "BitrixClient", return_value=client):
-            repeated = board_tasks.sync_timer_to_bitrix(entry.id, "add")
-        self.assertEqual(repeated["skipped"], "already_synced")
+        with patch("board.timeutils._bill_absolute_time"), patch(
+            "board.views.publish_task_event"
+        ), patch.object(board_tasks, "BitrixClient", return_value=client):
+            res2 = self.agency_client.post(
+                f"/api/tasks/{self.task.id}/time/",
+                {"hours": 1, "minutes": 0},
+                format="json",
+            )
+        self.assertEqual(res2.status_code, 200, res2.content)
+        client.update_elapsed_item.assert_called_once_with(
+            "108", "501", 3600, comment=""
+        )
         client.add_elapsed_item.assert_not_called()
 
     def test_start_status_does_not_open_timer(self):
@@ -114,10 +145,24 @@ class ManualTimeApiTests(TestCase):
         )
         self.assertEqual(res.status_code, 403)
 
-    def test_zero_time_rejected(self):
-        res = self.agency_client.post(
-            f"/api/tasks/{self.task.id}/time/",
-            {"hours": 0, "minutes": 0},
-            format="json",
-        )
-        self.assertEqual(res.status_code, 400)
+    def test_zero_time_clears(self):
+        from unittest.mock import patch
+
+        with patch("board.timeutils._bill_absolute_time"), patch(
+            "board.timeutils.enqueue_timer_bitrix_sync"
+        ), patch("board.timeutils._enqueue_bitrix_elapsed_cleanup"), patch(
+            "board.views.publish_task_event"
+        ):
+            self.agency_client.post(
+                f"/api/tasks/{self.task.id}/time/",
+                {"hours": 0, "minutes": 15},
+                format="json",
+            )
+            res = self.agency_client.post(
+                f"/api/tasks/{self.task.id}/time/",
+                {"hours": 0, "minutes": 0},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.data["total_tracked_seconds"], 0)
+        self.assertFalse(TimeEntry.objects.filter(task=self.task).exists())
