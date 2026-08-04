@@ -3,16 +3,44 @@
 from django.db import migrations, models
 
 
+def clear_duplicate_agency_bitrix_ids(apps, schema_editor):
+    """Keep the oldest Task per agency_bitrix_task_id; blank the rest."""
+    Task = apps.get_model("board", "Task")
+    seen: dict[str, int] = {}
+    qs = (
+        Task.objects.exclude(agency_bitrix_task_id="")
+        .order_by("id")
+        .only("id", "agency_bitrix_task_id")
+    )
+    clear_ids: list[int] = []
+    for task in qs.iterator():
+        bx = task.agency_bitrix_task_id
+        if bx in seen:
+            clear_ids.append(task.id)
+        else:
+            seen[bx] = task.id
+    if clear_ids:
+        Task.objects.filter(id__in=clear_ids).update(agency_bitrix_task_id="")
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('board', '0022_workreport_dismissed'),
-        ('portals', '0008_uniq_active_deal_per_deal_id'),
+        ("board", "0022_workreport_dismissed"),
+        ("portals", "0008_uniq_active_deal_per_deal_id"),
     ]
 
     operations = [
+        migrations.RunPython(
+            clear_duplicate_agency_bitrix_ids,
+            migrations.RunPython.noop,
+        ),
         migrations.AddConstraint(
-            model_name='task',
-            constraint=models.UniqueConstraint(condition=models.Q(('agency_bitrix_task_id', ''), _negated=True), fields=('agency_bitrix_task_id',), name='uniq_task_agency_bitrix_id'),
+            model_name="task",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("agency_bitrix_task_id", ""), _negated=True),
+                fields=("agency_bitrix_task_id",),
+                name="uniq_task_agency_bitrix_id",
+            ),
         ),
     ]
