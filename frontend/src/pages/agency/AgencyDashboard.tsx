@@ -6,25 +6,40 @@ import {
   type Paginated,
   type Project,
   type Task,
-  type TaskStatus,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
+import { FlameIcon } from "../../components/icons";
+import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
 import { formatDueFull } from "../../lib/format";
 import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
 
-type StatusFilter = "all" | TaskStatus;
+const HOT_DUE_DAYS = 2;
 
-type ProjectBucket = {
-  project: Project;
-  tasks: Task[];
-};
+type ClientFilter = "all" | number;
 
-type ClientBucket = {
-  portalId: number;
-  portalName: string;
-  projects: ProjectBucket[];
-  openCount: number;
-};
+function isDueSoon(dueDate: string | null | undefined, status: Task["status"]): boolean {
+  if (!dueDate || status === "done") return false;
+  if (isTaskOverdue(dueDate, status)) return false;
+  const target = parseDue(dueDate);
+  if (!isValidDate(target)) return false;
+  const today = startOfDay(new Date());
+  const targetDay = startOfDay(target);
+  const days = Math.round((targetDay.getTime() - today.getTime()) / 86400000);
+  return days >= 0 && days <= HOT_DUE_DAYS;
+}
+
+function hotPriority(task: Task): number {
+  if (isTaskOverdue(task.due_date, task.status)) return 0;
+  if (isDueSoon(task.due_date, task.status)) return 1;
+  if (task.is_important) return 2;
+  if (task.status === "in_progress") return 3;
+  return 4;
+}
+
+function portalLabel(task: Task, projects: Project[]): string {
+  const project = projects.find((p) => p.id === task.project);
+  return project?.portal_name || `Клиент #${task.portal_id}`;
+}
 
 async function fetchAllPages<T>(
   path: string,
@@ -39,14 +54,52 @@ async function fetchAllPages<T>(
       { signal },
       token
     );
-    if (Array.isArray(data)) {
-      return data;
-    }
+    if (Array.isArray(data)) return data;
     const batch = data.results || [];
     out.push(...batch);
     if (!data.next || batch.length === 0) break;
   }
   return out;
+}
+
+function TaskCard({
+  task,
+  clientName,
+}: {
+  task: Task;
+  clientName: string;
+}) {
+  const overdue = isTaskOverdue(task.due_date, task.status);
+  const soon = isDueSoon(task.due_date, task.status);
+  const due = task.due_date ? formatDueFull(task.due_date) : null;
+
+  return (
+    <Link
+      to={`/tasks/${task.id}`}
+      className={`workspace-attention-card${
+        overdue ? " is-overdue" : soon ? " is-soon" : ""
+      }`}
+    >
+      <div className="workspace-attention-top">
+        <span className="workspace-chip tone-client">{clientName}</span>
+        {overdue ? <span className="workspace-chip tone-overdue">Просрочена</span> : null}
+        {soon ? <span className="workspace-chip tone-soon">Скоро срок</span> : null}
+        {task.is_important ? (
+          <span className="task-important-pill" title="Важная задача">
+            <FlameIcon filled size={14} />
+            Важно
+          </span>
+        ) : null}
+      </div>
+      <strong>{task.title}</strong>
+      <span className="muted">
+        {task.project_name}
+        {" · "}
+        {STATUS_LABEL[task.status]}
+        {due ? ` · до ${due}` : " · без срока"}
+      </span>
+    </Link>
+  );
 }
 
 export function AgencyDashboard() {
@@ -55,8 +108,7 @@ export function AgencyDashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [query, setQuery] = useState("");
+  const [clientFilter, setClientFilter] = useState<ClientFilter>("all");
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -101,88 +153,87 @@ export function AgencyDashboard() {
     };
   }, [token, load]);
 
-  const filteredTasks = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return tasks.filter((t) => {
-      if (statusFilter !== "all" && t.status !== statusFilter) return false;
-      if (!q) return true;
-      return (
-        t.title.toLowerCase().includes(q) ||
-        (t.project_name || "").toLowerCase().includes(q) ||
-        (t.created_by_name || "").toLowerCase().includes(q)
-      );
-    });
-  }, [tasks, statusFilter, query]);
-
-  const buckets = useMemo(() => {
-    const projectById = new Map(projects.map((p) => [p.id, p]));
-    const byPortal = new Map<number, ClientBucket>();
-
-    for (const task of filteredTasks) {
-      const project =
-        projectById.get(task.project) ||
-        ({
-          id: task.project,
-          portal: task.portal_id,
-          portal_name: "",
-          name: task.project_name || `Проект #${task.project}`,
-          description: "",
-          is_active: true,
-          tasks_count: 0,
-          done_count: 0,
-        } satisfies Project);
-
-      const portalId = task.portal_id || project.portal;
-      let client = byPortal.get(portalId);
-      if (!client) {
-        client = {
-          portalId,
-          portalName: project.portal_name || `Клиент #${portalId}`,
-          projects: [],
-          openCount: 0,
-        };
-        byPortal.set(portalId, client);
-      } else if (project.portal_name && !client.portalName.includes(project.portal_name)) {
-        client.portalName = project.portal_name;
+  const clients = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const p of projects) {
+      if (!map.has(p.portal)) {
+        map.set(p.portal, p.portal_name || `Клиент #${p.portal}`);
       }
-
-      let bucket = client.projects.find((b) => b.project.id === project.id);
-      if (!bucket) {
-        bucket = { project, tasks: [] };
-        client.projects.push(bucket);
+    }
+    for (const t of tasks) {
+      if (!map.has(t.portal_id)) {
+        map.set(t.portal_id, portalLabel(t, projects));
       }
-      bucket.tasks.push(task);
-      client.openCount += 1;
     }
+    return Array.from(map.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  }, [projects, tasks]);
 
-    // Projects with zero matching tasks still appear if no search/filter — skip empties.
-    const list = Array.from(byPortal.values());
-    for (const client of list) {
-      client.projects.sort((a, b) => a.project.name.localeCompare(b.project.name, "ru"));
-    }
-    list.sort((a, b) => a.portalName.localeCompare(b.portalName, "ru"));
-    return list;
-  }, [filteredTasks, projects]);
+  const scopedTasks = useMemo(() => {
+    if (clientFilter === "all") return tasks;
+    return tasks.filter((t) => t.portal_id === clientFilter);
+  }, [tasks, clientFilter]);
 
-  const totalOpen = filteredTasks.length;
-  const clientCount = buckets.length;
-  const projectCount = buckets.reduce((n, c) => n + c.projects.length, 0);
+  const overdue = useMemo(
+    () =>
+      scopedTasks
+        .filter((t) => isTaskOverdue(t.due_date, t.status))
+        .sort((a, b) => hotPriority(a) - hotPriority(b)),
+    [scopedTasks]
+  );
 
-  const filters: { id: StatusFilter; label: string }[] = [
-    { id: "all", label: "Все открытые" },
-    { id: "todo", label: STATUS_LABEL.todo },
-    { id: "in_progress", label: STATUS_LABEL.in_progress },
-  ];
+  const dueSoon = useMemo(
+    () =>
+      scopedTasks
+        .filter((t) => isDueSoon(t.due_date, t.status))
+        .sort((a, b) => {
+          const da = a.due_date ? parseDue(a.due_date).getTime() : 0;
+          const db = b.due_date ? parseDue(b.due_date).getTime() : 0;
+          return da - db;
+        }),
+    [scopedTasks]
+  );
+
+  const important = useMemo(
+    () =>
+      scopedTasks
+        .filter(
+          (t) =>
+            t.is_important &&
+            !isTaskOverdue(t.due_date, t.status) &&
+            !isDueSoon(t.due_date, t.status)
+        )
+        .sort((a, b) => a.title.localeCompare(b.title, "ru")),
+    [scopedTasks]
+  );
+
+  const inProgress = useMemo(
+    () =>
+      scopedTasks
+        .filter(
+          (t) =>
+            t.status === "in_progress" &&
+            !isTaskOverdue(t.due_date, t.status) &&
+            !isDueSoon(t.due_date, t.status) &&
+            !t.is_important
+        )
+        .sort((a, b) => a.title.localeCompare(b.title, "ru")),
+    [scopedTasks]
+  );
+
+  const hotCount = overdue.length + dueSoon.length + important.length;
+  const calm = !loading && hotCount === 0 && inProgress.length === 0;
 
   return (
-    <div className="workspace-page agency-dashboard">
+    <div className="workspace-page agency-dashboard" data-tour="tour-agency-dashboard">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Дашборд</h1>
+          <h1 className="page-title">Рабочее пространство</h1>
           <p className="page-sub">
-            Все проекты и открытые задачи по клиентам
+            Горящие задачи со всех клиентов — без переключения по порталам
             {!loading
-              ? ` · ${clientCount} клиентов · ${projectCount} проектов · ${totalOpen} задач`
+              ? ` · ${overdue.length} просрочено · ${dueSoon.length} скоро · ${important.length} важных`
               : ""}
           </p>
         </div>
@@ -198,149 +249,123 @@ export function AgencyDashboard() {
 
       {error ? <div className="error-banner">{error}</div> : null}
 
-      <div className="dashboard-toolbar">
-        <div className="task-filters" role="tablist" aria-label="Фильтр по статусу">
-          {filters.map((f) => (
+      {clients.length > 1 ? (
+        <div className="dashboard-toolbar">
+          <div className="task-filters" role="tablist" aria-label="Фильтр по клиенту">
             <button
-              key={f.id}
               type="button"
               role="tab"
-              aria-selected={statusFilter === f.id}
-              className={`task-filter${statusFilter === f.id ? " active" : ""}`}
-              onClick={() => setStatusFilter(f.id)}
+              aria-selected={clientFilter === "all"}
+              className={`task-filter${clientFilter === "all" ? " active" : ""}`}
+              onClick={() => setClientFilter("all")}
             >
-              {f.label}
+              Все клиенты
             </button>
-          ))}
+            {clients.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                role="tab"
+                aria-selected={clientFilter === c.id}
+                className={`task-filter${clientFilter === c.id ? " active" : ""}`}
+                onClick={() => setClientFilter(c.id)}
+              >
+                {c.name}
+              </button>
+            ))}
+          </div>
         </div>
-        <label className="task-search dashboard-search">
-          <span className="task-search-icon" aria-hidden>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
-              <path
-                d="M20 20l-3.5-3.5"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </span>
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Поиск по задаче, проекту, постановщику"
-            aria-label="Поиск"
-          />
-        </label>
-      </div>
+      ) : null}
 
-      {loading && buckets.length === 0 ? (
+      {loading && tasks.length === 0 ? (
         <div className="empty-linked workspace-empty data-loading-state">
           <span className="data-loading-spinner" aria-hidden />
           <p className="muted">Собираем задачи по клиентам…</p>
         </div>
-      ) : buckets.length === 0 ? (
+      ) : calm ? (
         <div className="empty-linked workspace-empty">
           <p className="muted">
-            {tasks.length === 0
-              ? "Открытых задач пока нет."
-              : "Нет задач по выбранному фильтру."}
+            Сейчас нет просроченных, срочных и важных задач
+            {clientFilter === "all" ? " по клиентам" : ""}. Можно спокойно открыть нужный
+            портал слева.
           </p>
         </div>
       ) : (
-        <div className="dashboard-clients">
-          {buckets.map((client) => (
-            <section key={client.portalId} className="dashboard-client">
-              <header className="dashboard-client-head">
-                <div>
-                  <h2 className="section-title">
-                    <Link to={`/portals/${client.portalId}`} className="dashboard-client-link">
-                      {client.portalName}
-                    </Link>
-                  </h2>
-                  <p className="muted">
-                    {client.projects.length}{" "}
-                    {client.projects.length === 1 ? "проект" : "проектов"} · {client.openCount}{" "}
-                    открытых
-                  </p>
-                </div>
-                <Link to={`/portals/${client.portalId}/projects`} className="btn btn-ghost">
-                  Все проекты
-                </Link>
-              </header>
-
-              <div className="dashboard-projects">
-                {client.projects.map(({ project, tasks: projectTasks }) => (
-                  <article key={project.id} className="dashboard-project">
-                    <div className="dashboard-project-head">
-                      <div className="dashboard-project-head-main">
-                        <span className="dashboard-project-kicker">Проект</span>
-                        <Link to={`/projects/${project.id}`} className="dashboard-project-title">
-                          {project.name}
-                        </Link>
-                      </div>
-                      <span className="dashboard-project-count">
-                        {projectTasks.length}{" "}
-                        {projectTasks.length === 1
-                          ? "задача"
-                          : projectTasks.length < 5
-                            ? "задачи"
-                            : "задач"}
-                      </span>
-                    </div>
-                    <ul className="dashboard-task-list">
-                      {projectTasks.map((task) => {
-                        const overdue = isTaskOverdue(task.due_date, task.status);
-                        const statusClass = overdue
-                          ? "status-overdue"
-                          : task.status === "in_progress"
-                            ? "status-progress"
-                            : `status-${task.status}`;
-                        return (
-                          <li key={task.id} className="dashboard-task-item">
-                            <Link
-                              to={`/tasks/${task.id}`}
-                              className={`dashboard-task-card${overdue ? " is-overdue" : ""}`}
-                            >
-                              <span className={`task-status-pill ${statusClass}`}>
-                                {overdue ? "Просрочена" : STATUS_LABEL[task.status]}
-                              </span>
-                              <div className="dashboard-task-body">
-                                <strong className="dashboard-task-title">
-                                  {task.is_important ? (
-                                    <span
-                                      className="dashboard-task-flame"
-                                      title="Важная"
-                                      aria-hidden
-                                    >
-                                      ★
-                                    </span>
-                                  ) : null}
-                                  {task.title}
-                                </strong>
-                                <span className="dashboard-task-meta muted">
-                                  <span>
-                                    {task.due_date
-                                      ? formatDueFull(task.due_date)
-                                      : "Без срока"}
-                                  </span>
-                                  {task.created_by_name ? (
-                                    <span className="dashboard-task-author">
-                                      {task.created_by_name}
-                                    </span>
-                                  ) : null}
-                                </span>
-                              </div>
-                            </Link>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </article>
+        <div className="workspace-focus dashboard-focus">
+          {overdue.length > 0 ? (
+            <section className="workspace-focus-block">
+              <div className="linked-head">
+                <h2 className="section-title dashboard-section-title is-overdue">
+                  Просрочены
+                  <span className="dashboard-section-count">{overdue.length}</span>
+                </h2>
+                <p className="muted">Срок уже прошёл — взять в работу в первую очередь</p>
+              </div>
+              <div className="workspace-attention-list dashboard-attention-grid">
+                {overdue.map((t) => (
+                  <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
                 ))}
               </div>
             </section>
-          ))}
+          ) : null}
+
+          {dueSoon.length > 0 ? (
+            <section className="workspace-focus-block">
+              <div className="linked-head">
+                <h2
+                  className={`workspace-hot-heading${
+                    dueSoon.length > 0 ? " is-shaking" : " is-calm"
+                  }`}
+                >
+                  <span className="workspace-hot-pill">
+                    <FlameIcon filled size={14} />
+                    <span className="workspace-hot-label">Скоро срок</span>
+                  </span>
+                  <span className="dashboard-section-count">{dueSoon.length}</span>
+                </h2>
+                <p className="muted">Срок сегодня или в ближайшие 1–2 дня</p>
+              </div>
+              <div className="workspace-attention-list dashboard-attention-grid">
+                {dueSoon.map((t) => (
+                  <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {important.length > 0 ? (
+            <section className="workspace-focus-block">
+              <div className="linked-head">
+                <h2 className="section-title dashboard-section-title">
+                  Важные
+                  <span className="dashboard-section-count">{important.length}</span>
+                </h2>
+                <p className="muted">Помечены важными, без ближайшего дедлайна</p>
+              </div>
+              <div className="workspace-attention-list dashboard-attention-grid">
+                {important.map((t) => (
+                  <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {inProgress.length > 0 ? (
+            <section className="workspace-focus-block">
+              <div className="linked-head">
+                <h2 className="section-title dashboard-section-title">
+                  Уже в работе
+                  <span className="dashboard-section-count">{inProgress.length}</span>
+                </h2>
+                <p className="muted">Открыты в статусе «Выполняется» по всем клиентам</p>
+              </div>
+              <div className="workspace-attention-list dashboard-attention-grid">
+                {inProgress.map((t) => (
+                  <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
+                ))}
+              </div>
+            </section>
+          ) : null}
         </div>
       )}
     </div>

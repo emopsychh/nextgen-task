@@ -261,7 +261,7 @@ export function ClientRail() {
         <NavLink
           to="/dashboard"
           className={`client-avatar dashboard${dashboardActive ? " active" : ""}`}
-          title="Дашборд"
+          title="Рабочее пространство"
           data-tour="tour-agency-dashboard"
         >
           <span className="client-avatar-face">
