@@ -78,7 +78,7 @@ class ManualTimeApiTests(TestCase):
             "108",
             2700,
             comment="",
-            user_id="a1",  # agency author on agency portal
+            user_id="42",  # OAuth app user (safe for elapseditem.add)
         )
         entry = TimeEntry.objects.get(task=self.task)
         self.assertEqual(entry.bitrix_elapsed_id, "501")

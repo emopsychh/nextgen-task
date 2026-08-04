@@ -798,6 +798,23 @@ def sync_task_to_bitrix(self, task_id: int):
         publish_task_event(task, kind="task_synced")
     except Exception:
         pass
+
+    # Catch up elapsed rows that raced create / failed earlier.
+    try:
+        from board.models import TimeEntry
+        from board.timeutils import enqueue_timer_bitrix_sync
+
+        pending = TimeEntry.objects.filter(
+            task_id=task.id,
+            ended_at__isnull=False,
+            bitrix_elapsed_id="",
+            duration_seconds__gt=0,
+        ).values_list("id", flat=True)[:50]
+        for entry_id in pending:
+            enqueue_timer_bitrix_sync(entry_id, "add")
+    except Exception:
+        logger.info("enqueue pending elapsed after task sync failed task=%s", task_id)
+
     return {
         "ok": True,
         "bitrix_task_id": task.bitrix_task_id,
@@ -1324,17 +1341,28 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "add"):
                 raise BitrixAPIError("Нет agency_bitrix_task_id — задача ещё не в Bitrix")
 
             client = BitrixClient(agency)
-            client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
+            try:
+                client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
+            except BitrixAPIError as exc:
+                # Status sync may still work; elapsed add often works without this.
+                logger.info(
+                    "ALLOW_TIME_TRACKING=Y failed task=%s bitrix=%s: %s",
+                    task.id,
+                    bitrix_id,
+                    exc,
+                )
 
-            # Prefer agency-portal author, then OAuth app user, then omit USER_ID.
+            # USER_ID for another employee often needs admin. Prefer OAuth / omit.
             candidates: list[str | None] = []
-            if entry.author_id and getattr(entry.author, "bitrix_id", None):
-                if entry.author.portal_id == agency.id:
-                    candidates.append(str(entry.author.bitrix_id))
             oauth_uid = _bitrix_user_id(client.get_current_user()) or None
-            if oauth_uid and oauth_uid not in candidates:
+            if oauth_uid:
                 candidates.append(oauth_uid)
             candidates.append(None)
+            if entry.author_id and getattr(entry.author, "bitrix_id", None):
+                if entry.author.portal_id == agency.id:
+                    author_uid = str(entry.author.bitrix_id)
+                    if author_uid not in candidates:
+                        candidates.append(author_uid)
 
             result = None
             last_exc: BitrixAPIError | None = None
@@ -1343,16 +1371,27 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "add"):
                     result = client.add_elapsed_item(
                         bitrix_id,
                         seconds,
-                        comment="",
+                        comment=entry.note or "",
                         user_id=user_id,
                     )
                     last_exc = None
                     break
                 except BitrixAPIError as exc:
                     last_exc = exc
+                    logger.info(
+                        "elapseditem.add failed task=%s bitrix=%s user=%s: %s",
+                        task.id,
+                        bitrix_id,
+                        user_id,
+                        exc,
+                    )
             if result is None:
                 raise last_exc or BitrixAPIError("Не удалось добавить учёт времени")
             elapsed_id = _extract_elapsed_id(result)
+            if not elapsed_id and result not in (None, "", {}, []):
+                # Some portals return bare truthy / odd shapes — keep a marker
+                # so we do not double-post on retry.
+                elapsed_id = str(result)[:64] if not isinstance(result, dict) else "ok"
             if elapsed_id:
                 entry.bitrix_elapsed_id = elapsed_id
                 entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])

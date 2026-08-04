@@ -278,17 +278,27 @@ class BitrixClient:
         comment: str = "",
         user_id: str | None = None,
     ) -> dict | str | int:
-        """Add closed elapsed time. Keep COMMENT_TEXT empty to avoid chat spam."""
+        """Add closed elapsed time. Bitrix requires ARFIELDS (not FIELDS)."""
         fields: dict = {
             "SECONDS": max(0, int(seconds)),
-            "COMMENT_TEXT": (comment or "").strip(),
+            # COMMENT_TEXT is required by the API even when empty.
+            "COMMENT_TEXT": (comment or "").strip() or " ",
         }
         if user_id:
             fields["USER_ID"] = user_id
-        return self.call(
-            "task.elapseditem.add",
-            {"TASKID": task_id, "FIELDS": fields},
-        )
+        try:
+            return self.call(
+                "task.elapseditem.add",
+                {"TASKID": task_id, "ARFIELDS": fields},
+            )
+        except BitrixAPIError as exc:
+            # Legacy portals occasionally still accept FIELDS.
+            if "arfields" in str(exc).lower() or "fields" in str(exc).lower():
+                return self.call(
+                    "task.elapseditem.add",
+                    {"TASKID": task_id, "FIELDS": fields},
+                )
+            raise
 
     def add_task_comment(self, task_id: int | str, message: str, author_id: str | None = None) -> dict | str | int:
         fields: dict = {"POST_MESSAGE": message}
