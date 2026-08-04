@@ -700,6 +700,11 @@ export function TaskDetail() {
       </div>
 
       {error && <div className="error-banner">{error}</div>}
+      {task.sync_status === "error" && task.sync_error ? (
+        <div className="error-banner">
+          Синхронизация с Bitrix: {task.sync_error}
+        </div>
+      ) : null}
 
       <FlashToast message={toast.message} leaving={toast.leaving} />
 

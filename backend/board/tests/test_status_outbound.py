@@ -16,13 +16,20 @@ from portals.models import Portal
 from .helpers import make_link, make_portal, make_project, make_task, make_user
 
 
-def _mock_client(bitrix_status: str = "3", *, after_complete: str | None = "5") -> MagicMock:
+def _mock_client(
+    bitrix_status: str = "3",
+    *,
+    after_complete: str | None = "5",
+    after_start: str | None = "3",
+) -> MagicMock:
     client = MagicMock()
 
     def get_task(*_a, **_k):
         # After complete succeeds, verification/later reads see the new status.
         if after_complete is not None and client.complete_task.called:
             return {"status": after_complete}
+        if after_start is not None and client.start_task.called:
+            return {"status": after_start}
         return {"status": bitrix_status}
 
     client.get_task.side_effect = get_task
@@ -85,7 +92,7 @@ class OutboundStatusPushTests(TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(
             client.update_task.call_args.args[1]["ALLOW_TIME_TRACKING"],
-            "N",
+            "Y",
         )
         client.complete_task.assert_called()
         client.pause_task.assert_called()
@@ -127,7 +134,7 @@ class OutboundStatusPushTests(TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(
             client.update_task.call_args.args[1]["ALLOW_TIME_TRACKING"],
-            "N",
+            "Y",
         )
         client.start_task.assert_called()
 

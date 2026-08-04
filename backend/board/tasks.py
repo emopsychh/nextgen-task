@@ -157,10 +157,9 @@ def _task_fields(
         fields["GROUP_ID"] = group_id
     if parent_id:
         fields["PARENT_ID"] = parent_id
-    # No live Bitrix stopwatch from the app. Elapsed rows are added via
-    # task.elapseditem.add when the user enters time in Nextgen (ALLOW_TIME_TRACKING
-    # is flipped to Y in that sync). Keep N on create/update to avoid dual timers.
-    fields["ALLOW_TIME_TRACKING"] = "N"
+    # Enable «Учёт времени» so task.elapseditem.add works when the user enters
+    # time in the app. We never start the Bitrix live stopwatch from Nextgen.
+    fields["ALLOW_TIME_TRACKING"] = "Y"
     # Bitrix PRIORITY: 2 = High («важная»), 1 = Normal. Mirror the local flag.
     fields["PRIORITY"] = "2" if getattr(task, "is_important", False) else "1"
     if crm_bindings:
@@ -255,6 +254,16 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
     # A failed start must keep the task in sync_error/retry instead of silently
     # reporting success while Bitrix remains unchanged.
     client.start_task(bitrix_task_id)
+    after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
+    if after != BITRIX_STATUS_IN_PROGRESS:
+        # One retry — Bitrix sometimes needs a beat after tasks.task.update.
+        client.start_task(bitrix_task_id)
+        after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
+    if after != BITRIX_STATUS_IN_PROGRESS:
+        raise BitrixAPIError(
+            f"Bitrix задача {bitrix_task_id} не началась (status={after}); "
+            "проверьте права исполнителя / статус в Bitrix"
+        )
 
 
 def _ensure_project_agency_parent(project) -> tuple[str, str]:
@@ -339,13 +348,12 @@ def _sync_one_portal(
             getattr(task, "is_important", None),
         )
         client.update_task(existing_id, fields)
-        # Only push status on explicit local→Bitrix sync (PENDING).
-        # Time tracking is app-only; Bitrix «Учёт времени» is filled manually.
-        if task.sync_status == task.SyncStatus.PENDING:
-            try:
-                apply_bitrix_status(client, existing_id, task.status)
-            except BitrixAPIError as exc:
-                raise BitrixAPIError(f"не удалось сменить статус в Bitrix: {exc}") from exc
+        # Always push start/complete. Gating on PENDING skipped status when a
+        # concurrent title/meta sync marked the row SYNCED first.
+        try:
+            apply_bitrix_status(client, existing_id, task.status)
+        except BitrixAPIError as exc:
+            raise BitrixAPIError(f"не удалось сменить статус в Bitrix: {exc}") from exc
         return existing_id
 
     fields = _task_fields(
@@ -1077,25 +1085,41 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "add"):
             task = entry.task
             agency = _agency_portal_for_client(task.project.portal)
             bitrix_id = str(task.agency_bitrix_task_id or "")
-            if not agency or not agency.access_token or not bitrix_id:
+            if not agency or not agency.access_token:
                 raise BitrixAPIError("Нет связанной задачи на портале агентства")
+            if not bitrix_id:
+                # Task may still be creating in Bitrix — force a sync then retry.
+                raise BitrixAPIError("Нет agency_bitrix_task_id — задача ещё не в Bitrix")
 
             client = BitrixClient(agency)
-            # Elapsed items require time tracking enabled on the Bitrix task.
             client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
 
-            user_id = None
+            # Prefer agency-portal author, then OAuth app user, then omit USER_ID.
+            candidates: list[str | None] = []
             if entry.author_id and getattr(entry.author, "bitrix_id", None):
-                user_id = str(entry.author.bitrix_id)
-            if not user_id:
-                user_id = _bitrix_user_id(client.get_current_user()) or None
+                if entry.author.portal_id == agency.id:
+                    candidates.append(str(entry.author.bitrix_id))
+            oauth_uid = _bitrix_user_id(client.get_current_user()) or None
+            if oauth_uid and oauth_uid not in candidates:
+                candidates.append(oauth_uid)
+            candidates.append(None)
 
-            result = client.add_elapsed_item(
-                bitrix_id,
-                seconds,
-                comment="",
-                user_id=user_id,
-            )
+            result = None
+            last_exc: BitrixAPIError | None = None
+            for user_id in candidates:
+                try:
+                    result = client.add_elapsed_item(
+                        bitrix_id,
+                        seconds,
+                        comment="",
+                        user_id=user_id,
+                    )
+                    last_exc = None
+                    break
+                except BitrixAPIError as exc:
+                    last_exc = exc
+            if result is None:
+                raise last_exc or BitrixAPIError("Не удалось добавить учёт времени")
             elapsed_id = _extract_elapsed_id(result)
             if elapsed_id:
                 entry.bitrix_elapsed_id = elapsed_id
