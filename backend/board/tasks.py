@@ -70,8 +70,17 @@ def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
     return ""
 
 
-def _resolve_creator_id(task, portal, responsible_id: str) -> str:
-    """Creator must be a user of the target (agency) Bitrix portal."""
+def _resolve_creator_id(
+    client: BitrixClient, task, portal, responsible_id: str
+) -> str:
+    """
+    Creator must be a user of the target (agency) Bitrix portal.
+
+    Critical: CREATED_BY must stay the OAuth/app user (or same-portal author).
+    Pinning CREATED_BY to BITRIX_CLIENT_TASK_AUTHOR_ID while calling the API as
+    another user makes Bitrix reject later update/start/complete
+    («Нет доступа…» / «Действие над задачей не разрешено»).
+    """
     if (
         task.created_by_id
         and task.created_by
@@ -79,13 +88,32 @@ def _resolve_creator_id(task, portal, responsible_id: str) -> str:
         and task.created_by.bitrix_id
     ):
         return str(task.created_by.bitrix_id)
-    # Cross-portal author means the task was submitted by a client. Never send
-    # that foreign Bitrix user id to the agency portal.
-    if task.created_by_id and task.created_by:
-        configured = (settings.BITRIX_CLIENT_TASK_AUTHOR_ID or "").strip()
-        if configured:
-            return configured
+    # Cross-portal / client-authored: creator = the token that will keep editing.
+    uid = _bitrix_user_id(client.get_current_user())
+    if uid:
+        return uid
     return responsible_id
+
+
+def _bitrix_access_denied(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "не разрешено",
+            "нет доступа",
+            "access denied",
+            "access_denied",
+            "permission",
+        )
+    )
+
+
+def _set_bitrix_status_field(
+    client: BitrixClient, bitrix_task_id: str, status_code: int
+) -> None:
+    """Fallback when start/complete are forbidden for the OAuth user."""
+    client.update_task(bitrix_task_id, {"STATUS": status_code})
 
 
 def _agency_portal_for_client(client_portal):
@@ -229,7 +257,18 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
                 pass
             _stop_bitrix_timer_quiet(client, bitrix_task_id)
 
-        client.complete_task(bitrix_task_id)
+        try:
+            client.complete_task(bitrix_task_id)
+        except BitrixAPIError as exc:
+            if not _bitrix_access_denied(exc):
+                raise
+            logger.info(
+                "complete forbidden for %s (%s) — STATUS field fallback",
+                bitrix_task_id,
+                exc,
+            )
+            _set_bitrix_status_field(client, bitrix_task_id, BITRIX_STATUS_COMPLETED)
+
         after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
         if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
             _stop_bitrix_timer_quiet(client, bitrix_task_id)
@@ -237,8 +276,23 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
                 client.pause_task(bitrix_task_id)
             except BitrixAPIError:
                 pass
-            client.complete_task(bitrix_task_id)
+            try:
+                client.complete_task(bitrix_task_id)
+            except BitrixAPIError as exc:
+                if _bitrix_access_denied(exc):
+                    _set_bitrix_status_field(
+                        client, bitrix_task_id, BITRIX_STATUS_COMPLETED
+                    )
+                else:
+                    raise
             after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
+        if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
+            # Last resort for OAuth users who are not the responsible.
+            try:
+                _set_bitrix_status_field(client, bitrix_task_id, BITRIX_STATUS_COMPLETED)
+                after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
+            except BitrixAPIError:
+                pass
         if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
             raise BitrixAPIError(
                 f"Bitrix задача {bitrix_task_id} не завершилась (status={after}); "
@@ -251,13 +305,29 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         return
     if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
         raise BitrixAPIError("Завершённую задачу нельзя возобновить")
-    # A failed start must keep the task in sync_error/retry instead of silently
-    # reporting success while Bitrix remains unchanged.
-    client.start_task(bitrix_task_id)
+    try:
+        client.start_task(bitrix_task_id)
+    except BitrixAPIError as exc:
+        if not _bitrix_access_denied(exc):
+            raise
+        logger.info(
+            "start forbidden for %s (%s) — STATUS field fallback",
+            bitrix_task_id,
+            exc,
+        )
+        _set_bitrix_status_field(client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS)
+
     after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
     if after != BITRIX_STATUS_IN_PROGRESS:
-        # One retry — Bitrix sometimes needs a beat after tasks.task.update.
-        client.start_task(bitrix_task_id)
+        try:
+            client.start_task(bitrix_task_id)
+        except BitrixAPIError as exc:
+            if _bitrix_access_denied(exc):
+                _set_bitrix_status_field(
+                    client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS
+                )
+            else:
+                raise
         after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
     if after != BITRIX_STATUS_IN_PROGRESS:
         raise BitrixAPIError(
@@ -314,7 +384,7 @@ def _sync_one_portal(
 
     client = BitrixClient(portal)
     responsible_id = _resolve_responsible_id(client, task, portal)
-    creator_id = _resolve_creator_id(task, portal, responsible_id)
+    creator_id = _resolve_creator_id(client, task, portal, responsible_id)
     if not responsible_id and not existing_id:
         raise BitrixAPIError(
             f"Не указан исполнитель на {portal.domain}: задайте "
@@ -347,9 +417,19 @@ def _sync_one_portal(
             fields.get("PRIORITY"),
             getattr(task, "is_important", None),
         )
-        client.update_task(existing_id, fields)
-        # Always push start/complete. Gating on PENDING skipped status when a
-        # concurrent title/meta sync marked the row SYNCED first.
+        try:
+            client.update_task(existing_id, fields)
+        except BitrixAPIError as exc:
+            # Still try status push — update may fail on legacy tasks with a
+            # foreign CREATED_BY while STATUS/start can succeed (or vice versa).
+            if not _bitrix_access_denied(exc):
+                raise
+            logger.info(
+                "update forbidden task=%s bitrix=%s (%s) — status-only",
+                task.id,
+                existing_id,
+                exc,
+            )
         try:
             apply_bitrix_status(client, existing_id, task.status)
         except BitrixAPIError as exc:
@@ -366,6 +446,10 @@ def _sync_one_portal(
         crm_bindings=crm_bindings,
     )
     fields["TITLE"] = title
+    # Keep the OAuth user among participants so later syncs keep edit rights
+    # even if RESPONSIBLE_ID is a different employee.
+    if creator_id and responsible_id and creator_id != responsible_id:
+        fields["ACCOMPLICES"] = [creator_id]
     result = client.create_task(fields)
     bitrix_id = _extract_bitrix_id(result)
     if bitrix_id and task.status != "todo":
