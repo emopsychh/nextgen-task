@@ -60,11 +60,10 @@ class SyncTaskIdempotencyTests(TestCase):
         self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
         self.assertEqual(client.create_task.call_count, 1)
         created_fields = client.create_task.call_args.args[0]
-        # CREATED_BY = OAuth app user (keeps edit/start/complete rights).
-        self.assertEqual(created_fields["CREATED_BY"], "42")
+        # Omit CREATED_BY — Bitrix assigns the OAuth user (keeps edit rights).
+        self.assertNotIn("CREATED_BY", created_fields)
         self.assertEqual(created_fields["RESPONSIBLE_ID"], "99")
         self.assertEqual(created_fields["ALLOW_TIME_TRACKING"], "Y")
-        # OAuth is already CREATED_BY — no need to duplicate as accomplice.
         self.assertNotIn("ACCOMPLICES", created_fields)
 
         Task.objects.filter(pk=task.pk).update(sync_status=Task.SyncStatus.PENDING)
