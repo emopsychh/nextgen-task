@@ -271,49 +271,72 @@ export function AgencyDashboard() {
 
               <div className="dashboard-projects">
                 {client.projects.map(({ project, tasks: projectTasks }) => (
-                  <div key={project.id} className="dashboard-project">
+                  <article key={project.id} className="dashboard-project">
                     <div className="dashboard-project-head">
-                      <Link to={`/projects/${project.id}`} className="dashboard-project-title">
-                        {project.name}
-                      </Link>
-                      <span className="muted">
+                      <div className="dashboard-project-head-main">
+                        <span className="dashboard-project-kicker">Проект</span>
+                        <Link to={`/projects/${project.id}`} className="dashboard-project-title">
+                          {project.name}
+                        </Link>
+                      </div>
+                      <span className="dashboard-project-count">
                         {projectTasks.length}{" "}
-                        {projectTasks.length === 1 ? "задача" : "задач"}
+                        {projectTasks.length === 1
+                          ? "задача"
+                          : projectTasks.length < 5
+                            ? "задачи"
+                            : "задач"}
                       </span>
                     </div>
                     <ul className="dashboard-task-list">
                       {projectTasks.map((task) => {
                         const overdue = isTaskOverdue(task.due_date, task.status);
+                        const statusClass = overdue
+                          ? "status-overdue"
+                          : task.status === "in_progress"
+                            ? "status-progress"
+                            : `status-${task.status}`;
                         return (
-                          <li key={task.id}>
-                            <Link to={`/tasks/${task.id}`} className="dashboard-task-row">
-                              <span
-                                className={`dashboard-task-status status-${task.status}${
-                                  overdue ? " is-overdue" : ""
-                                }`}
-                              >
+                          <li key={task.id} className="dashboard-task-item">
+                            <Link
+                              to={`/tasks/${task.id}`}
+                              className={`dashboard-task-card${overdue ? " is-overdue" : ""}`}
+                            >
+                              <span className={`task-status-pill ${statusClass}`}>
                                 {overdue ? "Просрочена" : STATUS_LABEL[task.status]}
                               </span>
-                              <span className="dashboard-task-title">
-                                {task.is_important ? (
-                                  <span className="dashboard-task-flame" title="Важная" aria-hidden>
-                                    ★
+                              <div className="dashboard-task-body">
+                                <strong className="dashboard-task-title">
+                                  {task.is_important ? (
+                                    <span
+                                      className="dashboard-task-flame"
+                                      title="Важная"
+                                      aria-hidden
+                                    >
+                                      ★
+                                    </span>
+                                  ) : null}
+                                  {task.title}
+                                </strong>
+                                <span className="dashboard-task-meta muted">
+                                  <span>
+                                    {task.due_date
+                                      ? formatDueFull(task.due_date)
+                                      : "Без срока"}
                                   </span>
-                                ) : null}
-                                {task.title}
-                              </span>
-                              <span className="dashboard-task-meta muted">
-                                {task.due_date ? formatDueFull(task.due_date) : "Без срока"}
-                                {task.created_by_name
-                                  ? ` · ${task.created_by_name}`
-                                  : ""}
-                              </span>
+                                  {task.created_by_name ? (
+                                    <span className="dashboard-task-author">
+                                      {task.created_by_name}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </div>
                             </Link>
                           </li>
                         );
                       })}
                     </ul>
-                  </div>
+                  </article>
                 ))}
               </div>
             </section>
