@@ -135,13 +135,24 @@ def _claim_bitrix_task_for_oauth(client: BitrixClient, bitrix_task_id: str) -> s
 
 def _set_bitrix_status_field(
     client: BitrixClient, bitrix_task_id: str, status_code: int
-) -> None:
-    """Fallback when start/complete are forbidden for the OAuth user."""
+) -> bool:
+    """Fallback when start/complete are forbidden. Returns True if update stuck."""
     try:
         client.update_task(bitrix_task_id, {"STATUS": status_code})
+        return True
     except BitrixAPIError:
         _claim_bitrix_task_for_oauth(client, bitrix_task_id)
-        client.update_task(bitrix_task_id, {"STATUS": status_code})
+        try:
+            client.update_task(bitrix_task_id, {"STATUS": status_code})
+            return True
+        except BitrixAPIError as exc:
+            logger.info(
+                "STATUS=%s update failed for %s: %s",
+                status_code,
+                bitrix_task_id,
+                exc,
+            )
+            return False
 
 
 def _agency_portal_for_client(client_portal):
