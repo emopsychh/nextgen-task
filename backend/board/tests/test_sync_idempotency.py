@@ -65,7 +65,14 @@ class SyncTaskIdempotencyTests(TestCase):
         self.assertEqual(created_fields["RESPONSIBLE_ID"], "42")
         self.assertEqual(created_fields["ALLOW_TIME_TRACKING"], "Y")
         self.assertNotIn("ACCOMPLICES", created_fields)
-        client.update_task.assert_any_call("999", {"RESPONSIBLE_ID": "99"})
+        # Client author id is постановщик, not исполнитель.
+        client.update_task.assert_any_call("999", {"CREATED_BY": "99"})
+        for call in client.update_task.call_args_list:
+            args = call.args
+            if len(args) >= 2 and isinstance(args[1], dict) and args[1] == {
+                "RESPONSIBLE_ID": "99"
+            }:
+                self.fail("must not reassign RESPONSIBLE to client author id")
 
         Task.objects.filter(pk=task.pk).update(sync_status=Task.SyncStatus.PENDING)
         with patch.object(board_tasks, "BitrixClient", return_value=client):

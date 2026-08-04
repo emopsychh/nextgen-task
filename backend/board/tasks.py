@@ -31,26 +31,26 @@ def _bitrix_user_id(user_data: dict) -> str:
 
 
 def _configured_default_responsible_id() -> str:
-    """Stable agency user for client-originated tasks (not whoever last opened the app)."""
-    return (
-        (getattr(settings, "BITRIX_DEFAULT_RESPONSIBLE_ID", "") or "").strip()
-        or (settings.BITRIX_CLIENT_TASK_AUTHOR_ID or "").strip()
-    )
+    """Stable agency assignee for client-originated work (исполнитель)."""
+    return (getattr(settings, "BITRIX_DEFAULT_RESPONSIBLE_ID", "") or "").strip()
+
+
+def _configured_client_author_id() -> str:
+    """Agency Bitrix user «Клиент» — постановщик задач с клиентского портала."""
+    return (settings.BITRIX_CLIENT_TASK_AUTHOR_ID or "").strip()
 
 
 def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
     """
-    Bitrix requires RESPONSIBLE_ID to be a user of the SAME portal the task is
-    created on. A client-portal user id is meaningless on the agency portal (and
-    vice-versa), so it must never leak across portals.
+    Bitrix RESPONSIBLE_ID (исполнитель) must be a user of *this* portal.
 
-    We resolve, in order:
-      1) the task author, only if they belong to *this* portal;
-      2) BITRIX_DEFAULT_RESPONSIBLE_ID or BITRIX_CLIENT_TASK_AUTHOR_ID
-         (stable pin for cross-portal / client-submitted tasks so RESPONSIBLE_ID
-         does not follow whoever last opened the app);
-      3) the acting OAuth user of *this* portal (installer token).
-    Never pick a random stored admin by id.
+    Never use BITRIX_CLIENT_TASK_AUTHOR_ID here — that id is the постановщик
+    («Клиент»), not the assignee.
+
+    Order:
+      1) task author if they belong to this portal (agency employee);
+      2) BITRIX_DEFAULT_RESPONSIBLE_ID when set;
+      3) OAuth user of the portal token (installer / service account).
     """
     if (
         task.created_by_id
@@ -69,6 +69,27 @@ def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
     if uid:
         return uid
     return ""
+
+
+def _resolve_creator_id(task, portal, fallback_id: str = "") -> str:
+    """
+    Bitrix CREATED_BY (постановщик).
+
+    Cross-portal (client submitted the Nextgen task) → BITRIX_CLIENT_TASK_AUTHOR_ID
+    («Клиент» on the agency portal). Same-portal author → that user.
+    """
+    if (
+        task.created_by_id
+        and task.created_by
+        and task.created_by.portal_id == portal.id
+        and task.created_by.bitrix_id
+    ):
+        return str(task.created_by.bitrix_id)
+    if task.created_by_id and task.created_by:
+        configured = _configured_client_author_id()
+        if configured:
+            return configured
+    return (fallback_id or "").strip()
 
 
 def _oauth_user_label(client: BitrixClient) -> str:
@@ -555,8 +576,8 @@ def _sync_one_portal(
     if not responsible_id and not existing_id:
         raise BitrixAPIError(
             f"Не указан исполнитель на {portal.domain}: задайте "
-            "BITRIX_DEFAULT_RESPONSIBLE_ID или BITRIX_CLIENT_TASK_AUTHOR_ID, "
-            "либо откройте приложение на этом портале и сохраните задачу снова"
+            "BITRIX_DEFAULT_RESPONSIBLE_ID или откройте приложение на этом "
+            "портале (нужен OAuth пользователя агентства) и сохраните задачу снова"
         )
 
     # Never prefix with client portal name — context is the project/workgroup.
@@ -597,23 +618,6 @@ def _sync_one_portal(
                 existing_id,
                 exc,
             )
-        # After create_only phase, reassign away from OAuth user if needed.
-        oauth_uid = _bitrix_user_id(client.get_current_user())
-        if (
-            responsible_id
-            and oauth_uid
-            and responsible_id != oauth_uid
-        ):
-            try:
-                client.update_task(existing_id, {"RESPONSIBLE_ID": responsible_id})
-            except BitrixAPIError as exc:
-                logger.info(
-                    "reassign RESPONSIBLE to %s failed bitrix=%s (%s) — keep oauth=%s",
-                    responsible_id,
-                    existing_id,
-                    exc,
-                    oauth_uid,
-                )
         try:
             apply_bitrix_status(client, existing_id, task.status)
         except BitrixAPIError as exc:
@@ -622,12 +626,11 @@ def _sync_one_portal(
         return existing_id
 
     # Create under the OAuth token user so the app can always get/start/complete.
-    # Then try to reassign RESPONSIBLE to the human author (Nextgen clicker).
-    # Sending a foreign CREATED_BY / creating only for another responsible often
+    # Roles (исполнитель / постановщик) are applied after create — see
+    # _apply_bitrix_roles_after_create. Sending foreign CREATED_BY on add often
     # yields empty tasks.task.get for the token («задача не видна»).
     oauth_uid = _bitrix_user_id(client.get_current_user())
-    desired_responsible = responsible_id
-    create_responsible = oauth_uid or desired_responsible
+    create_responsible = oauth_uid or responsible_id
     fields = _task_fields(
         task,
         responsible_id=create_responsible,
@@ -651,6 +654,40 @@ def _sync_one_portal(
     except BitrixAPIError as exc:
         raise BitrixAPIError(_task_invisible_hint(client, bitrix_id, exc)) from exc
 
+    _apply_bitrix_roles_after_create(
+        client,
+        bitrix_id,
+        task=task,
+        portal=portal,
+        responsible_id=responsible_id,
+    )
+
+    if task.status != "todo":
+        try:
+            apply_bitrix_status(client, bitrix_id, task.status)
+        except BitrixAPIError as exc:
+            hint = _task_invisible_hint(client, bitrix_id, exc)
+            raise BitrixAPIError(f"задача создана, но статус не применён: {hint}") from exc
+    return bitrix_id
+
+
+def _apply_bitrix_roles_after_create(
+    client: BitrixClient,
+    bitrix_id: str,
+    *,
+    task,
+    portal,
+    responsible_id: str,
+) -> None:
+    """
+    After tasks.task.add (under the OAuth user):
+      - keep / set RESPONSIBLE_ID = agency assignee (never «Клиент»);
+      - set CREATED_BY = «Клиент» for client-originated tasks (постановщик).
+    """
+    oauth_uid = _bitrix_user_id(client.get_current_user()) or ""
+    desired_responsible = (responsible_id or oauth_uid or "").strip()
+    creator_id = _resolve_creator_id(task, portal, fallback_id=oauth_uid)
+
     if (
         desired_responsible
         and oauth_uid
@@ -667,13 +704,17 @@ def _sync_one_portal(
                 oauth_uid,
             )
 
-    if task.status != "todo":
+    # Постановщик «Клиент» — only when different from whoever owns the token.
+    if creator_id and creator_id != oauth_uid:
         try:
-            apply_bitrix_status(client, bitrix_id, task.status)
+            client.update_task(bitrix_id, {"CREATED_BY": creator_id})
         except BitrixAPIError as exc:
-            hint = _task_invisible_hint(client, bitrix_id, exc)
-            raise BitrixAPIError(f"задача создана, но статус не применён: {hint}") from exc
-    return bitrix_id
+            logger.info(
+                "set CREATED_BY=%s failed bitrix=%s (%s)",
+                creator_id,
+                bitrix_id,
+                exc,
+            )
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
@@ -834,6 +875,7 @@ def sync_task_to_bitrix(self, task_id: int):
 
     try:
         # Phase 1 — create + commit id before webhook-triggering updates.
+        created_id = ""
         with transaction.atomic():
             try:
                 task = _locked_task()
@@ -848,7 +890,7 @@ def sync_task_to_bitrix(self, task_id: int):
             ):
                 parent_id, group_id = _ensure_project_agency_parent(task.project)
                 crm_bindings = _crm_deal_uf_bindings(client_portal)
-                new_id = _sync_one_portal(
+                created_id = _sync_one_portal(
                     task,
                     agency,
                     existing_id="",
@@ -857,8 +899,35 @@ def sync_task_to_bitrix(self, task_id: int):
                     crm_bindings=crm_bindings or None,
                     create_only=True,
                 )
-                task.agency_bitrix_task_id = new_id
+                task.agency_bitrix_task_id = created_id
                 task.save(update_fields=["agency_bitrix_task_id", "updated_at"])
+
+        # Roles after id is committed: исполнитель stays agency/OAuth;
+        # постановщик «Клиент» for client-originated tasks.
+        if created_id:
+            try:
+                task = (
+                    Task.objects.select_related(
+                        "project", "project__portal", "created_by"
+                    ).get(pk=task_id)
+                )
+                agency = _agency_portal_for_client(task.project.portal)
+                if agency and agency.access_token:
+                    client = BitrixClient(agency)
+                    responsible_id = _resolve_responsible_id(client, task, agency)
+                    _apply_bitrix_roles_after_create(
+                        client,
+                        created_id,
+                        task=task,
+                        portal=agency,
+                        responsible_id=responsible_id,
+                    )
+            except Exception:
+                logger.exception(
+                    "apply Bitrix roles after create failed task=%s bitrix=%s",
+                    task_id,
+                    created_id,
+                )
 
         # Phase 2 — full field/status sync (id already visible to other txs).
         with transaction.atomic():

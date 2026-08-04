@@ -194,10 +194,10 @@ CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "0") == "1"
 BITRIX_CLIENT_ID = os.getenv("BITRIX_CLIENT_ID", "")
 BITRIX_CLIENT_SECRET = os.getenv("BITRIX_CLIENT_SECRET", "")
 BITRIX_APPLICATION_TOKEN = os.getenv("BITRIX_APPLICATION_TOKEN", "")
-# Agency-portal user shown as creator/author for client tasks and comments.
+# Agency-portal user «Клиент» — CREATED_BY / comment author for client-originated work.
 BITRIX_CLIENT_TASK_AUTHOR_ID = os.getenv("BITRIX_CLIENT_TASK_AUTHOR_ID", "").strip()
 # Default Bitrix RESPONSIBLE_ID for client-originated agency tasks (and projects).
-# Falls back to BITRIX_CLIENT_TASK_AUTHOR_ID when empty.
+# Empty → OAuth user of the portal token (installer). Never falls back to CLIENT_TASK_AUTHOR.
 BITRIX_DEFAULT_RESPONSIBLE_ID = os.getenv("BITRIX_DEFAULT_RESPONSIBLE_ID", "").strip()
 # Custom deal number fields (UF_CRM_…) in воронка «Сопровождение»
 # Paid hours are never overwritten; remaining hours are decremented per closed timer session.

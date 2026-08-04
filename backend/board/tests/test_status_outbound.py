@@ -223,7 +223,8 @@ class OutboundStatusPushTests(TestCase):
         BITRIX_DEFAULT_RESPONSIBLE_ID="",
         BITRIX_CLIENT_TASK_AUTHOR_ID="99",
     )
-    def test_cross_portal_uses_configured_responsible_not_oauth(self):
+    def test_cross_portal_responsible_is_oauth_not_client_author(self):
+        """«Клиент» is постановщик, not исполнитель."""
         task = make_task(
             self.project,
             created_by=self.user,
@@ -234,14 +235,17 @@ class OutboundStatusPushTests(TestCase):
         resolved = board_tasks._resolve_responsible_id(
             agency_client, task, self.agency
         )
-        self.assertEqual(resolved, "99")
-        agency_client.get_current_user.assert_not_called()
+        self.assertEqual(resolved, "42")
+        self.assertEqual(
+            board_tasks._resolve_creator_id(task, self.agency, fallback_id="42"),
+            "99",
+        )
 
     @override_settings(
         BITRIX_DEFAULT_RESPONSIBLE_ID="55",
         BITRIX_CLIENT_TASK_AUTHOR_ID="99",
     )
-    def test_cross_portal_prefers_default_responsible_over_author_id(self):
+    def test_cross_portal_prefers_default_responsible_over_oauth(self):
         task = make_task(
             self.project,
             created_by=self.user,
@@ -254,6 +258,10 @@ class OutboundStatusPushTests(TestCase):
         )
         self.assertEqual(resolved, "55")
         agency_client.get_current_user.assert_not_called()
+        self.assertEqual(
+            board_tasks._resolve_creator_id(task, self.agency, fallback_id="42"),
+            "99",
+        )
 
     def test_same_portal_responsible_is_the_author(self):
         client = MagicMock()
