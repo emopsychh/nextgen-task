@@ -11,6 +11,7 @@ import {
   useSupportWidget,
 } from "./components/support/SupportWidgetContext";
 import { LoginPage } from "./pages/LoginPage";
+import { AgencyDashboard } from "./pages/agency/AgencyDashboard";
 import { AgencyHome } from "./pages/agency/AgencyHome";
 import { ClientBacklog } from "./pages/agency/ClientBacklog";
 import { ClientProjects } from "./pages/client/ClientProjects";
@@ -96,6 +97,10 @@ export default function App() {
     <Routes>
       <Route element={<AppLayout />}>
         <Route index element={isAgency ? <AgencyHome /> : <ClientProjects />} />
+        <Route
+          path="dashboard"
+          element={isAgency ? <AgencyDashboard /> : <Navigate to="/" replace />}
+        />
         <Route
           path="portals/:portalId"
           element={<RouteDataBoundary><ClientProjects /></RouteDataBoundary>}

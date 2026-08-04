@@ -64,6 +64,17 @@ function TicketsIcon() {
   );
 }
 
+function DashboardIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="3" y="3" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="2" />
+      <rect x="13" y="3" width="8" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+      <rect x="13" y="10" width="8" height="11" rx="1.5" stroke="currentColor" strokeWidth="2" />
+      <rect x="3" y="13" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
 export function ClientRail() {
   const { token, logout, portal } = useAuth();
   const location = useLocation();
@@ -82,6 +93,8 @@ export function ClientRail() {
   const activeId = routePortalId ?? resolvedPortalId;
   const addActive = location.pathname === "/";
   const ticketsActive = location.pathname.startsWith("/tickets");
+  const dashboardActive = location.pathname.startsWith("/dashboard");
+  const clientNavActive = !ticketsActive && !dashboardActive;
   const [links, setLinks] = useState<LinkRow[]>(
     () =>
       readPortalCache<LinkRow[]>(CACHE_AGENCY_LINKS, portal?.id || 0) || []
@@ -220,7 +233,7 @@ export function ClientRail() {
       <div className="client-rail-list">
         {links.map((link) => {
           const p = link.client_portal;
-          const active = !ticketsActive && activeId === p.id;
+          const active = clientNavActive && activeId === p.id;
           const entering = enteringPortalId === p.id;
           return (
             <NavLink
@@ -239,11 +252,21 @@ export function ClientRail() {
         <NavLink
           to="/"
           end
-          className={`client-avatar add${addActive && !ticketsActive ? " active" : ""}`}
+          className={`client-avatar add${addActive && clientNavActive ? " active" : ""}`}
           title="Новый клиент"
           data-tour="tour-add-client"
         >
           <span className="client-avatar-face">+</span>
+        </NavLink>
+        <NavLink
+          to="/dashboard"
+          className={`client-avatar dashboard${dashboardActive ? " active" : ""}`}
+          title="Дашборд"
+          data-tour="tour-agency-dashboard"
+        >
+          <span className="client-avatar-face">
+            <DashboardIcon />
+          </span>
         </NavLink>
         <NavLink
           to="/tickets"

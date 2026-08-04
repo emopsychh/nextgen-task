@@ -369,12 +369,22 @@ export function ProjectSidebarNav() {
         <NavLink to="/" end className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
           Обзор
         </NavLink>
+        {isAgency ? (
+          <NavLink
+            to="/dashboard"
+            className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
+          >
+            Дашборд
+          </NavLink>
+        ) : null}
         {ticketsLink}
         {isAgency ? (
           <p className="sidebar-hint muted">
             {onTicketsRoute
               ? "Общая лента тикетов по всем клиентам."
-              : "Выберите клиента слева, чтобы открыть проекты и отчёты."}
+              : location.pathname.startsWith("/dashboard")
+                ? "Все проекты и открытые задачи по клиентам."
+                : "Выберите клиента слева, чтобы открыть проекты и отчёты."}
           </p>
         ) : null}
       </nav>
