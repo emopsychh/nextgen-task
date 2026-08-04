@@ -159,6 +159,66 @@ class OutboundStatusPushTests(TestCase):
         task.refresh_from_db()
         self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
 
+    @patch("board.realtime.publish_task_event", lambda *a, **k: None)
+    def test_start_ok_when_action_unavailable_and_status_unreadable(self):
+        from portals.bitrix import BitrixAPIError
+
+        task = make_task(
+            self.project,
+            created_by=self.user,
+            status=Task.Status.IN_PROGRESS,
+            sync_status=Task.SyncStatus.PENDING,
+            agency_bitrix_task_id="226",
+        )
+        client = _mock_client(bitrix_status="2")
+        client.get_task.side_effect = lambda *_a, **_k: {"id": "226", "title": "x"}
+        client.start_task.side_effect = BitrixAPIError(
+            "Действие над задачей не разрешено"
+        )
+
+        def update_task(_tid, fields):
+            # Field sync (ALLOW_TIME_TRACKING etc.) must succeed; STATUS/claim fail.
+            if "STATUS" in fields or "ACCOMPLICES" in fields or "RESPONSIBLE_ID" in fields:
+                raise BitrixAPIError("Нет доступа к редактированию")
+            return {"task": {"id": "226"}}
+
+        client.update_task.side_effect = update_task
+        with patch.object(board_tasks, "BitrixClient", return_value=client):
+            res = board_tasks.sync_task_to_bitrix(task.id)
+        # Action unavailable + unknown status → soft success (already running).
+        self.assertTrue(res["ok"], res)
+        task.refresh_from_db()
+        self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
+
+    @patch("board.realtime.publish_task_event", lambda *a, **k: None)
+    def test_start_error_includes_bitrix_text_for_hard_failures(self):
+        from portals.bitrix import BitrixAPIError
+
+        task = make_task(
+            self.project,
+            created_by=self.user,
+            status=Task.Status.IN_PROGRESS,
+            sync_status=Task.SyncStatus.PENDING,
+            agency_bitrix_task_id="226",
+        )
+        client = _mock_client(bitrix_status="2", after_start=None)
+        client.get_task.side_effect = lambda *_a, **_k: {"id": "226", "status": "2"}
+        client.start_task.side_effect = BitrixAPIError("strange portal failure XYZ")
+
+        def update_task(_tid, fields):
+            if "STATUS" in fields or "ACCOMPLICES" in fields or "RESPONSIBLE_ID" in fields:
+                raise BitrixAPIError("strange portal failure XYZ")
+            return {"task": {"id": "226"}}
+
+        client.update_task.side_effect = update_task
+        with patch.object(board_tasks, "BitrixClient", return_value=client):
+            res = board_tasks.sync_task_to_bitrix(task.id)
+        self.assertFalse(res.get("ok"))
+        self.assertIn("strange portal failure XYZ", res.get("error") or "")
+        task.refresh_from_db()
+        self.assertEqual(task.sync_status, Task.SyncStatus.ERROR)
+        self.assertIn("strange portal failure XYZ", task.sync_error)
+
     @override_settings(
         BITRIX_DEFAULT_RESPONSIBLE_ID="",
         BITRIX_CLIENT_TASK_AUTHOR_ID="99",

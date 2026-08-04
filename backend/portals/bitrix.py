@@ -164,11 +164,48 @@ class BitrixClient:
         return self.call("tasks.task.update", {"taskId": task_id, "fields": fields})
 
     def get_task(self, task_id: int | str) -> dict:
-        # Do not pass select — Bitrix may omit deadline/parentId when select names mismatch.
-        result = self.call("tasks.task.get", {"taskId": task_id})
-        if isinstance(result, dict) and "task" in result and isinstance(result["task"], dict):
-            return result["task"]
-        return result if isinstance(result, dict) else {}
+        """Fetch a task. Empty result [] means no access / missing task for this token."""
+        # Prefer an explicit select so STATUS/REAL_STATUS are present. Fall back
+        # without select — some portals reject unknown select names or return [].
+        select = [
+            "ID",
+            "TITLE",
+            "STATUS",
+            "REAL_STATUS",
+            "RESPONSIBLE_ID",
+            "CREATED_BY",
+            "DEADLINE",
+            "GROUP_ID",
+            "PARENT_ID",
+            "PRIORITY",
+        ]
+
+        def _normalize(raw):
+            if isinstance(raw, list):
+                if not raw:
+                    return None
+                first = raw[0] if isinstance(raw[0], dict) else None
+                return first
+            if isinstance(raw, dict) and isinstance(raw.get("task"), dict):
+                return raw["task"]
+            if isinstance(raw, dict) and raw:
+                return raw
+            return None
+
+        result = None
+        try:
+            result = _normalize(
+                self.call("tasks.task.get", {"taskId": task_id, "select": select})
+            )
+        except BitrixAPIError:
+            result = None
+        if result is None:
+            result = _normalize(self.call("tasks.task.get", {"taskId": task_id}))
+        if result is None:
+            raise BitrixAPIError(
+                f"Задача {task_id} недоступна токену приложения (tasks.task.get пустой)"
+            )
+        return result
 
     def start_task(self, task_id: int | str) -> dict:
         return self.call("tasks.task.start", {"taskId": task_id})

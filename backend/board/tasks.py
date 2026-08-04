@@ -105,10 +105,27 @@ def _bitrix_access_denied(exc: BaseException) -> bool:
             "недоступно",
             "нет доступа",
             "действие не",
+            "недоступна токену",
             "access denied",
             "access_denied",
             "permission",
             "forbidden",
+        )
+    )
+
+
+def _bitrix_action_unavailable(exc: BaseException) -> bool:
+    """Start/complete rejected as N/A — often already in that state."""
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "не разрешено",
+            "не доступно",
+            "недоступно",
+            "действие не",
+            "action is not available",
+            "action not allowed",
         )
     )
 
@@ -275,10 +292,21 @@ def _read_bitrix_status(
         if code is not None:
             return code
     try:
-        return bitrix_status_code(client.get_task(bitrix_task_id) or {})
+        data = client.get_task(bitrix_task_id) or {}
     except BitrixAPIError as exc:
+        # Access denied / empty get must surface — not look like status=None.
+        if _bitrix_access_denied(exc) or "недоступна токену" in str(exc).lower():
+            raise
         logger.info("get_task after status action failed id=%s: %s", bitrix_task_id, exc)
         return None
+    code = bitrix_status_code(data)
+    if code is None and data:
+        logger.warning(
+            "Bitrix task %s has no parseable status; keys=%s",
+            bitrix_task_id,
+            sorted(str(k) for k in data.keys())[:40],
+        )
+    return code
 
 
 def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local: str) -> None:
@@ -291,8 +319,16 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
 
     task_data = client.get_task(bitrix_task_id)
     current = bitrix_status_code(task_data)
+    status_known = current is not None
     if current is None:
+        # Do not invent PENDING forever — if get omits status we still try start,
+        # but failures are handled differently below.
         current = BITRIX_STATUS_PENDING
+        logger.warning(
+            "Bitrix task %s status unknown before action; keys=%s",
+            bitrix_task_id,
+            sorted(str(k) for k in (task_data or {}).keys())[:40],
+        )
 
     if target == "done":
         if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
@@ -378,10 +414,12 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
 
     start_ok = False
     start_result = None
+    last_err: BitrixAPIError | None = None
     try:
         start_result = client.start_task(bitrix_task_id)
         start_ok = True
     except BitrixAPIError as exc:
+        last_err = exc
         logger.info(
             "start failed for %s (%s) — claim+STATUS fallback",
             bitrix_task_id,
@@ -391,17 +429,19 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         try:
             start_result = client.start_task(bitrix_task_id)
             start_ok = True
-        except BitrixAPIError:
+            last_err = None
+        except BitrixAPIError as exc2:
+            last_err = exc2
             start_ok = _set_bitrix_status_field(
                 client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS
             )
+            if start_ok:
+                last_err = None
 
     after = _read_bitrix_status(client, bitrix_task_id, start_result)
     if after == BITRIX_STATUS_IN_PROGRESS:
         return
     if after is None and start_ok:
-        # Regression fix: get_task sometimes omits status → was false ERROR
-        # «не началась (status=None)» even when start/STATUS succeeded.
         logger.warning(
             "start accepted for %s but status unreadable — treating as in_progress",
             bitrix_task_id,
@@ -411,11 +451,15 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         try:
             start_result = client.start_task(bitrix_task_id)
             start_ok = True
-        except BitrixAPIError:
+            last_err = None
+        except BitrixAPIError as exc:
+            last_err = exc
             _claim_bitrix_task_for_oauth(client, bitrix_task_id)
             start_ok = _set_bitrix_status_field(
                 client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS
             )
+            if start_ok:
+                last_err = None
         after = _read_bitrix_status(client, bitrix_task_id, start_result)
     if after == BITRIX_STATUS_IN_PROGRESS:
         return
@@ -425,9 +469,23 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
             bitrix_task_id,
         )
         return
-    raise BitrixAPIError(
-        f"Bitrix задача {bitrix_task_id} не началась (status={after})"
-    )
+    # After all fallbacks: unreadable status + "action N/A" ≈ already running.
+    if (
+        after is None
+        and not status_known
+        and last_err is not None
+        and _bitrix_action_unavailable(last_err)
+    ):
+        logger.warning(
+            "start unavailable for %s while status unknown (%s) — accepting",
+            bitrix_task_id,
+            last_err,
+        )
+        return
+    detail = f"status={after}"
+    if last_err:
+        detail = f"{detail}; bitrix: {last_err}"
+    raise BitrixAPIError(f"Bitrix задача {bitrix_task_id} не началась ({detail})")
 
 
 def _ensure_project_agency_parent(project) -> tuple[str, str]:
