@@ -398,7 +398,7 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-const DEFAULT_API_TIMEOUT_MS = 25_000;
+const DEFAULT_API_TIMEOUT_MS = 45_000;
 
 function withTimeoutSignal(
   userSignal: AbortSignal | null | undefined,
@@ -425,17 +425,27 @@ export async function api<T>(
   options: RequestInit = {},
   token?: string | null
 ): Promise<T> {
-  const { signal, clear } = withTimeoutSignal(
-    options.signal,
-    DEFAULT_API_TIMEOUT_MS
-  );
+  // Bound hung TCP/proxy waits so the shell does not spin forever. Uploads
+  // (FormData) may exceed the default timeout — keep caller signal only.
+  const timed =
+    options.body instanceof FormData
+      ? {
+          signal: options.signal,
+          clear: () => undefined,
+        }
+      : withTimeoutSignal(options.signal, DEFAULT_API_TIMEOUT_MS);
+  const { signal, clear } = timed;
   const send = (bearer?: string | null) => {
     const headers = new Headers(options.headers || {});
     if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
     if (!(options.body instanceof FormData) && !headers.has("Content-Type") && options.body) {
       headers.set("Content-Type", "application/json");
     }
-    return fetch(`${API_BASE}${path}`, { ...options, headers, signal });
+    return fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+      ...(signal ? { signal } : {}),
+    });
   };
 
   try {

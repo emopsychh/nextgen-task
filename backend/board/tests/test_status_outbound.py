@@ -253,6 +253,7 @@ class OutboundStatusPushTests(TestCase):
             agency_client, task, self.agency
         )
         self.assertEqual(resolved, "55")
+        agency_client.get_current_user.assert_not_called()
 
     def test_same_portal_responsible_is_the_author(self):
         client = MagicMock()

@@ -166,6 +166,43 @@ class BitrixClient:
     def get_current_user(self, *, access_token: str | None = None) -> dict:
         return self.call("user.current", access_token=access_token)
 
+    @staticmethod
+    def user_current_with_token(domain: str, access_token: str) -> dict:
+        """Resolve the Bitrix user for a one-shot placement AUTH_ID.
+
+        Does not read or write Portal.access_token — used on employee login so
+        the installer's OAuth credentials stay on the Portal row.
+        """
+        host = (
+            (domain or "")
+            .replace("https://", "")
+            .replace("http://", "")
+            .rstrip("/")
+            .split("/")[0]
+            .split(":")[0]
+            .lower()
+        )
+        if not _host_is_public(host):
+            raise BitrixAPIError(f"Refusing to contact non-public Bitrix host: {host!r}")
+        token = (access_token or "").strip()
+        if not token:
+            raise BitrixAPIError("Missing access token for user.current")
+        url = f"https://{host}/rest/user.current"
+        try:
+            resp = requests.post(url, json={"auth": token}, timeout=20)
+        except requests.RequestException as exc:
+            raise BitrixAPIError(f"Bitrix request failed: {exc}")
+        try:
+            data = resp.json()
+        except ValueError:
+            raise BitrixAPIError(f"Bitrix returned non-JSON HTTP {resp.status_code}")
+        if not isinstance(data, dict):
+            raise BitrixAPIError("Bitrix returned unexpected payload")
+        if "error" in data:
+            raise BitrixAPIError(data.get("error_description") or data["error"], data)
+        result = data.get("result", data)
+        return result if isinstance(result, dict) else {}
+
     def create_task(self, fields: dict) -> dict:
         return self.call("tasks.task.add", {"fields": fields})
 

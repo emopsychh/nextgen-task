@@ -47,8 +47,9 @@ def _resolve_responsible_id(client: BitrixClient, task, portal) -> str:
     We resolve, in order:
       1) the task author, only if they belong to *this* portal;
       2) BITRIX_DEFAULT_RESPONSIBLE_ID or BITRIX_CLIENT_TASK_AUTHOR_ID
-         (stable pin for cross-portal / client-submitted tasks);
-      3) the acting OAuth user of *this* portal.
+         (stable pin for cross-portal / client-submitted tasks so RESPONSIBLE_ID
+         does not follow whoever last opened the app);
+      3) the acting OAuth user of *this* portal (installer token).
     Never pick a random stored admin by id.
     """
     if (

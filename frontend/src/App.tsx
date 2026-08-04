@@ -35,15 +35,6 @@ function RouteDataBoundary({ children }: { children: ReactNode }) {
   return <Fragment key={key}>{children}</Fragment>;
 }
 
-function ClientSidebarLogout() {
-  const { logout } = useAuth();
-  return (
-    <button type="button" className="sidebar-logout" onClick={logout}>
-      Выйти
-    </button>
-  );
-}
-
 /** Client deep-links /tickets → stay on work, open corner widget. */
 function ClientTicketsRedirect() {
   const { ticketId } = useParams();
@@ -71,7 +62,6 @@ function AppLayout() {
           <aside className="sidebar">
             <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
             <ProjectSidebarNav />
-            {!isAgency ? <ClientSidebarLogout /> : null}
           </aside>
         ) : null}
         <main className="main">

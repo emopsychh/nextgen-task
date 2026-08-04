@@ -709,6 +709,34 @@ def apply_inbound_deadline(task, new_due, *, allow_while_pending: bool = True) -
     return True
 
 
+def apply_inbound_title(task, raw_title, *, allow_while_pending: bool = True) -> bool:
+    """Apply title from Bitrix (strips legacy [portal] prefixes). Returns True if changed.
+
+    When ``allow_while_pending=False``, skips while a local rename is still
+    awaiting outbound sync — otherwise a mid-flight Bitrix pull/webhook with
+    the old TITLE would clobber the user's edit.
+    """
+    from board.models import Task
+    from board.titles import strip_portal_title_prefix
+
+    if task.sync_status == Task.SyncStatus.PENDING and not allow_while_pending:
+        return False
+    text = str(raw_title or "").strip()
+    if not text:
+        return False
+    new_title = strip_portal_title_prefix(text, task.project.portal)
+    if not new_title or new_title == task.title:
+        return False
+    task.title = new_title
+    if task.sync_status != Task.SyncStatus.PENDING:
+        task.sync_status = Task.SyncStatus.SYNCED
+        task.sync_error = ""
+        task.save(update_fields=["title", "sync_status", "sync_error", "updated_at"])
+    else:
+        task.save(update_fields=["title", "updated_at"])
+    return True
+
+
 def _parse_bitrix_ts(raw) -> float:
     from django.utils.dateparse import parse_datetime
 
@@ -1104,11 +1132,13 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         if raw_desc is None:
             raw_desc = merged.get("DESCRIPTION")
         desc_changed = False
-        if raw_desc is not None and task.sync_status != Task.SyncStatus.PENDING:
-            new_desc = str(raw_desc).strip()
-            if new_desc != (task.description or ""):
-                task.description = new_desc
-                desc_changed = True
+        if raw_desc is not None:
+            task.refresh_from_db()
+            if task.sync_status != Task.SyncStatus.PENDING:
+                new_desc = str(raw_desc).strip()
+                if new_desc != (task.description or ""):
+                    task.description = new_desc
+                    desc_changed = True
         if desc_changed:
             task.save(update_fields=["description", "updated_at"])
         meta_changed = title_applied or desc_changed

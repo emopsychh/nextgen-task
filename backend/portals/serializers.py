@@ -219,18 +219,21 @@ def upsert_portal_from_auth(
     domain: str | None = None,
     *,
     replace_tokens: bool | None = None,
+    update_oauth_tokens: bool | None = None,
 ) -> Portal:
     """
     Create/update Portal from Bitrix auth.
 
-    Agency portals keep a stable service token for background sync. Every employee
-    who opens the app still logs in as themselves, but must not overwrite
-    access_token/refresh_token — otherwise sync starts running as the last opener
-    (e.g. Nikita) while the local app was installed by someone else (Alexander).
+    OAuth access/refresh tokens belong to whoever installed the local app and
+    must stay stable for outbound Bitrix sync. Employee placement logins must
+    not overwrite them (otherwise sync runs as the last opener).
 
-    replace_tokens=True  — always save tokens (install / reinstall)
-    replace_tokens=False — never replace existing tokens
-    replace_tokens=None  — agency: keep existing tokens; client/empty: save
+    replace_tokens=True / update_oauth_tokens=True
+        — always save tokens (install / reinstall / healer login)
+    replace_tokens=False / update_oauth_tokens=False
+        — keep existing tokens; bootstrap only when portal has none
+    both None (default)
+        — agency: pin existing service token; client/empty: save
     """
     member_id = str(auth.get("member_id") or "")
     if not member_id:
@@ -256,7 +259,8 @@ def upsert_portal_from_auth(
         str(auth.get("application_token") or auth.get("applicationToken") or "").strip()
         or (settings.BITRIX_APPLICATION_TOKEN or "").strip()
     )
-    defaults = {
+
+    defaults: dict = {
         "domain": portal_domain,
         "role": role,
         "is_active": True,
@@ -266,15 +270,21 @@ def upsert_portal_from_auth(
 
     new_access = str(auth.get("access_token") or "").strip()
     new_refresh = str(auth.get("refresh_token") or "").strip()
+    has_access = bool(existing and (existing.access_token or "").strip())
     has_service_token = bool(
         existing
         and (existing.access_token or "").strip()
         and (existing.refresh_token or "").strip()
     )
-    if replace_tokens is True:
+
+    force_write = replace_tokens is True or update_oauth_tokens is True
+    force_keep = replace_tokens is False or update_oauth_tokens is False
+
+    if force_write:
         write_tokens = True
-    elif replace_tokens is False:
-        write_tokens = not has_service_token
+    elif force_keep:
+        # Bootstrap only when the portal has no access token yet.
+        write_tokens = not has_access
     else:
         # Default: pin agency service token once set; clients may refresh on open.
         if role == Portal.Role.AGENCY and has_service_token:
@@ -283,10 +293,15 @@ def upsert_portal_from_auth(
             write_tokens = True
 
     if write_tokens:
-        defaults["access_token"] = new_access
-        defaults["refresh_token"] = new_refresh or (
-            (existing.refresh_token if existing else "") or ""
-        )
+        if new_access:
+            defaults["access_token"] = new_access
+        # Never wipe a good refresh_token with an empty placement REFRESH_ID.
+        if new_refresh:
+            defaults["refresh_token"] = new_refresh
+        elif existing and (existing.refresh_token or "").strip():
+            defaults["refresh_token"] = existing.refresh_token
+        elif not existing:
+            defaults["refresh_token"] = new_refresh
         try:
             expires_in = int(auth.get("expires_in", 3600))
         except (TypeError, ValueError):

@@ -113,6 +113,11 @@ a {
   grid-template-columns: 72px 1fr;
 }
 
+/* Client cabinet: no left rail — task detail is full width. */
+.app-shell.task-focus:not(.with-client-rail) {
+  grid-template-columns: 1fr;
+}
+
 .main:has(.task-detail-page.chat-mode) {
   overflow: hidden;
   padding: 18px 22px 16px;
@@ -120,9 +125,9 @@ a {
 
 @media (max-width: 900px) {
   .app-shell,
-.app-shell.with-client-rail,
-.app-shell.task-focus,
-.app-shell.with-client-rail.task-focus {
+  .app-shell.with-client-rail,
+  .app-shell.task-focus,
+  .app-shell.with-client-rail.task-focus {
     grid-template-columns: 1fr;
   }
   .sidebar {
@@ -463,14 +468,6 @@ a {
   line-height: 18px;
   text-align: center;
   box-shadow: 0 0 0 2px #f3f4f6;
-}
-
-.client-rail-logout-only {
-  justify-content: flex-end;
-}
-
-.client-rail-logout-only .client-avatar.logout {
-  margin-top: 0;
 }
 
 .page-header {

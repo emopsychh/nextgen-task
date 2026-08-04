@@ -228,13 +228,23 @@ class BitrixAuthView(APIView):
             }
 
         try:
-            portal = upsert_portal_from_auth(auth, domain=domain)
-            client = BitrixClient(portal)
-            # Identify the person who opened the app with THEIR placement token.
-            # Do not use portal.access_token here — on agency it is the stable
-            # sync identity and must not be confused with the clicker.
-            opener_token = str(auth.get("access_token") or "").strip()
-            user_data = client.get_current_user(access_token=opener_token or None)
+            placement_token = str(auth.get("access_token") or "").strip()
+            # Keep the installer's OAuth on the Portal row; only bootstrap when empty.
+            portal = upsert_portal_from_auth(
+                auth, domain=domain, update_oauth_tokens=False
+            )
+            # Identify the employee from their placement AUTH_ID without
+            # replacing Portal.access_token (needed for outbound sync).
+            user_data = BitrixClient.user_current_with_token(
+                portal.domain, placement_token
+            )
+            uid = str(user_data.get("ID") or user_data.get("id") or "").strip()
+            configured = (settings.BITRIX_CLIENT_TASK_AUTHOR_ID or "").strip()
+            # Service/installer user may refresh Portal OAuth (heal after churn).
+            if configured and uid == configured:
+                portal = upsert_portal_from_auth(
+                    auth, domain=domain, update_oauth_tokens=True
+                )
             bitrix_user = upsert_bitrix_user(portal, user_data)
             # event.bind is slow (many Bitrix REST calls) — never block JWT issue.
             try:
@@ -834,14 +844,9 @@ class BitrixEventView(APIView):
                     {"ok": False, "reason": "app_token_not_configured"}, status=403
                 )
 
-        # Refresh tokens from event auth when provided
-        access = (auth or {}).get("access_token") or (auth or {}).get("AUTH_ID")
-        if access:
-            portal.access_token = access
-            refresh = (auth or {}).get("refresh_token") or (auth or {}).get("REFRESH_ID")
-            if refresh:
-                portal.refresh_token = refresh
-            portal.save(update_fields=["access_token", "refresh_token", "updated_at"])
+        # Do NOT overwrite Portal OAuth from event auth — Bitrix attaches the
+        # event actor's token, which would churn RESPONSIBLE_ID / API identity
+        # away from the installer. Outbound sync refreshes via refresh_token.
 
         from board.comment_sync import ingest_bitrix_comment_event
         from board.project_sync import ingest_agency_bitrix_task
