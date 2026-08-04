@@ -177,7 +177,9 @@ class BitrixInstallView(APIView):
                         "refresh_token": auth.get("REFRESH_ID", auth.get("refresh_token", "")),
                         "expires_in": auth.get("AUTH_EXPIRES") or auth.get("expires_in") or 3600,
                     }
-                upsert_portal_from_auth(auth)
+                # Install/reinstall: capture the installer's token as the
+                # agency service identity for background Bitrix sync.
+                upsert_portal_from_auth(auth, replace_tokens=True)
                 try:
                     from board.tasks import ensure_portal_event_bindings
                     from portals.models import Portal as PortalModel
@@ -228,7 +230,11 @@ class BitrixAuthView(APIView):
         try:
             portal = upsert_portal_from_auth(auth, domain=domain)
             client = BitrixClient(portal)
-            user_data = client.get_current_user()
+            # Identify the person who opened the app with THEIR placement token.
+            # Do not use portal.access_token here — on agency it is the stable
+            # sync identity and must not be confused with the clicker.
+            opener_token = str(auth.get("access_token") or "").strip()
+            user_data = client.get_current_user(access_token=opener_token or None)
             bitrix_user = upsert_bitrix_user(portal, user_data)
             # event.bind is slow (many Bitrix REST calls) — never block JWT issue.
             try:

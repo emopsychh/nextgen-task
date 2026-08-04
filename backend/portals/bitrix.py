@@ -139,14 +139,23 @@ class BitrixClient:
         params: dict[str, Any] | None = None,
         *,
         timeout: int = 30,
+        access_token: str | None = None,
     ) -> dict:
-        self._ensure_token()
+        """Call Bitrix REST. Optional access_token overrides the portal service token
+        (used to identify whoever opened the app without stealing sync credentials)."""
+        override = (access_token or "").strip() or None
+        if not override:
+            self._ensure_token()
+            token = self.portal.access_token
+        else:
+            token = override
         url = f"{self.base_url}/{method}"
         payload = dict(params or {})
-        payload["auth"] = self.portal.access_token
+        payload["auth"] = token
         data = self._post(url, payload, timeout)
         if "error" in data:
-            if data.get("error") in ("expired_token", "invalid_token"):
+            # Only refresh the stored portal token when we used it.
+            if not override and data.get("error") in ("expired_token", "invalid_token"):
                 self.refresh_tokens()
                 payload["auth"] = self.portal.access_token
                 data = self._post(url, payload, timeout)
@@ -154,8 +163,8 @@ class BitrixClient:
                 raise BitrixAPIError(data.get("error_description") or data["error"], data)
         return data.get("result", data)
 
-    def get_current_user(self) -> dict:
-        return self.call("user.current")
+    def get_current_user(self, *, access_token: str | None = None) -> dict:
+        return self.call("user.current", access_token=access_token)
 
     def create_task(self, fields: dict) -> dict:
         return self.call("tasks.task.add", {"fields": fields})

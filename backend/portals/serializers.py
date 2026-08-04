@@ -214,7 +214,24 @@ def resolve_portal_role(member_id: str, domain: str = "") -> str:
     return Portal.Role.CLIENT
 
 
-def upsert_portal_from_auth(auth: dict, domain: str | None = None) -> Portal:
+def upsert_portal_from_auth(
+    auth: dict,
+    domain: str | None = None,
+    *,
+    replace_tokens: bool | None = None,
+) -> Portal:
+    """
+    Create/update Portal from Bitrix auth.
+
+    Agency portals keep a stable service token for background sync. Every employee
+    who opens the app still logs in as themselves, but must not overwrite
+    access_token/refresh_token — otherwise sync starts running as the last opener
+    (e.g. Nikita) while the local app was installed by someone else (Alexander).
+
+    replace_tokens=True  — always save tokens (install / reinstall)
+    replace_tokens=False — never replace existing tokens
+    replace_tokens=None  — agency: keep existing tokens; client/empty: save
+    """
     member_id = str(auth.get("member_id") or "")
     if not member_id:
         raise serializers.ValidationError("member_id required")
@@ -227,6 +244,13 @@ def upsert_portal_from_auth(auth: dict, domain: str | None = None) -> Portal:
         raise serializers.ValidationError("domain required")
 
     role = resolve_portal_role(member_id, portal_domain)
+    existing = Portal.objects.filter(member_id=member_id).first()
+    if existing and existing.role in (
+        Portal.Role.AGENCY,
+        Portal.Role.CLIENT,
+    ):
+        # Keep an already-classified role; env lists may lag behind.
+        role = existing.role
 
     app_tok = (
         str(auth.get("application_token") or auth.get("applicationToken") or "").strip()
@@ -235,14 +259,39 @@ def upsert_portal_from_auth(auth: dict, domain: str | None = None) -> Portal:
     defaults = {
         "domain": portal_domain,
         "role": role,
-        "access_token": auth.get("access_token", ""),
-        "refresh_token": auth.get("refresh_token", ""),
-        "expires_at": timezone.now()
-        + timedelta(seconds=int(auth.get("expires_in", 3600))),
         "is_active": True,
     }
     if app_tok:
         defaults["application_token"] = app_tok
+
+    new_access = str(auth.get("access_token") or "").strip()
+    new_refresh = str(auth.get("refresh_token") or "").strip()
+    has_service_token = bool(
+        existing
+        and (existing.access_token or "").strip()
+        and (existing.refresh_token or "").strip()
+    )
+    if replace_tokens is True:
+        write_tokens = True
+    elif replace_tokens is False:
+        write_tokens = not has_service_token
+    else:
+        # Default: pin agency service token once set; clients may refresh on open.
+        if role == Portal.Role.AGENCY and has_service_token:
+            write_tokens = False
+        else:
+            write_tokens = True
+
+    if write_tokens:
+        defaults["access_token"] = new_access
+        defaults["refresh_token"] = new_refresh or (
+            (existing.refresh_token if existing else "") or ""
+        )
+        try:
+            expires_in = int(auth.get("expires_in", 3600))
+        except (TypeError, ValueError):
+            expires_in = 3600
+        defaults["expires_at"] = timezone.now() + timedelta(seconds=expires_in)
 
     portal, _ = Portal.objects.update_or_create(
         member_id=member_id,
