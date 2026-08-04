@@ -133,6 +133,55 @@ class BitrixClient:
 
         raise BitrixAPIError(f"Bitrix request failed after retries (HTTP {last_status})")
 
+    def _post_form(
+        self, url: str, payload: dict, timeout: int, *, attempts: int = 3
+    ) -> dict:
+        """POST as application/x-www-form-urlencoded (Bitrix classic REST)."""
+        flat: dict[str, Any] = {}
+        for key, value in payload.items():
+            if isinstance(value, dict):
+                for nested_key, nested_val in value.items():
+                    flat[f"{key}[{nested_key}]"] = nested_val
+            elif isinstance(value, (list, tuple)):
+                for i, item in enumerate(value):
+                    flat[f"{key}[{i}]"] = item
+            else:
+                flat[key] = value
+
+        last_status = None
+        for attempt in range(attempts):
+            try:
+                resp = requests.post(url, data=flat, timeout=timeout)
+            except requests.RequestException as exc:
+                if attempt < attempts - 1:
+                    time.sleep(0.5 * (2**attempt))
+                    continue
+                raise BitrixAPIError(f"Bitrix request failed: {exc}")
+
+            last_status = resp.status_code
+            if resp.status_code in _RETRYABLE_STATUSES and attempt < attempts - 1:
+                time.sleep(0.5 * (2**attempt))
+                continue
+
+            try:
+                data = resp.json()
+            except ValueError:
+                if resp.status_code in _RETRYABLE_STATUSES and attempt < attempts - 1:
+                    time.sleep(0.5 * (2**attempt))
+                    continue
+                raise BitrixAPIError(
+                    f"Bitrix returned non-JSON HTTP {resp.status_code}",
+                    {"status_code": resp.status_code, "body": (resp.text or "")[:500]},
+                )
+            if not isinstance(data, dict):
+                raise BitrixAPIError(
+                    "Bitrix returned unexpected payload",
+                    {"status_code": resp.status_code},
+                )
+            return data
+
+        raise BitrixAPIError(f"Bitrix request failed after retries (HTTP {last_status})")
+
     def call(
         self,
         method: str,
@@ -140,6 +189,7 @@ class BitrixClient:
         *,
         timeout: int = 30,
         access_token: str | None = None,
+        form_encoded: bool = False,
     ) -> dict:
         """Call Bitrix REST. Optional access_token overrides the portal service token
         (used to identify whoever opened the app without stealing sync credentials)."""
@@ -152,13 +202,14 @@ class BitrixClient:
         url = f"{self.base_url}/{method}"
         payload = dict(params or {})
         payload["auth"] = token
-        data = self._post(url, payload, timeout)
+        poster = self._post_form if form_encoded else self._post
+        data = poster(url, payload, timeout)
         if "error" in data:
             # Only refresh the stored portal token when we used it.
             if not override and data.get("error") in ("expired_token", "invalid_token"):
                 self.refresh_tokens()
                 payload["auth"] = self.portal.access_token
-                data = self._post(url, payload, timeout)
+                data = poster(url, payload, timeout)
             if "error" in data:
                 raise BitrixAPIError(data.get("error_description") or data["error"], data)
         return data.get("result", data)
@@ -335,43 +386,55 @@ class BitrixClient:
             task_id_int: int | str = int(task_id)
         except (TypeError, ValueError):
             task_id_int = task_id
-        fields: dict = {
+        # Docs-minimal first (SECONDS + COMMENT_TEXT). Extra fields can make
+        # some portals return ACTION_NOT_ALLOWED.
+        comment_text = (comment or "").strip() or "Учёт из Nextgen Task"
+        base: dict = {
             "SECONDS": max(0, int(seconds)),
-            # COMMENT_TEXT is required; empty string is rejected on some portals.
-            "COMMENT_TEXT": (comment or "").strip() or "Учёт из Nextgen Task",
-            # Manual entry (vs live stopwatch). Writable per getmanifest.
-            "SOURCE": 2,
+            "COMMENT_TEXT": comment_text,
         }
         if user_id is not None and str(user_id).strip():
             try:
-                fields["USER_ID"] = int(user_id)
+                base["USER_ID"] = int(user_id)
             except (TypeError, ValueError):
-                fields["USER_ID"] = user_id
+                base["USER_ID"] = user_id
+
+        attempts: list[dict] = [dict(base)]
+        rich = dict(base)
         if date_start:
-            fields["DATE_START"] = date_start
+            rich["DATE_START"] = date_start
         if date_stop:
-            fields["DATE_STOP"] = date_stop
-        try:
-            return self.call(
-                "task.elapseditem.add",
-                {"TASKID": task_id_int, "ARFIELDS": fields},
-            )
-        except BitrixAPIError as exc:
-            msg = str(exc).lower()
-            # Some portals reject SOURCE; retry without it.
-            if "source" in msg and "SOURCE" in fields:
-                fields.pop("SOURCE", None)
-                return self.call(
-                    "task.elapseditem.add",
-                    {"TASKID": task_id_int, "ARFIELDS": fields},
-                )
-            # Legacy portals occasionally still accept FIELDS.
-            if "arfields" in msg or "fields" in msg:
-                return self.call(
-                    "task.elapseditem.add",
-                    {"TASKID": task_id_int, "FIELDS": fields},
-                )
-            raise
+            rich["DATE_STOP"] = date_stop
+        if rich != base:
+            attempts.append(rich)
+        with_source = dict(rich if rich != base else base)
+        with_source["SOURCE"] = 2
+        attempts.append(with_source)
+
+        last_exc: BitrixAPIError | None = None
+        for fields in attempts:
+            for form_encoded in (False, True):
+                try:
+                    return self.call(
+                        "task.elapseditem.add",
+                        {"TASKID": task_id_int, "ARFIELDS": fields},
+                        form_encoded=form_encoded,
+                    )
+                except BitrixAPIError as exc:
+                    last_exc = exc
+                    msg = str(exc).lower()
+                    if "arfields" in msg or "fields" in msg:
+                        try:
+                            return self.call(
+                                "task.elapseditem.add",
+                                {"TASKID": task_id_int, "FIELDS": fields},
+                                form_encoded=form_encoded,
+                            )
+                        except BitrixAPIError as exc2:
+                            last_exc = exc2
+                            continue
+                    continue
+        raise last_exc or BitrixAPIError("task.elapseditem.add failed")
 
     def update_elapsed_item(
         self,

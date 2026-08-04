@@ -1668,6 +1668,16 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
             last_exc: BitrixAPIError | None = None
             for user_id in candidates:
                 try:
+                    logger.info(
+                        "elapseditem.add try task=%s bitrix=%s sec=%s user=%s "
+                        "start=%s stop=%s",
+                        task.id,
+                        bitrix_id,
+                        seconds,
+                        user_id,
+                        date_start,
+                        date_stop,
+                    )
                     result = client.add_elapsed_item(
                         bitrix_id,
                         seconds,
@@ -1677,15 +1687,22 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
                         date_stop=date_stop,
                     )
                     last_exc = None
+                    logger.info(
+                        "elapseditem.add ok task=%s bitrix=%s result=%r",
+                        task.id,
+                        bitrix_id,
+                        result,
+                    )
                     break
                 except BitrixAPIError as exc:
                     last_exc = exc
                     logger.warning(
-                        "elapseditem.add failed task=%s bitrix=%s user=%s: %s",
+                        "elapseditem.add failed task=%s bitrix=%s user=%s: %s resp=%s",
                         task.id,
                         bitrix_id,
                         user_id,
                         exc,
+                        getattr(exc, "response", None),
                     )
             if result is None:
                 raise last_exc or BitrixAPIError("Не удалось добавить учёт времени")
