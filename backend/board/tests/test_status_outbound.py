@@ -16,9 +16,16 @@ from portals.models import Portal
 from .helpers import make_link, make_portal, make_project, make_task, make_user
 
 
-def _mock_client(bitrix_status: str = "3") -> MagicMock:
+def _mock_client(bitrix_status: str = "3", *, after_complete: str | None = "5") -> MagicMock:
     client = MagicMock()
-    client.get_task.return_value = {"status": bitrix_status}
+
+    def get_task(*_a, **_k):
+        # After complete succeeds, verification/later reads see the new status.
+        if after_complete is not None and client.complete_task.called:
+            return {"status": after_complete}
+        return {"status": bitrix_status}
+
+    client.get_task.side_effect = get_task
     client.update_task.return_value = {"task": {"id": "108"}}
     client.get_current_user.return_value = {"ID": "42"}
     client.pause_task.return_value = {}
@@ -72,7 +79,7 @@ class OutboundStatusPushTests(TestCase):
             sync_status=Task.SyncStatus.PENDING,
             agency_bitrix_task_id="108",
         )
-        client = _mock_client(bitrix_status="3")
+        client = _mock_client(bitrix_status="3", after_complete="5")
         with patch.object(board_tasks, "BitrixClient", return_value=client):
             res = board_tasks.sync_task_to_bitrix(task.id)
         self.assertTrue(res["ok"])
@@ -80,9 +87,30 @@ class OutboundStatusPushTests(TestCase):
             client.update_task.call_args.args[1]["ALLOW_TIME_TRACKING"],
             "Y",
         )
-        client.complete_task.assert_called_once()
+        client.complete_task.assert_called()
+        client.pause_task.assert_called()
         client.pause_task_timer.assert_called()
         client.add_elapsed_item.assert_not_called()
+
+    @patch("board.realtime.publish_task_event", lambda *a, **k: None)
+    def test_complete_errors_if_bitrix_stays_in_progress(self):
+        from portals.bitrix import BitrixAPIError
+
+        task = make_task(
+            self.project,
+            created_by=self.user,
+            status=Task.Status.DONE,
+            sync_status=Task.SyncStatus.PENDING,
+            agency_bitrix_task_id="108",
+        )
+        # Stay at status 3 forever → must not mark SYNCED.
+        client = _mock_client(bitrix_status="3", after_complete=None)
+        with patch.object(board_tasks, "BitrixClient", return_value=client):
+            with self.assertRaises(BitrixAPIError):
+                board_tasks.sync_task_to_bitrix(task.id)
+        task.refresh_from_db()
+        self.assertEqual(task.sync_status, Task.SyncStatus.ERROR)
+        self.assertIn("не завершилась", task.sync_error)
 
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
     def test_start_calls_bitrix_start_when_pending(self):

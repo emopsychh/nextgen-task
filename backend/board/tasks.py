@@ -213,14 +213,37 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
     if target == "done":
         if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
             return
-        # Stop any legacy live «Учёт времени» timer so complete() is not reverted.
+        # Stop live «Учёт времени» — otherwise complete() often does not stick
+        # and Bitrix stays in status 3 while the app marks sync as SYNCED.
         _stop_bitrix_timer_quiet(client, bitrix_task_id)
         if current in (BITRIX_STATUS_PENDING, BITRIX_STATUS_DEFERRED):
             try:
                 client.start_task(bitrix_task_id)
             except BitrixAPIError:
                 pass
+        elif current == BITRIX_STATUS_IN_PROGRESS:
+            # Some portals keep the task "running" until an explicit pause.
+            try:
+                client.pause_task(bitrix_task_id)
+            except BitrixAPIError:
+                pass
+            _stop_bitrix_timer_quiet(client, bitrix_task_id)
+
         client.complete_task(bitrix_task_id)
+        after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
+        if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
+            _stop_bitrix_timer_quiet(client, bitrix_task_id)
+            try:
+                client.pause_task(bitrix_task_id)
+            except BitrixAPIError:
+                pass
+            client.complete_task(bitrix_task_id)
+            after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
+        if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
+            raise BitrixAPIError(
+                f"Bitrix задача {bitrix_task_id} не завершилась (status={after}); "
+                "проверьте таймер учёта времени / права исполнителя"
+            )
         return
 
     # target == in_progress — start once; noop if already running.
