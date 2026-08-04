@@ -1,4 +1,4 @@
-"""Completion: stop timers and announce duration in chat (no Bitrix elapsed sync)."""
+"""Completion: stop timers, announce duration, sync unsynced time to Bitrix."""
 
 from __future__ import annotations
 
@@ -23,14 +23,17 @@ class CompletionHelpersTests(TestCase):
         self.project = make_project(self.portal)
 
     @override_settings(CELERY_TASK_ALWAYS_EAGER=False)
+    @patch("board.timeutils.enqueue_timer_bitrix_sync")
     @patch("board.views.enqueue_comment_sync")
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
-    def test_finalize_stops_timer_and_posts_completion_message(self, enqueue_comment):
+    def test_finalize_stops_timer_and_posts_completion_message(
+        self, enqueue_comment, enqueue_elapsed
+    ):
         task = make_task(
             self.project, created_by=self.user, status=Task.Status.DONE
         )
         start = timezone.now() - timedelta(seconds=120)
-        TimeEntry.objects.create(
+        closed = TimeEntry.objects.create(
             task=task,
             author=self.user,
             started_at=start,
@@ -49,13 +52,41 @@ class CompletionHelpersTests(TestCase):
         self.assertTrue(comment.text.startswith(COMPLETED_FOR_MARKER))
         self.assertIn("2 мин", comment.text)
         self.assertEqual(result["completion_comment_id"], comment.id)
-        self.assertFalse(result["elapsed_sync_enqueued"])
+        self.assertTrue(result["elapsed_sync_enqueued"])
         enqueue_comment.assert_called_once_with(comment.id)
+        # Closed row without bitrix_elapsed_id must be pushed to учёта времени.
+        enqueue_elapsed.assert_any_call(closed.id, "set")
 
     @override_settings(CELERY_TASK_ALWAYS_EAGER=False)
+    @patch("board.timeutils.enqueue_timer_bitrix_sync")
     @patch("board.views.enqueue_comment_sync")
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
-    def test_finalize_is_idempotent_for_completion_message(self, enqueue_comment):
+    def test_finalize_skips_elapsed_already_synced(
+        self, enqueue_comment, enqueue_elapsed
+    ):
+        task = make_task(
+            self.project, created_by=self.user, status=Task.Status.DONE
+        )
+        TimeEntry.objects.create(
+            task=task,
+            author=self.user,
+            started_at=timezone.now() - timedelta(seconds=60),
+            ended_at=timezone.now(),
+            duration_seconds=60,
+            bitrix_elapsed_id="99",
+        )
+        result = finalize_task_completion(task, author=self.user)
+        self.assertFalse(result["elapsed_sync_enqueued"])
+        enqueue_elapsed.assert_not_called()
+        enqueue_comment.assert_called_once()
+
+    @override_settings(CELERY_TASK_ALWAYS_EAGER=False)
+    @patch("board.timeutils.enqueue_timer_bitrix_sync")
+    @patch("board.views.enqueue_comment_sync")
+    @patch("board.realtime.publish_task_event", lambda *a, **k: None)
+    def test_finalize_is_idempotent_for_completion_message(
+        self, enqueue_comment, enqueue_elapsed
+    ):
         task = make_task(
             self.project, created_by=self.user, status=Task.Status.DONE
         )
@@ -75,6 +106,8 @@ class CompletionHelpersTests(TestCase):
             1,
         )
         self.assertEqual(enqueue_comment.call_count, 1)
+        # Elapsed re-queue is ok twice until bitrix_elapsed_id is set.
+        self.assertGreaterEqual(enqueue_elapsed.call_count, 1)
 
     def test_sync_completion_time_is_noop(self):
         task = make_task(

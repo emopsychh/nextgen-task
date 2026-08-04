@@ -464,10 +464,11 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         if self.request.user.is_agency and old_status != task.status:
             author = self.request.user.bitrix_user
-            # Close leftover live timers (legacy). Time is entered manually now.
+            # Close leftover live timers (legacy). Bitrix учёта is pushed below /
+            # on finalize so we do not race two elapseditem.add calls.
             if task.status in (Task.Status.TODO, Task.Status.DONE):
                 for running in task.time_entries.filter(ended_at__isnull=True):
-                    stop_time_entry(running)
+                    stop_time_entry(running, sync_bitrix=False)
             if task.status == Task.Status.DONE and old_status != Task.Status.DONE:
                 try:
                     from board.completion import finalize_task_completion
@@ -475,6 +476,13 @@ class TaskViewSet(viewsets.ModelViewSet):
                     finalize_task_completion(task, author=author)
                 except Exception:
                     logger.exception("finalize_task_completion failed task=%s", task.id)
+            elif task.status == Task.Status.TODO:
+                try:
+                    from board.timeutils import enqueue_unsynced_elapsed_for_task
+
+                    enqueue_unsynced_elapsed_for_task(task)
+                except Exception:
+                    logger.exception("enqueue elapsed on pause failed task=%s", task.id)
 
         append_task_change_events(
             task=task,

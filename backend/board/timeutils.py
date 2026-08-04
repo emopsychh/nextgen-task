@@ -45,7 +45,7 @@ def enqueue_timer_bitrix_sync(entry_id: int, action: str = "set") -> None:
 
 
 def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: bool = True) -> int:
-    """Close a leftover running entry (legacy); bill its duration to the CRM deal."""
+    """Close a leftover running entry; optionally push duration to Bitrix учёта."""
     if entry.ended_at is not None:
         return entry.duration_seconds
     end = ended_at or timezone.now()
@@ -53,10 +53,28 @@ def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: boo
     entry.ended_at = end
     entry.duration_seconds = duration
     entry.save(update_fields=["ended_at", "duration_seconds", "updated_at"])
-    _ = sync_bitrix
+    if sync_bitrix and duration > 0:
+        enqueue_timer_bitrix_sync(entry.id, "add")
     if bill and duration > 0 and getattr(entry, "billed_to_deal_at", None) is None:
         enqueue_time_entry_billing(entry.id)
     return duration
+
+
+def enqueue_unsynced_elapsed_for_task(task) -> int:
+    """Re-queue closed TimeEntries that never landed in Bitrix «Учёт времени»."""
+    from board.models import TimeEntry
+
+    pending_ids = list(
+        TimeEntry.objects.filter(
+            task_id=task.id if hasattr(task, "id") else task,
+            ended_at__isnull=False,
+            bitrix_elapsed_id="",
+            duration_seconds__gt=0,
+        ).values_list("id", flat=True)[:50]
+    )
+    for entry_id in pending_ids:
+        enqueue_timer_bitrix_sync(entry_id, "set")
+    return len(pending_ids)
 
 
 def set_manual_time_entry(

@@ -1,10 +1,10 @@
-"""Finalize task completion: stop timers and announce duration in chat."""
+"""Finalize task completion: stop timers, announce duration, sync учёта времени."""
 
 from __future__ import annotations
 
 from django.db import transaction
 
-# Posted to app + Bitrix task chat on complete (not to «Учёт времени»).
+# Posted to app + Bitrix task chat on complete.
 COMPLETED_FOR_MARKER = "Задача была завершена за:"
 # Legacy marker — still skip on inbound echo.
 TIME_SPENT_MARKER = "Затрачено на задачу:"
@@ -20,12 +20,16 @@ def finalize_task_completion(task, *, author=None) -> dict:
     After completion from either app or Bitrix:
       1) stop local timers
       2) post «Задача была завершена за: …» to app chat + Bitrix chat
-    Does NOT write Bitrix «Учёт времени» — that stays manual.
+      3) push any unsynced app TimeEntry rows into Bitrix «Учёт времени»
     Safe to call more than once.
     """
     from board.models import Comment
     from board.realtime import publish_task_event
-    from board.timeutils import format_duration_ru, task_tracked_seconds
+    from board.timeutils import (
+        enqueue_unsynced_elapsed_for_task,
+        format_duration_ru,
+        task_tracked_seconds,
+    )
     from board.views import enqueue_comment_sync
 
     comment_id = None
@@ -37,6 +41,7 @@ def finalize_task_completion(task, *, author=None) -> dict:
         for running in task.time_entries.select_for_update().filter(
             ended_at__isnull=True
         ):
+            # Close first; bulk enqueue below covers all unsynced closed rows.
             stop_time_entry(running, sync_bitrix=False)
 
         # Idempotent: one completion-time line per task.
@@ -63,9 +68,19 @@ def finalize_task_completion(task, *, author=None) -> dict:
     if comment_id:
         enqueue_comment_sync(comment_id)
 
+    # App time (manual «Указать время» or closed legacy timers) → Bitrix учёта.
+    elapsed_sync_enqueued = False
+    try:
+        elapsed_sync_enqueued = enqueue_unsynced_elapsed_for_task(task) > 0
+    except Exception:
+        pass
+
     try:
         publish_task_event(task, kind="task_update")
     except Exception:
         pass
 
-    return {"elapsed_sync_enqueued": False, "completion_comment_id": comment_id}
+    return {
+        "elapsed_sync_enqueued": elapsed_sync_enqueued,
+        "completion_comment_id": comment_id,
+    }

@@ -851,17 +851,9 @@ def sync_task_to_bitrix(self, task_id: int):
 
     # Catch up elapsed rows that raced create / failed earlier.
     try:
-        from board.models import TimeEntry
-        from board.timeutils import enqueue_timer_bitrix_sync
+        from board.timeutils import enqueue_unsynced_elapsed_for_task
 
-        pending = TimeEntry.objects.filter(
-            task_id=task.id,
-            ended_at__isnull=False,
-            bitrix_elapsed_id="",
-            duration_seconds__gt=0,
-        ).values_list("id", flat=True)[:50]
-        for entry_id in pending:
-            enqueue_timer_bitrix_sync(entry_id, "add")
+        enqueue_unsynced_elapsed_for_task(task)
     except Exception:
         logger.info("enqueue pending elapsed after task sync failed task=%s", task_id)
 
@@ -1457,8 +1449,13 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
                     entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
 
             candidates: list[str | None] = []
+            # Prefer the pinned service/installer user — matches Portal OAuth
+            # and avoids "Действие не разрешено" when a random employee last logged in.
+            configured = _configured_default_responsible_id()
+            if configured:
+                candidates.append(configured)
             oauth_uid = _bitrix_user_id(client.get_current_user()) or None
-            if oauth_uid:
+            if oauth_uid and oauth_uid not in candidates:
                 candidates.append(oauth_uid)
             candidates.append(None)
             if entry.author_id and getattr(entry.author, "bitrix_id", None):
