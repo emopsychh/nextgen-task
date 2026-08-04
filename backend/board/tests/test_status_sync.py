@@ -145,9 +145,8 @@ class ApplyInboundStatusTests(TestCase):
         self.assertEqual(task.status, Task.Status.DONE)
         self.assertFalse(task.time_entries.filter(ended_at__isnull=True).exists())
 
-    def test_start_creates_local_timer(self):
-        # Timers are owned by agency users: an agency link + user must exist for
-        # _start_local_timer_from_inbound to pick an author.
+    def test_start_does_not_create_local_timer(self):
+        # Time is entered manually in the app; Bitrix start only changes status.
         agency = make_portal(role=Portal.Role.AGENCY)
         make_link(agency, self.portal)
         make_user(agency, bitrix_id="99")
@@ -160,7 +159,7 @@ class ApplyInboundStatusTests(TestCase):
         apply_inbound_status(task, "in_progress", force=True)
         task.refresh_from_db()
         self.assertEqual(task.status, Task.Status.IN_PROGRESS)
-        self.assertTrue(task.time_entries.filter(ended_at__isnull=True).exists())
+        self.assertFalse(task.time_entries.filter(ended_at__isnull=True).exists())
 
     def test_pending_local_push_not_clobbered_without_force(self):
         task = make_task(

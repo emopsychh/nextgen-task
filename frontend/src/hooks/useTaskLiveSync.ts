@@ -8,7 +8,6 @@ const PULL_EVERY = 30; // Bitrix catch-up ~ every 60s; webhooks handle normal up
 function fingerprint(task: Task): string {
   // Chat history is no longer inlined on the task; we rely on lightweight
   // activity signals to detect new messages/files cheaply on each poll.
-  const timer = task.active_timer?.started_at || "";
   const tracked = task.total_tracked_seconds || 0;
   const paid = task.deal_paid_hours ?? "";
   const remaining = task.deal_remaining_hours ?? "";
@@ -23,7 +22,6 @@ function fingerprint(task: Task): string {
     task.last_comment_id ?? 0,
     task.files_count ?? 0,
     task.last_file_id ?? 0,
-    timer,
     tracked,
     paid,
     remaining,

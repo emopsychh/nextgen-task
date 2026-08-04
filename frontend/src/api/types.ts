@@ -455,6 +455,40 @@ export async function api<T>(
   }
 }
 
+/** Authenticated binary download (PDF, etc.). */
+export async function apiBlob(
+  path: string,
+  options: RequestInit = {},
+  token?: string | null
+): Promise<{ blob: Blob; filename: string | null }> {
+  const { signal, clear } = withTimeoutSignal(
+    options.signal,
+    DEFAULT_API_TIMEOUT_MS
+  );
+  const send = (bearer?: string | null) => {
+    const headers = new Headers(options.headers || {});
+    if (bearer) headers.set("Authorization", `Bearer ${bearer}`);
+    return fetch(`${API_BASE}${path}`, { ...options, headers, signal });
+  };
+
+  try {
+    let res = await send(token);
+    if (res.status === 401 && token) {
+      const fresh = await refreshAccessToken();
+      if (fresh) res = await send(fresh);
+    }
+    if (!res.ok) {
+      throw new Error(await parseError(res));
+    }
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = /filename="?([^";]+)"?/i.exec(disposition);
+    const filename = match?.[1] || null;
+    return { blob: await res.blob(), filename };
+  } finally {
+    clear();
+  }
+}
+
 /** True when fetch was cancelled via AbortController (safe to ignore). */
 export function isAbortError(err: unknown): boolean {
   return (

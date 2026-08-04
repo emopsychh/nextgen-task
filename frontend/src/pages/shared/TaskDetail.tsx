@@ -430,6 +430,30 @@ export function TaskDetail() {
     await patchTask({ description }, "Описание обновлено");
   }
 
+  async function addTime(hours: number, minutes: number) {
+    if (!token || !task || !canChangeStatus) return;
+    setSaveBusy(true);
+    setError(null);
+    try {
+      const updated = await api<Task>(
+        `/api/tasks/${task.id}/time/`,
+        {
+          method: "POST",
+          body: JSON.stringify({ hours, minutes }),
+        },
+        token
+      );
+      setTask(updated);
+      toast.show("Время добавлено");
+      window.dispatchEvent(new Event("projects-updated"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось добавить время");
+      throw err;
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
   async function commitOutcome() {
     if (!task || !canManage) return;
     const outcome = draftOutcome;
@@ -711,6 +735,8 @@ export function TaskDetail() {
           draftOutcome={draftOutcome}
           onDraftOutcome={setDraftOutcome}
           onCommitOutcome={() => void commitOutcome()}
+          canAddTime={canChangeStatus}
+          onAddTime={addTime}
         />
 
         <section className="messenger task-chat-pane">

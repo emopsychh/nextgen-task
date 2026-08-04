@@ -265,50 +265,25 @@ def apply_inbound_timer_state(
     bitrix_status: str | None = None,
 ) -> bool:
     """
-    Mirror Bitrix Учёт времени onto local TimeEntry rows without echoing back.
-
-    Important: task.timer.get is scoped to the OAuth user of the app token.
-    An empty result does NOT mean the Bitrix stopwatch is stopped when another
-    user started it — only trust running=False when Bitrix STATUS is todo/done,
-    or when running=True (we saw a live timer for this auth user).
+    App time is entered manually. Do not mirror Bitrix stopwatch / elapsed
+    into local TimeEntry rows. Only close leftover open entries when Bitrix
+    clearly shows the task is paused or done.
     """
     from board.timeutils import stop_time_entry
 
-    if running is None and bitrix_total is None and not bitrix_status:
+    _ = timer_payload, bitrix_total
+    if running is None and not bitrix_status:
         return False
 
-    # Status is the source of truth for start/pause in this product.
-    if bitrix_status in ("todo", "done"):
-        running = False
-    elif bitrix_status == "in_progress" and running is not True:
-        # Empty timer.get while in_progress → unknown (often wrong Bitrix user)
-        running = None
+    should_stop = running is False or bitrix_status in ("todo", "done")
+    if not should_stop:
+        return False
 
     changed = False
-    if running is False:
-        for entry in task.time_entries.filter(ended_at__isnull=True):
-            stop_time_entry(entry, sync_bitrix=False)
-            changed = True
-        if bitrix_total is not None:
-            changed = _reconcile_tracked_seconds(task, bitrix_total) or changed
-        return changed
-
-    if running is True:
-        started = bitrix_timer_started_at(timer_payload)
-        existing = task.time_entries.filter(ended_at__isnull=True).first()
-        if existing:
-            if started and abs((existing.started_at - started).total_seconds()) > 2:
-                existing.started_at = started
-                existing.save(update_fields=["started_at", "updated_at"])
-                changed = True
-            return changed
-        _start_local_timer_from_inbound(task, started_at=started)
-        return task.time_entries.filter(ended_at__isnull=True).exists()
-
-    # running unknown: do not invent a timer — status transitions own start/stop
-    if bitrix_total is not None and not task.time_entries.filter(ended_at__isnull=True).exists():
-        return _reconcile_tracked_seconds(task, bitrix_total)
-    return False
+    for entry in task.time_entries.filter(ended_at__isnull=True):
+        stop_time_entry(entry, sync_bitrix=False)
+        changed = True
+    return changed
 
 
 def _agency_portal_for_client(client_portal):
@@ -505,43 +480,9 @@ def deadlines_equal(a, b) -> bool:
 
 
 def _start_local_timer_from_inbound(task, *, started_at=None) -> None:
-    """Mirror Bitrix start into a local running entry without echoing to Bitrix."""
-    from django.utils import timezone
-
-    from board.models import TimeEntry
-    from portals.models import BitrixUser, PortalLink
-
-    if task.time_entries.filter(ended_at__isnull=True).exists():
-        return
-    author = None
-    last = task.time_entries.order_by("-started_at").first()
-    if last and last.author_id:
-        author = last.author
-    if author is None and task.created_by_id:
-        from portals.models import Portal
-
-        # Prefer agency users for timers
-        if task.created_by.portal.role == Portal.Role.AGENCY:
-            author = task.created_by
-    if author is None:
-        agency_ids = list(
-            PortalLink.objects.filter(client_portal=task.project.portal).values_list(
-                "agency_portal_id", flat=True
-            )
-        )
-        if agency_ids:
-            author = (
-                BitrixUser.objects.filter(portal_id__in=agency_ids)
-                .order_by("id")
-                .first()
-            )
-    if author is None:
-        return
-    TimeEntry.objects.create(
-        task=task,
-        author=author,
-        started_at=started_at or timezone.now(),
-    )
+    """Deprecated no-op: app time is entered manually, not from Bitrix stopwatch."""
+    _ = task, started_at
+    return
 
 
 def apply_inbound_status(
@@ -587,20 +528,13 @@ def apply_inbound_status(
     ):
         return False
     if task.status == new_status:
-        # Heal drift without a status change
+        # Heal drift without a status change: close leftover open entries on done.
         if stop_timers and new_status == Task.Status.DONE:
             stopped = False
             for running in task.time_entries.filter(ended_at__isnull=True):
                 stop_time_entry(running, sync_bitrix=False)
                 stopped = True
             return stopped
-        if (
-            stop_timers
-            and new_status == Task.Status.IN_PROGRESS
-            and not task.time_entries.filter(ended_at__isnull=True).exists()
-        ):
-            _start_local_timer_from_inbound(task)
-            return task.time_entries.filter(ended_at__isnull=True).exists()
         return False
     # Avoid clobbering an in-flight local→Bitrix push.
     # force=True (webhooks / pull): still skip for a short window so we don't
@@ -632,8 +566,6 @@ def apply_inbound_status(
     if stop_timers and new_status == Task.Status.DONE:
         for running in task.time_entries.filter(ended_at__isnull=True):
             stop_time_entry(running, sync_bitrix=False)
-    elif stop_timers and new_status == Task.Status.IN_PROGRESS:
-        _start_local_timer_from_inbound(task)
 
     logger.info(
         "inbound status task=%s %s→%s (force=%s resume_pause=%s)",

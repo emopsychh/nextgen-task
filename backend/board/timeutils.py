@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
@@ -32,8 +34,8 @@ def enqueue_time_entry_billing(entry_id: int) -> None:
         post_time_entry_to_deal.delay(entry_id)
 
 
-def enqueue_timer_bitrix_sync(entry_id: int, action: str) -> None:
-    """Deprecated per-session hook; completion synchronizes the final total."""
+def enqueue_timer_bitrix_sync(entry_id: int, action: str = "add") -> None:
+    """Push a closed TimeEntry into Bitrix «Учёт времени»."""
     from board.tasks import sync_timer_to_bitrix
 
     if settings.CELERY_TASK_ALWAYS_EAGER:
@@ -43,7 +45,7 @@ def enqueue_timer_bitrix_sync(entry_id: int, action: str) -> None:
 
 
 def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: bool = True) -> int:
-    """Close a running entry, optionally bill its duration to the CRM deal."""
+    """Close a leftover running entry (legacy); bill its duration to the CRM deal."""
     if entry.ended_at is not None:
         return entry.duration_seconds
     end = ended_at or timezone.now()
@@ -51,15 +53,53 @@ def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: boo
     entry.ended_at = end
     entry.duration_seconds = duration
     entry.save(update_fields=["ended_at", "duration_seconds", "updated_at"])
-    # Bitrix «Учёт времени» is filled manually; app timers stay local.
+    # Bitrix «Учёт времени» is filled manually in Bitrix; app time is local.
     _ = sync_bitrix
     if bill and duration > 0 and getattr(entry, "billed_to_deal_at", None) is None:
         enqueue_time_entry_billing(entry.id)
     return duration
 
 
+def add_manual_time_entry(
+    task,
+    *,
+    author,
+    duration_seconds: int,
+    note: str = "",
+    bill: bool = True,
+):
+    """
+    Create a closed TimeEntry for manually entered duration (no live stopwatch).
+    Stops any leftover open entries on the task first.
+    """
+    from board.models import TimeEntry
+
+    seconds = max(0, int(duration_seconds or 0))
+    if seconds <= 0:
+        raise ValueError("duration_seconds must be > 0")
+
+    for running in task.time_entries.filter(ended_at__isnull=True):
+        stop_time_entry(running, bill=bill, sync_bitrix=False)
+
+    ended_at = timezone.now()
+    started_at = ended_at - timedelta(seconds=seconds)
+    entry = TimeEntry.objects.create(
+        task=task,
+        author=author,
+        started_at=started_at,
+        ended_at=ended_at,
+        duration_seconds=seconds,
+        note=(note or "").strip()[:500],
+    )
+    if bill and getattr(entry, "billed_to_deal_at", None) is None:
+        enqueue_time_entry_billing(entry.id)
+    # Mirror the same seconds into Bitrix task elapsed time.
+    enqueue_timer_bitrix_sync(entry.id, "add")
+    return entry
+
+
 def task_tracked_seconds(task, *, include_running: bool = True) -> int:
-    """Sum closed entries; optionally add live elapsed for a running entry."""
+    """Sum closed entries; optionally add live elapsed for a leftover running entry."""
     closed = (
         task.time_entries.filter(ended_at__isnull=False).aggregate(total=Sum("duration_seconds"))[
             "total"

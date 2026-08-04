@@ -256,3 +256,23 @@ class WorkReportApiTests(TestCase):
         task.refresh_from_db()
         self.assertEqual(task.status, "in_progress")
         self.assertFalse((task.outcome or "").strip())
+
+    def test_download_pdf(self):
+        create = self.agency_client.post(
+            "/api/reports/",
+            {"portal": self.client_portal.id, "project_ids": [self.project.id]},
+            format="json",
+        )
+        self.assertEqual(create.status_code, 201, create.content)
+        report_id = create.data["id"]
+
+        res = self.agency_client.get(f"/api/reports/{report_id}/pdf/")
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertIn(f"report-{report_id}.pdf", res["Content-Disposition"])
+        self.assertTrue(res.content.startswith(b"%PDF"))
+        self.assertGreater(len(res.content), 200)
+
+        client_res = self.client_client.get(f"/api/reports/{report_id}/pdf/")
+        self.assertEqual(client_res.status_code, 200)
+        self.assertTrue(client_res.content.startswith(b"%PDF"))

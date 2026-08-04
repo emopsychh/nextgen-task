@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, isAbortError, type WorkReport } from "../../api/types";
+import { api, apiBlob, isAbortError, type WorkReport } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { DisputeIcon } from "../../components/icons";
@@ -114,6 +114,32 @@ export function ReportDetail() {
       setSelectedTasks(new Set());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Действие не выполнено");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function downloadPdf() {
+    if (!token || !reportId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { blob, filename } = await apiBlob(
+        `/api/reports/${reportId}/pdf/`,
+        {},
+        token
+      );
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = filename || `report-${reportId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+      toast.show("Файл сохранён", "PDF скачан");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Не удалось скачать PDF");
     } finally {
       setBusy(false);
     }
@@ -246,6 +272,14 @@ export function ReportDetail() {
             ) : null}
           </div>
           <div className="report-actions">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={busy}
+              onClick={() => void downloadPdf()}
+            >
+              Скачать PDF
+            </button>
             {isAgency && detail.status === "draft" ? (
               <button
                 type="button"

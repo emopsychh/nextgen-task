@@ -30,6 +30,8 @@ type Props = {
   draftOutcome?: string;
   onDraftOutcome?: (value: string) => void;
   onCommitOutcome?: () => void;
+  canAddTime?: boolean;
+  onAddTime?: (hours: number, minutes: number) => Promise<void> | void;
 };
 
 export function TaskSummaryCard({
@@ -54,6 +56,8 @@ export function TaskSummaryCard({
   draftOutcome = "",
   onDraftOutcome,
   onCommitOutcome,
+  canAddTime = false,
+  onAddTime,
 }: Props) {
   const important = Boolean(task.is_important);
   return (
@@ -161,9 +165,10 @@ export function TaskSummaryCard({
           <dt>Время</dt>
           <dd className="task-meta-timer">
             <TaskTimer
-              closedSeconds={task.total_tracked_seconds || 0}
-              activeStartedAt={task.active_timer?.started_at || null}
-              isWorking={task.status === "in_progress"}
+              totalSeconds={task.total_tracked_seconds || 0}
+              canAdd={Boolean(canAddTime && onAddTime)}
+              busy={saveBusy}
+              onAddTime={onAddTime || (async () => undefined)}
             />
           </dd>
         </div>

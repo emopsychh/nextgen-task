@@ -85,4 +85,4 @@ class CompletionHelpersTests(TestCase):
         )
         result = board_tasks.sync_completion_time_to_bitrix(task.id)
         self.assertTrue(result["ok"])
-        self.assertEqual(result["skipped"], "bitrix_time_manual")
+        self.assertEqual(result["skipped"], "per_entry_sync")

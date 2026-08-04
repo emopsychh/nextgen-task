@@ -464,24 +464,10 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         if self.request.user.is_agency and old_status != task.status:
             author = self.request.user.bitrix_user
-            # Pause / complete → stop local timer. Pause is not synchronized.
-            if old_status == Task.Status.IN_PROGRESS and task.status in (
-                Task.Status.TODO,
-                Task.Status.DONE,
-            ):
+            # Close leftover live timers (legacy). Time is entered manually now.
+            if task.status in (Task.Status.TODO, Task.Status.DONE):
                 for running in task.time_entries.filter(ended_at__isnull=True):
                     stop_time_entry(running)
-            # Start / resume → start local timer; Bitrix start is pushed by sync
-            # only when Bitrix is not already in progress.
-            if task.status == Task.Status.IN_PROGRESS:
-                for running in TimeEntry.objects.filter(author=author, ended_at__isnull=True):
-                    stop_time_entry(running)
-                if not task.time_entries.filter(ended_at__isnull=True).exists():
-                    TimeEntry.objects.create(
-                        task=task,
-                        author=author,
-                        started_at=timezone.now(),
-                    )
             if task.status == Task.Status.DONE and old_status != Task.Status.DONE:
                 try:
                     from board.completion import finalize_task_completion
@@ -506,42 +492,66 @@ class TaskViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("No access")
         instance.delete()
 
-    @action(detail=True, methods=["post"], url_path="timer/start")
-    def timer_start(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path="time")
+    def add_time(self, request, pk=None):
+        """Manually add spent time (hours + minutes), like Bitrix «Учёт времени»."""
+        from board.timeutils import add_manual_time_entry
+
         if not request.user.is_agency:
             raise PermissionDenied("Only agency can track time")
         task = self.get_object()
         if not can_access_client_portal(request.user, task.project.portal):
             raise PermissionDenied("No access")
 
-        author = request.user.bitrix_user
-        # Stop any other running timers for this agency user
-        for running in TimeEntry.objects.filter(author=author, ended_at__isnull=True):
-            stop_time_entry(running)
+        try:
+            hours = int(request.data.get("hours") or 0)
+            minutes = int(request.data.get("minutes") or 0)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Укажите часы и минуты целыми числами"},
+                status=400,
+            )
+        if hours < 0 or minutes < 0:
+            return Response({"detail": "Время не может быть отрицательным"}, status=400)
+        if minutes >= 60:
+            return Response({"detail": "Минуты должны быть от 0 до 59"}, status=400)
+        seconds = hours * 3600 + minutes * 60
+        if seconds <= 0:
+            return Response({"detail": "Укажите время больше нуля"}, status=400)
+        if seconds > 7 * 24 * 3600:
+            return Response({"detail": "Слишком большой интервал (макс. 7 суток)"}, status=400)
 
-        existing = task.time_entries.filter(ended_at__isnull=True).first()
-        if existing:
-            return Response(TaskSerializer(task, context={"request": request}).data)
+        note = request.data.get("note") or ""
+        if not isinstance(note, str):
+            note = str(note)
 
-        TimeEntry.objects.create(
-            task=task,
-            author=author,
-            started_at=timezone.now(),
+        add_manual_time_entry(
+            task,
+            author=request.user.bitrix_user,
+            duration_seconds=seconds,
+            note=note,
         )
-        # App-only timer — Bitrix «Учёт времени» is filled manually.
+        publish_task_event(task, kind="task_update")
         task.refresh_from_db()
+        return Response(TaskSerializer(task, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="timer/start")
+    def timer_start(self, request, pk=None):
+        """Deprecated: live stopwatch removed. Use POST …/time/."""
+        task = self.get_object()
+        if not can_access_client_portal(request.user, task.project.portal):
+            raise PermissionDenied("No access")
         return Response(TaskSerializer(task, context={"request": request}).data)
 
     @action(detail=True, methods=["post"], url_path="timer/stop")
     def timer_stop(self, request, pk=None):
+        """Deprecated: closes leftover open entries only."""
         if not request.user.is_agency:
             raise PermissionDenied("Only agency can track time")
         task = self.get_object()
         if not can_access_client_portal(request.user, task.project.portal):
             raise PermissionDenied("No access")
-
-        running = task.time_entries.filter(ended_at__isnull=True).order_by("-started_at").first()
-        if running:
+        for running in task.time_entries.filter(ended_at__isnull=True):
             stop_time_entry(running)
         task.refresh_from_db()
         return Response(TaskSerializer(task, context={"request": request}).data)
@@ -873,6 +883,21 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         if not portal or not can_access_client_portal(request.user, portal):
             raise PermissionDenied("No access to this portal")
         return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(detail=True, methods=["get"], url_path="pdf")
+    def pdf(self, request, pk=None):
+        """Download the work report as a PDF (same live data as the detail page)."""
+        from board.report_pdf import build_report_pdf
+
+        report = self.get_object()
+        portal = self._report_portal(report)
+        if not portal or not can_access_client_portal(request.user, portal):
+            raise PermissionDenied("No access to this portal")
+        pdf_bytes, filename = build_report_pdf(report)
+        response = HttpResponse(pdf_bytes, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response["Content-Length"] = str(len(pdf_bytes))
+        return response
 
     def list(self, request, *args, **kwargs):
         from django.db.models import Sum

@@ -157,8 +157,9 @@ def _task_fields(
         fields["GROUP_ID"] = group_id
     if parent_id:
         fields["PARENT_ID"] = parent_id
-    # Never drive a second live timer in Bitrix. «Учёт времени» is filled
-    # manually after completion; Nextgen only announces duration in chat.
+    # No live Bitrix stopwatch from the app. Elapsed rows are added via
+    # task.elapseditem.add when the user enters time in Nextgen (ALLOW_TIME_TRACKING
+    # is flipped to Y in that sync). Keep N on create/update to avoid dual timers.
     fields["ALLOW_TIME_TRACKING"] = "N"
     # Bitrix PRIORITY: 2 = High («важная»), 1 = Normal. Mirror the local flag.
     fields["PRIORITY"] = "2" if getattr(task, "is_important", False) else "1"
@@ -1038,19 +1039,80 @@ def _extract_elapsed_id(result) -> str:
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def sync_completion_time_to_bitrix(self, task_id: int):
-    """Deprecated no-op: Bitrix time is filled manually; completion posts a chat message instead."""
-    return {"ok": True, "skipped": "bitrix_time_manual", "task_id": task_id}
+    """Deprecated no-op: each manual TimeEntry is pushed via sync_timer_to_bitrix."""
+    return {"ok": True, "skipped": "per_entry_sync", "task_id": task_id}
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=5)
-def sync_timer_to_bitrix(self, entry_id: int, action: str):
-    """Deprecated no-op: Bitrix «Учёт времени» is filled manually, not from the app."""
-    return {
-        "ok": True,
-        "skipped": "bitrix_time_manual",
-        "entry_id": entry_id,
-        "action": action,
-    }
+@shared_task(bind=True, max_retries=3, default_retry_delay=15)
+def sync_timer_to_bitrix(self, entry_id: int, action: str = "add"):
+    """Push a closed TimeEntry into Bitrix «Учёт времени» (task.elapseditem.add)."""
+    from django.db import transaction
+
+    from board.models import TimeEntry
+
+    _ = action
+    try:
+        with transaction.atomic():
+            entry = (
+                TimeEntry.objects.select_for_update()
+                .select_related(
+                    "task",
+                    "task__project",
+                    "task__project__portal",
+                    "author",
+                )
+                .get(pk=entry_id)
+            )
+            if entry.bitrix_elapsed_id:
+                return {
+                    "ok": True,
+                    "skipped": "already_synced",
+                    "elapsed_id": entry.bitrix_elapsed_id,
+                }
+
+            seconds = int(entry.duration_seconds or 0)
+            if seconds <= 0 or entry.ended_at is None:
+                return {"ok": True, "skipped": "not_closed", "seconds": seconds}
+
+            task = entry.task
+            agency = _agency_portal_for_client(task.project.portal)
+            bitrix_id = str(task.agency_bitrix_task_id or "")
+            if not agency or not agency.access_token or not bitrix_id:
+                raise BitrixAPIError("Нет связанной задачи на портале агентства")
+
+            client = BitrixClient(agency)
+            # Elapsed items require time tracking enabled on the Bitrix task.
+            client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
+
+            user_id = None
+            if entry.author_id and getattr(entry.author, "bitrix_id", None):
+                user_id = str(entry.author.bitrix_id)
+            if not user_id:
+                user_id = _bitrix_user_id(client.get_current_user()) or None
+
+            result = client.add_elapsed_item(
+                bitrix_id,
+                seconds,
+                comment="",
+                user_id=user_id,
+            )
+            elapsed_id = _extract_elapsed_id(result)
+            if elapsed_id:
+                entry.bitrix_elapsed_id = elapsed_id
+                entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
+            return {
+                "ok": True,
+                "seconds": seconds,
+                "elapsed_id": elapsed_id,
+                "bitrix_task_id": bitrix_id,
+            }
+    except TimeEntry.DoesNotExist:
+        return {"ok": False, "reason": "missing"}
+    except BitrixAPIError as exc:
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            return {"ok": False, "error": str(exc)}
 
 
 # Backwards-compatible alias (no longer used for hour deduction)
