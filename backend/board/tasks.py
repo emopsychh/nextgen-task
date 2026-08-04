@@ -1580,8 +1580,10 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
     _ = action
     try:
         with transaction.atomic():
+            # of=("self",): author is nullable → LEFT OUTER JOIN; Postgres rejects
+            # FOR UPDATE on the nullable side of an outer join.
             entry = (
-                TimeEntry.objects.select_for_update()
+                TimeEntry.objects.select_for_update(of=("self",))
                 .select_related(
                     "task",
                     "task__project",
