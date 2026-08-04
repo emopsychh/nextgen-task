@@ -40,6 +40,35 @@ function loadStored(): AuthSession | null {
   }
 }
 
+function normalizeDomain(domain: string | null | undefined): string {
+  return String(domain || "")
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .split("/")[0]
+    .trim();
+}
+
+/** Agency and client Bitrix iframes share the same Nextgen origin — never reuse
+ *  a stored JWT from another portal or постановщик stays the previous opener. */
+function storedSessionMatchesBitrix(
+  session: AuthSession | null,
+  domain: string | null,
+  memberId: string | null
+): boolean {
+  if (!session?.access || !session.portal) return false;
+  const storedMember = String(session.portal.member_id || "").trim();
+  const incomingMember = String(memberId || "").trim();
+  if (incomingMember && storedMember && incomingMember !== storedMember) {
+    return false;
+  }
+  const storedDomain = normalizeDomain(session.portal.domain);
+  const incomingDomain = normalizeDomain(domain);
+  if (incomingDomain && storedDomain && incomingDomain !== storedDomain) {
+    return false;
+  }
+  return true;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const stored = loadStored();
   const [token, setToken] = useState<string | null>(stored?.access ?? null);
@@ -117,9 +146,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function boot() {
       try {
         if (authId) {
-          // Prefer showing the stored session immediately if Bitrix re-auth is slow.
-          const hadSession = Boolean(loadStored()?.access);
-          if (hadSession) {
+          const previous = loadStored();
+          const samePortal = storedSessionMatchesBitrix(previous, domain, memberId);
+          // Drop agency session when opening from a client Bitrix (and vice versa).
+          if (previous && !samePortal) {
+            persist(null);
+          }
+          // Only paint the previous session if it belongs to this Bitrix portal.
+          if (samePortal && previous?.access) {
             setLoading(false);
           }
           try {
@@ -136,8 +170,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             });
             window.history.replaceState({}, "", window.location.pathname);
           } catch (e) {
-            // Keep stored session if re-auth timed out / failed.
-            if (!hadSession) {
+            // Never keep another portal's JWT after a failed Bitrix handshake.
+            if (!samePortal || !loadStored()?.access) {
+              persist(null);
               setError(e instanceof Error ? e.message : "Bitrix auth failed");
             }
           }
@@ -148,7 +183,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     void boot();
-  }, [loginBitrix]);
+  }, [loginBitrix, persist]);
 
   // Keep in-memory token in sync with the api-layer refresh flow, and log out
   // when the refresh token is no longer valid.

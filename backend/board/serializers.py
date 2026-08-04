@@ -20,6 +20,20 @@ from .models import (
 from .naming import display_attachment_name
 
 
+def task_creator_display_name(created_by) -> str | None:
+    """Label for постановщик; client creators include portal company name."""
+    if not created_by:
+        return None
+    name = (created_by.display_name or "").strip()
+    portal = getattr(created_by, "portal", None)
+    if portal is not None and portal.role == Portal.Role.CLIENT:
+        company = (portal.name or "").strip()
+        if company and name and company.lower() not in name.lower():
+            return f"{name} ({company})"
+        return name or company or "Клиент"
+    return name or None
+
+
 def _clean_task_title(instance: Task) -> str:
     """Strip legacy [portal] prefixes from title; persist if dirty and push to Bitrix."""
     from django.conf import settings
@@ -257,9 +271,7 @@ class TaskSerializer(serializers.ModelSerializer):
         )
 
     def get_created_by_name(self, obj):
-        if obj.created_by:
-            return obj.created_by.display_name
-        return None
+        return task_creator_display_name(obj.created_by)
 
     def get_created_by_role(self, obj):
         if obj.created_by_id and obj.created_by and obj.created_by.portal_id:
@@ -402,9 +414,7 @@ class TaskListSerializer(serializers.ModelSerializer):
         return obj.comments.count()
 
     def get_created_by_name(self, obj):
-        if obj.created_by:
-            return obj.created_by.display_name
-        return None
+        return task_creator_display_name(obj.created_by)
 
     def get_created_by_role(self, obj):
         if obj.created_by_id and obj.created_by and obj.created_by.portal_id:

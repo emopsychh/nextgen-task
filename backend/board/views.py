@@ -412,6 +412,11 @@ class TaskViewSet(viewsets.ModelViewSet):
         project = serializer.validated_data["project"]
         if not can_access_client_portal(self.request.user, project.portal):
             raise PermissionDenied("No access to this project")
+        # Client may only create inside their own portal — blocks a stale agency
+        # JWT left in localStorage from creating tasks as «Александр» on the
+        # client Bitrix iframe.
+        if self.request.user.is_client and project.portal_id != self.request.user.portal_id:
+            raise PermissionDenied("No access to this project")
         extras = {
             "created_by": self.request.user.bitrix_user,
             "sync_status": Task.SyncStatus.PENDING,
