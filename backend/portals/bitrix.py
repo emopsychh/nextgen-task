@@ -470,6 +470,10 @@ BITRIX_TO_LOCAL = {
 def parse_bitrix_status(raw) -> int | None:
     if raw is None:
         return None
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return None
     try:
         return int(raw)
     except (TypeError, ValueError):
@@ -480,6 +484,12 @@ def bitrix_status_code(task_data: dict) -> int | None:
     """Prefer realStatus (canonical) over display status."""
     if not isinstance(task_data, dict):
         return None
+    # Some methods return {task: {...}} still nested.
+    nested = task_data.get("task")
+    if isinstance(nested, dict):
+        inner = bitrix_status_code(nested)
+        if inner is not None:
+            return inner
     for key in ("realStatus", "REAL_STATUS", "status", "STATUS"):
         if key in task_data and task_data[key] not in (None, ""):
             code = parse_bitrix_status(task_data[key])

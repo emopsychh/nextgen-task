@@ -137,6 +137,28 @@ class OutboundStatusPushTests(TestCase):
         )
         client.start_task.assert_called()
 
+    @patch("board.realtime.publish_task_event", lambda *a, **k: None)
+    def test_start_ok_when_status_unreadable_after_start(self):
+        """Bitrix may accept start but omit status in get_task — must not ERROR."""
+        task = make_task(
+            self.project,
+            created_by=self.user,
+            status=Task.Status.IN_PROGRESS,
+            sync_status=Task.SyncStatus.PENDING,
+            agency_bitrix_task_id="108",
+        )
+        client = _mock_client(bitrix_status="2", after_start=None)
+        # get_task returns no status field after start
+        client.get_task.side_effect = lambda *_a, **_k: (
+            {"status": "2"} if not client.start_task.called else {"id": "108"}
+        )
+        client.start_task.return_value = {"task": {"id": "108"}}
+        with patch.object(board_tasks, "BitrixClient", return_value=client):
+            res = board_tasks.sync_task_to_bitrix(task.id)
+        self.assertTrue(res["ok"], res)
+        task.refresh_from_db()
+        self.assertEqual(task.sync_status, Task.SyncStatus.SYNCED)
+
     @override_settings(
         BITRIX_DEFAULT_RESPONSIBLE_ID="",
         BITRIX_CLIENT_TASK_AUTHOR_ID="99",

@@ -264,6 +264,23 @@ def _stop_bitrix_timer_quiet(client: BitrixClient, bitrix_task_id: str) -> None:
         logger.info("pauseTimer during status change error task=%s: %s", bitrix_task_id, exc)
 
 
+def _read_bitrix_status(
+    client: BitrixClient, bitrix_task_id: str, *payloads
+) -> int | None:
+    """Read status from action payloads and/or a fresh tasks.task.get."""
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        code = bitrix_status_code(payload)
+        if code is not None:
+            return code
+    try:
+        return bitrix_status_code(client.get_task(bitrix_task_id) or {})
+    except BitrixAPIError as exc:
+        logger.info("get_task after status action failed id=%s: %s", bitrix_task_id, exc)
+        return None
+
+
 def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local: str) -> None:
     """Push start/complete to Bitrix; pause remains local to each system."""
     target = _normalize_local(target_local)
@@ -296,8 +313,11 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
                 pass
             _stop_bitrix_timer_quiet(client, bitrix_task_id)
 
+        complete_ok = False
+        complete_result = None
         try:
-            client.complete_task(bitrix_task_id)
+            complete_result = client.complete_task(bitrix_task_id)
+            complete_ok = True
         except BitrixAPIError as exc:
             logger.info(
                 "complete failed for %s (%s) — claim+STATUS fallback",
@@ -306,13 +326,23 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
             )
             _claim_bitrix_task_for_oauth(client, bitrix_task_id)
             try:
-                client.complete_task(bitrix_task_id)
+                complete_result = client.complete_task(bitrix_task_id)
+                complete_ok = True
             except BitrixAPIError:
-                _set_bitrix_status_field(
+                complete_ok = _set_bitrix_status_field(
                     client, bitrix_task_id, BITRIX_STATUS_COMPLETED
                 )
 
-        after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
+        after = _read_bitrix_status(client, bitrix_task_id, complete_result)
+        if after in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
+            return
+        if after is None and complete_ok:
+            # Bitrix accepted complete/STATUS but get_task omitted status fields.
+            logger.warning(
+                "complete accepted for %s but status unreadable — treating as done",
+                bitrix_task_id,
+            )
+            return
         if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
             _stop_bitrix_timer_quiet(client, bitrix_task_id)
             try:
@@ -320,37 +350,37 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
             except BitrixAPIError:
                 pass
             try:
-                client.complete_task(bitrix_task_id)
+                complete_result = client.complete_task(bitrix_task_id)
+                complete_ok = True
             except BitrixAPIError:
                 _claim_bitrix_task_for_oauth(client, bitrix_task_id)
-                try:
-                    _set_bitrix_status_field(
-                        client, bitrix_task_id, BITRIX_STATUS_COMPLETED
-                    )
-                except BitrixAPIError:
-                    pass
-            after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
-        if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
-            try:
-                _claim_bitrix_task_for_oauth(client, bitrix_task_id)
-                _set_bitrix_status_field(client, bitrix_task_id, BITRIX_STATUS_COMPLETED)
-                after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
-            except BitrixAPIError:
-                pass
-        if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
-            raise BitrixAPIError(
-                f"Bitrix задача {bitrix_task_id} не завершилась (status={after}); "
-                "проверьте таймер учёта времени / права исполнителя"
+                complete_ok = _set_bitrix_status_field(
+                    client, bitrix_task_id, BITRIX_STATUS_COMPLETED
+                )
+            after = _read_bitrix_status(client, bitrix_task_id, complete_result)
+        if after in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
+            return
+        if after is None and complete_ok:
+            logger.warning(
+                "complete accepted for %s but status unreadable — treating as done",
+                bitrix_task_id,
             )
-        return
+            return
+        raise BitrixAPIError(
+            f"Bitrix задача {bitrix_task_id} не завершилась (status={after})"
+        )
 
     # target == in_progress — start once; noop if already running.
     if current == BITRIX_STATUS_IN_PROGRESS:
         return
     if current in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
         raise BitrixAPIError("Завершённую задачу нельзя возобновить")
+
+    start_ok = False
+    start_result = None
     try:
-        client.start_task(bitrix_task_id)
+        start_result = client.start_task(bitrix_task_id)
+        start_ok = True
     except BitrixAPIError as exc:
         logger.info(
             "start failed for %s (%s) — claim+STATUS fallback",
@@ -359,28 +389,45 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         )
         _claim_bitrix_task_for_oauth(client, bitrix_task_id)
         try:
-            client.start_task(bitrix_task_id)
+            start_result = client.start_task(bitrix_task_id)
+            start_ok = True
         except BitrixAPIError:
-            _set_bitrix_status_field(client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS)
+            start_ok = _set_bitrix_status_field(
+                client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS
+            )
 
-    after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
+    after = _read_bitrix_status(client, bitrix_task_id, start_result)
+    if after == BITRIX_STATUS_IN_PROGRESS:
+        return
+    if after is None and start_ok:
+        # Regression fix: get_task sometimes omits status → was false ERROR
+        # «не началась (status=None)» even when start/STATUS succeeded.
+        logger.warning(
+            "start accepted for %s but status unreadable — treating as in_progress",
+            bitrix_task_id,
+        )
+        return
     if after != BITRIX_STATUS_IN_PROGRESS:
         try:
-            client.start_task(bitrix_task_id)
+            start_result = client.start_task(bitrix_task_id)
+            start_ok = True
         except BitrixAPIError:
             _claim_bitrix_task_for_oauth(client, bitrix_task_id)
-            try:
-                _set_bitrix_status_field(
-                    client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS
-                )
-            except BitrixAPIError:
-                pass
-        after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
-    if after != BITRIX_STATUS_IN_PROGRESS:
-        raise BitrixAPIError(
-            f"Bitrix задача {bitrix_task_id} не началась (status={after}); "
-            "проверьте права исполнителя / статус в Bitrix"
+            start_ok = _set_bitrix_status_field(
+                client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS
+            )
+        after = _read_bitrix_status(client, bitrix_task_id, start_result)
+    if after == BITRIX_STATUS_IN_PROGRESS:
+        return
+    if after is None and start_ok:
+        logger.warning(
+            "start accepted for %s but status unreadable — treating as in_progress",
+            bitrix_task_id,
         )
+        return
+    raise BitrixAPIError(
+        f"Bitrix задача {bitrix_task_id} не началась (status={after})"
+    )
 
 
 def _ensure_project_agency_parent(project) -> tuple[str, str]:
