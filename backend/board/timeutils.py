@@ -35,13 +35,25 @@ def enqueue_time_entry_billing(entry_id: int) -> None:
 
 
 def enqueue_timer_bitrix_sync(entry_id: int, action: str = "set") -> None:
-    """Push a closed TimeEntry into Bitrix «Учёт времени»."""
+    """Push a closed TimeEntry into Bitrix «Учёт времени».
+
+    In production, wait for DB commit so the Celery worker sees the row.
+    Under CELERY_TASK_ALWAYS_EAGER (tests), run immediately.
+    """
+    from django.db import transaction
+
     from board.tasks import sync_timer_to_bitrix
 
+    def _run() -> None:
+        if settings.CELERY_TASK_ALWAYS_EAGER:
+            sync_timer_to_bitrix(entry_id, action)
+        else:
+            sync_timer_to_bitrix.delay(entry_id, action)
+
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        sync_timer_to_bitrix(entry_id, action)
+        _run()
     else:
-        sync_timer_to_bitrix.delay(entry_id, action)
+        transaction.on_commit(_run)
 
 
 def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: bool = True) -> int:

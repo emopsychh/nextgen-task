@@ -322,27 +322,54 @@ class BitrixClient:
         seconds: int,
         *,
         comment: str = "",
-        user_id: str | None = None,
+        user_id: str | int | None = None,
+        date_start: str | None = None,
+        date_stop: str | None = None,
     ) -> dict | str | int:
-        """Add closed elapsed time. Bitrix requires ARFIELDS (not FIELDS)."""
+        """Insert into Bitrix «Учёт времени» via task.elapseditem.add.
+
+        Docs: TASKID (int) + ARFIELDS with SECONDS + COMMENT_TEXT required.
+        USER_ID is optional — omit to attribute time to the OAuth token user.
+        """
+        try:
+            task_id_int: int | str = int(task_id)
+        except (TypeError, ValueError):
+            task_id_int = task_id
         fields: dict = {
             "SECONDS": max(0, int(seconds)),
-            # COMMENT_TEXT is required by the API even when empty.
-            "COMMENT_TEXT": (comment or "").strip() or " ",
+            # COMMENT_TEXT is required; empty string is rejected on some portals.
+            "COMMENT_TEXT": (comment or "").strip() or "Учёт из Nextgen Task",
+            # Manual entry (vs live stopwatch). Writable per getmanifest.
+            "SOURCE": 2,
         }
-        if user_id:
-            fields["USER_ID"] = user_id
+        if user_id is not None and str(user_id).strip():
+            try:
+                fields["USER_ID"] = int(user_id)
+            except (TypeError, ValueError):
+                fields["USER_ID"] = user_id
+        if date_start:
+            fields["DATE_START"] = date_start
+        if date_stop:
+            fields["DATE_STOP"] = date_stop
         try:
             return self.call(
                 "task.elapseditem.add",
-                {"TASKID": task_id, "ARFIELDS": fields},
+                {"TASKID": task_id_int, "ARFIELDS": fields},
             )
         except BitrixAPIError as exc:
-            # Legacy portals occasionally still accept FIELDS.
-            if "arfields" in str(exc).lower() or "fields" in str(exc).lower():
+            msg = str(exc).lower()
+            # Some portals reject SOURCE; retry without it.
+            if "source" in msg and "SOURCE" in fields:
+                fields.pop("SOURCE", None)
                 return self.call(
                     "task.elapseditem.add",
-                    {"TASKID": task_id, "FIELDS": fields},
+                    {"TASKID": task_id_int, "ARFIELDS": fields},
+                )
+            # Legacy portals occasionally still accept FIELDS.
+            if "arfields" in msg or "fields" in msg:
+                return self.call(
+                    "task.elapseditem.add",
+                    {"TASKID": task_id_int, "FIELDS": fields},
                 )
             raise
 
@@ -353,30 +380,52 @@ class BitrixClient:
         seconds: int,
         *,
         comment: str = "",
+        date_start: str | None = None,
+        date_stop: str | None = None,
     ) -> dict | str | int:
+        try:
+            task_id_int: int | str = int(task_id)
+        except (TypeError, ValueError):
+            task_id_int = task_id
+        try:
+            item_id: int | str = int(elapsed_id)
+        except (TypeError, ValueError):
+            item_id = elapsed_id
         fields: dict = {
             "SECONDS": max(0, int(seconds)),
-            "COMMENT_TEXT": (comment or "").strip() or " ",
+            "COMMENT_TEXT": (comment or "").strip() or "Учёт из Nextgen Task",
         }
+        if date_start:
+            fields["DATE_START"] = date_start
+        if date_stop:
+            fields["DATE_STOP"] = date_stop
         try:
             return self.call(
                 "task.elapseditem.update",
-                {"TASKID": task_id, "ITEMID": elapsed_id, "ARFIELDS": fields},
+                {"TASKID": task_id_int, "ITEMID": item_id, "ARFIELDS": fields},
             )
         except BitrixAPIError as exc:
             if "arfields" in str(exc).lower() or "fields" in str(exc).lower():
                 return self.call(
                     "task.elapseditem.update",
-                    {"TASKID": task_id, "ITEMID": elapsed_id, "FIELDS": fields},
+                    {"TASKID": task_id_int, "ITEMID": item_id, "FIELDS": fields},
                 )
             raise
 
     def delete_elapsed_item(
         self, task_id: int | str, elapsed_id: int | str
     ) -> dict | str | int | bool:
+        try:
+            task_id_int: int | str = int(task_id)
+        except (TypeError, ValueError):
+            task_id_int = task_id
+        try:
+            item_id: int | str = int(elapsed_id)
+        except (TypeError, ValueError):
+            item_id = elapsed_id
         return self.call(
             "task.elapseditem.delete",
-            {"TASKID": task_id, "ITEMID": elapsed_id},
+            {"TASKID": task_id_int, "ITEMID": item_id},
         )
 
     def add_task_comment(self, task_id: int | str, message: str, author_id: str | None = None) -> dict | str | int:

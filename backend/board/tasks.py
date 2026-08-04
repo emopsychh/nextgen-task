@@ -1463,6 +1463,75 @@ def _extract_elapsed_id(result) -> str:
     return ""
 
 
+def _bitrix_elapsed_dt(value) -> str | None:
+    """Format a datetime for task.elapseditem DATE_START / DATE_STOP."""
+    if value is None:
+        return None
+    from django.utils import timezone as dj_tz
+
+    dt = value
+    if dj_tz.is_naive(dt):
+        dt = dj_tz.make_aware(dt, dj_tz.get_current_timezone())
+    return dt.isoformat()
+
+
+def _ensure_elapsed_access(client: BitrixClient, bitrix_id: str, oauth_uid: str | None) -> None:
+    """Enable учёта времени and make sure the OAuth user can add elapsed rows."""
+    patch: dict = {"ALLOW_TIME_TRACKING": "Y"}
+    if not oauth_uid:
+        client.update_task(bitrix_id, patch)
+        return
+
+    bx_task: dict = {}
+    try:
+        raw = client.call(
+            "tasks.task.get",
+            {
+                "taskId": bitrix_id,
+                "select": [
+                    "ID",
+                    "RESPONSIBLE_ID",
+                    "CREATED_BY",
+                    "ACCOMPLICES",
+                    "AUDITORS",
+                    "ALLOW_TIME_TRACKING",
+                ],
+            },
+        )
+        if isinstance(raw, dict) and isinstance(raw.get("task"), dict):
+            bx_task = raw["task"]
+        elif isinstance(raw, dict):
+            bx_task = raw
+    except BitrixAPIError as exc:
+        logger.warning(
+            "tasks.task.get before elapsed failed bitrix=%s: %s", bitrix_id, exc
+        )
+
+    def _ids(raw) -> list[str]:
+        if raw is None:
+            return []
+        if isinstance(raw, dict):
+            return [str(v) for v in raw.values() if v is not None and str(v)]
+        if isinstance(raw, (list, tuple)):
+            return [str(v) for v in raw if v is not None and str(v)]
+        text = str(raw).strip()
+        return [text] if text else []
+
+    responsible = str(
+        bx_task.get("responsibleId") or bx_task.get("RESPONSIBLE_ID") or ""
+    )
+    created_by = str(bx_task.get("createdBy") or bx_task.get("CREATED_BY") or "")
+    accomplices = _ids(bx_task.get("accomplices") or bx_task.get("ACCOMPLICES"))
+    auditors = _ids(bx_task.get("auditors") or bx_task.get("AUDITORS"))
+    if oauth_uid not in {responsible, created_by, *accomplices, *auditors}:
+        # Do not steal RESPONSIBLE — join as accomplice so elapseditem.add is allowed.
+        if oauth_uid not in accomplices:
+            accomplices.append(oauth_uid)
+        patch["ACCOMPLICES"] = accomplices
+
+    client.update_task(bitrix_id, patch)
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def sync_completion_time_to_bitrix(self, task_id: int):
     """Deprecated no-op: each manual TimeEntry is pushed via sync_timer_to_bitrix."""
@@ -1503,7 +1572,7 @@ def cleanup_bitrix_elapsed_items(self, task_id: int, elapsed_ids: list):
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=15)
 def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
-    """Push absolute TimeEntry duration into Bitrix «Учёт времени»."""
+    """Push TimeEntry into Bitrix «Учёт времени» via task.elapseditem.add/update."""
     from django.db import transaction
 
     from board.models import TimeEntry
@@ -1535,15 +1604,20 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
                 raise BitrixAPIError("Нет agency_bitrix_task_id — задача ещё не в Bitrix")
 
             client = BitrixClient(agency)
+            oauth_uid = _bitrix_user_id(client.get_current_user()) or None
             try:
-                client.update_task(bitrix_id, {"ALLOW_TIME_TRACKING": "Y"})
+                _ensure_elapsed_access(client, bitrix_id, oauth_uid)
             except BitrixAPIError as exc:
-                logger.info(
-                    "ALLOW_TIME_TRACKING=Y failed task=%s bitrix=%s: %s",
+                logger.warning(
+                    "ensure elapsed access failed task=%s bitrix=%s: %s",
                     task.id,
                     bitrix_id,
                     exc,
                 )
+
+            date_start = _bitrix_elapsed_dt(entry.started_at)
+            date_stop = _bitrix_elapsed_dt(entry.ended_at)
+            comment = (entry.note or "").strip()
 
             # Absolute set: update existing Bitrix row when we already posted one.
             if entry.bitrix_elapsed_id:
@@ -1552,7 +1626,9 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
                         bitrix_id,
                         entry.bitrix_elapsed_id,
                         seconds,
-                        comment=entry.note or "",
+                        comment=comment,
+                        date_start=date_start,
+                        date_stop=date_stop,
                     )
                     return {
                         "ok": True,
@@ -1562,7 +1638,7 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
                         "bitrix_task_id": bitrix_id,
                     }
                 except BitrixAPIError as exc:
-                    logger.info(
+                    logger.warning(
                         "elapseditem.update failed task=%s item=%s: %s — re-add",
                         task.id,
                         entry.bitrix_elapsed_id,
@@ -1575,16 +1651,13 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
                     entry.bitrix_elapsed_id = ""
                     entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
 
-            candidates: list[str | None] = []
-            # Prefer the pinned service/installer user — matches Portal OAuth
-            # and avoids "Действие не разрешено" when a random employee last logged in.
-            configured = _configured_default_responsible_id()
-            if configured:
-                candidates.append(configured)
-            oauth_uid = _bitrix_user_id(client.get_current_user()) or None
-            if oauth_uid and oauth_uid not in candidates:
+            # Happy path from Bitrix docs: omit USER_ID → time belongs to the
+            # OAuth token user. Foreign USER_ID (Клиент / wrong employee) causes
+            # ACTION_NOT_ALLOWED on many portals.
+            candidates: list[str | None] = [None]
+            if oauth_uid:
                 candidates.append(oauth_uid)
-            candidates.append(None)
+            # Last resort: agency employee who entered time in the app.
             if entry.author_id and getattr(entry.author, "bitrix_id", None):
                 if entry.author.portal_id == agency.id:
                     author_uid = str(entry.author.bitrix_id)
@@ -1598,14 +1671,16 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
                     result = client.add_elapsed_item(
                         bitrix_id,
                         seconds,
-                        comment=entry.note or "",
+                        comment=comment,
                         user_id=user_id,
+                        date_start=date_start,
+                        date_stop=date_stop,
                     )
                     last_exc = None
                     break
                 except BitrixAPIError as exc:
                     last_exc = exc
-                    logger.info(
+                    logger.warning(
                         "elapseditem.add failed task=%s bitrix=%s user=%s: %s",
                         task.id,
                         bitrix_id,
@@ -1620,6 +1695,13 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
             if elapsed_id:
                 entry.bitrix_elapsed_id = elapsed_id
                 entry.save(update_fields=["bitrix_elapsed_id", "updated_at"])
+            else:
+                logger.warning(
+                    "elapseditem.add returned no id task=%s bitrix=%s result=%r",
+                    task.id,
+                    bitrix_id,
+                    result,
+                )
             return {
                 "ok": True,
                 "seconds": seconds,
@@ -1629,6 +1711,7 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
     except TimeEntry.DoesNotExist:
         return {"ok": False, "reason": "missing"}
     except BitrixAPIError as exc:
+        logger.warning("sync_timer_to_bitrix entry=%s: %s", entry_id, exc)
         try:
             raise self.retry(exc=exc)
         except self.MaxRetriesExceededError:

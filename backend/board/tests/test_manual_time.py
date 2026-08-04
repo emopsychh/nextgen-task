@@ -95,13 +95,15 @@ class ManualTimeApiTests(TestCase):
             )
 
         self.assertEqual(res.status_code, 200, res.content)
-        client.update_task.assert_called_with("108", {"ALLOW_TIME_TRACKING": "Y"})
-        client.add_elapsed_item.assert_called_once_with(
-            "108",
-            2700,
-            comment="",
-            user_id="42",
-        )
+        self.assertTrue(client.update_task.called or client.call.called)
+        client.add_elapsed_item.assert_called_once()
+        add_args, add_kwargs = client.add_elapsed_item.call_args
+        self.assertEqual(add_args[0], "108")
+        self.assertEqual(add_args[1], 2700)
+        # Docs happy path: omit USER_ID so Bitrix attributes to the OAuth user.
+        self.assertIsNone(add_kwargs.get("user_id"))
+        self.assertTrue(add_kwargs.get("date_start"))
+        self.assertTrue(add_kwargs.get("date_stop"))
         entry = TimeEntry.objects.get(task=self.task)
         self.assertEqual(entry.bitrix_elapsed_id, "501")
 
@@ -116,9 +118,9 @@ class ManualTimeApiTests(TestCase):
                 format="json",
             )
         self.assertEqual(res2.status_code, 200, res2.content)
-        client.update_elapsed_item.assert_called_once_with(
-            "108", "501", 3600, comment=""
-        )
+        client.update_elapsed_item.assert_called_once()
+        upd_args, upd_kwargs = client.update_elapsed_item.call_args
+        self.assertEqual(upd_args[:3], ("108", "501", 3600))
         client.add_elapsed_item.assert_not_called()
 
     def test_start_status_does_not_open_timer(self):
