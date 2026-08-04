@@ -76,10 +76,9 @@ def _resolve_creator_id(
     """
     Creator must be a user of the target (agency) Bitrix portal.
 
-    Critical: CREATED_BY must stay the OAuth/app user (or same-portal author).
-    Pinning CREATED_BY to BITRIX_CLIENT_TASK_AUTHOR_ID while calling the API as
-    another user makes Bitrix reject later update/start/complete
-    («Нет доступа…» / «Действие над задачей не разрешено»).
+    Same-portal author may be set as CREATED_BY for the Bitrix card, but the
+    OAuth/app user must still be a participant (see _attach_oauth_participant) —
+    otherwise tasks.task.get returns [] for the token after create.
     """
     if (
         task.created_by_id
@@ -93,6 +92,39 @@ def _resolve_creator_id(
     if uid:
         return uid
     return responsible_id
+
+
+def _attach_oauth_participant(
+    fields: dict,
+    oauth_uid: str,
+    *,
+    responsible_id: str = "",
+    creator_id: str = "",
+) -> None:
+    """Keep the app token user on the task so later get/start/complete work.
+
+    If CREATED_BY and RESPONSIBLE_ID are both other employees, Bitrix often
+    hides the task from the creating application user (empty tasks.task.get).
+    """
+    if not oauth_uid:
+        return
+    owners = {str(responsible_id or ""), str(creator_id or "")}
+    if oauth_uid in owners:
+        return
+    fields["ACCOMPLICES"] = [oauth_uid]
+    fields["AUDITORS"] = [oauth_uid]
+
+
+def _task_invisible_hint(client: BitrixClient, bitrix_task_id: str, exc: BaseException) -> str:
+    if "недоступна токену" not in str(exc).lower() and "пустой" not in str(exc).lower():
+        return str(exc)
+    uid = _bitrix_user_id(client.get_current_user())
+    return (
+        f"задача {bitrix_task_id} не видна токену приложения "
+        f"(Bitrix user id={uid or '?'}). Добавьте этого пользователя "
+        f"соисполнителем или наблюдателем в карточке Bitrix, "
+        f"либо создайте задачу заново из приложения после обновления"
+    )
 
 
 def _bitrix_access_denied(exc: BaseException) -> bool:
@@ -585,9 +617,11 @@ def _sync_one_portal(
         try:
             apply_bitrix_status(client, existing_id, task.status)
         except BitrixAPIError as exc:
-            raise BitrixAPIError(f"не удалось сменить статус в Bitrix: {exc}") from exc
+            hint = _task_invisible_hint(client, existing_id, exc)
+            raise BitrixAPIError(f"не удалось сменить статус в Bitrix: {hint}") from exc
         return existing_id
 
+    oauth_uid = _bitrix_user_id(client.get_current_user())
     fields = _task_fields(
         task,
         responsible_id=responsible_id,
@@ -598,17 +632,20 @@ def _sync_one_portal(
         crm_bindings=crm_bindings,
     )
     fields["TITLE"] = title
-    # Keep the OAuth user among participants so later syncs keep edit rights
-    # even if RESPONSIBLE_ID is a different employee.
-    if creator_id and responsible_id and creator_id != responsible_id:
-        fields["ACCOMPLICES"] = [creator_id]
+    _attach_oauth_participant(
+        fields,
+        oauth_uid,
+        responsible_id=responsible_id or "",
+        creator_id=creator_id or "",
+    )
     result = client.create_task(fields)
     bitrix_id = _extract_bitrix_id(result)
     if bitrix_id and task.status != "todo":
         try:
             apply_bitrix_status(client, bitrix_id, task.status)
         except BitrixAPIError as exc:
-            raise BitrixAPIError(f"задача создана, но статус не применён: {exc}") from exc
+            hint = _task_invisible_hint(client, bitrix_id, exc)
+            raise BitrixAPIError(f"задача создана, но статус не применён: {hint}") from exc
     return bitrix_id
 
 
