@@ -101,19 +101,47 @@ def _bitrix_access_denied(exc: BaseException) -> bool:
         marker in text
         for marker in (
             "не разрешено",
+            "не доступно",
+            "недоступно",
             "нет доступа",
+            "действие не",
             "access denied",
             "access_denied",
             "permission",
+            "forbidden",
         )
     )
+
+
+def _claim_bitrix_task_for_oauth(client: BitrixClient, bitrix_task_id: str) -> str:
+    """Make the OAuth app user responsible/accomplice so status actions work."""
+    uid = _bitrix_user_id(client.get_current_user())
+    if not uid:
+        return ""
+    try:
+        client.update_task(
+            bitrix_task_id,
+            {"RESPONSIBLE_ID": uid, "ACCOMPLICES": [uid]},
+        )
+    except BitrixAPIError:
+        try:
+            client.update_task(bitrix_task_id, {"ACCOMPLICES": [uid]})
+        except BitrixAPIError as exc:
+            logger.info(
+                "claim task %s for oauth %s failed: %s", bitrix_task_id, uid, exc
+            )
+    return uid
 
 
 def _set_bitrix_status_field(
     client: BitrixClient, bitrix_task_id: str, status_code: int
 ) -> None:
     """Fallback when start/complete are forbidden for the OAuth user."""
-    client.update_task(bitrix_task_id, {"STATUS": status_code})
+    try:
+        client.update_task(bitrix_task_id, {"STATUS": status_code})
+    except BitrixAPIError:
+        _claim_bitrix_task_for_oauth(client, bitrix_task_id)
+        client.update_task(bitrix_task_id, {"STATUS": status_code})
 
 
 def _agency_portal_for_client(client_portal):
@@ -260,14 +288,18 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
         try:
             client.complete_task(bitrix_task_id)
         except BitrixAPIError as exc:
-            if not _bitrix_access_denied(exc):
-                raise
             logger.info(
-                "complete forbidden for %s (%s) — STATUS field fallback",
+                "complete failed for %s (%s) — claim+STATUS fallback",
                 bitrix_task_id,
                 exc,
             )
-            _set_bitrix_status_field(client, bitrix_task_id, BITRIX_STATUS_COMPLETED)
+            _claim_bitrix_task_for_oauth(client, bitrix_task_id)
+            try:
+                client.complete_task(bitrix_task_id)
+            except BitrixAPIError:
+                _set_bitrix_status_field(
+                    client, bitrix_task_id, BITRIX_STATUS_COMPLETED
+                )
 
         after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
         if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
@@ -278,17 +310,18 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
                 pass
             try:
                 client.complete_task(bitrix_task_id)
-            except BitrixAPIError as exc:
-                if _bitrix_access_denied(exc):
+            except BitrixAPIError:
+                _claim_bitrix_task_for_oauth(client, bitrix_task_id)
+                try:
                     _set_bitrix_status_field(
                         client, bitrix_task_id, BITRIX_STATUS_COMPLETED
                     )
-                else:
-                    raise
+                except BitrixAPIError:
+                    pass
             after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
         if after not in (BITRIX_STATUS_COMPLETED, BITRIX_STATUS_SUPPOSEDLY_COMPLETED):
-            # Last resort for OAuth users who are not the responsible.
             try:
+                _claim_bitrix_task_for_oauth(client, bitrix_task_id)
                 _set_bitrix_status_field(client, bitrix_task_id, BITRIX_STATUS_COMPLETED)
                 after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
             except BitrixAPIError:
@@ -308,26 +341,29 @@ def apply_bitrix_status(client: BitrixClient, bitrix_task_id: str, target_local:
     try:
         client.start_task(bitrix_task_id)
     except BitrixAPIError as exc:
-        if not _bitrix_access_denied(exc):
-            raise
         logger.info(
-            "start forbidden for %s (%s) — STATUS field fallback",
+            "start failed for %s (%s) — claim+STATUS fallback",
             bitrix_task_id,
             exc,
         )
-        _set_bitrix_status_field(client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS)
+        _claim_bitrix_task_for_oauth(client, bitrix_task_id)
+        try:
+            client.start_task(bitrix_task_id)
+        except BitrixAPIError:
+            _set_bitrix_status_field(client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS)
 
     after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
     if after != BITRIX_STATUS_IN_PROGRESS:
         try:
             client.start_task(bitrix_task_id)
-        except BitrixAPIError as exc:
-            if _bitrix_access_denied(exc):
+        except BitrixAPIError:
+            _claim_bitrix_task_for_oauth(client, bitrix_task_id)
+            try:
                 _set_bitrix_status_field(
                     client, bitrix_task_id, BITRIX_STATUS_IN_PROGRESS
                 )
-            else:
-                raise
+            except BitrixAPIError:
+                pass
         after = bitrix_status_code(client.get_task(bitrix_task_id) or {})
     if after != BITRIX_STATUS_IN_PROGRESS:
         raise BitrixAPIError(
@@ -635,6 +671,14 @@ def sync_task_to_bitrix(self, task_id: int):
 
     # Ids are committed at this point; a retry will UPDATE, never re-create.
     if outcome.get("errors"):
+        # Direct calls (manage.py shell) must not explode on Celery Retry.
+        called_directly = bool(getattr(self.request, "called_directly", False))
+        if called_directly:
+            return {
+                "ok": False,
+                "error": outcome["error"],
+                "partial_ids": outcome.get("partial_ids"),
+            }
         try:
             raise self.retry(exc=BitrixAPIError(outcome["error"]))
         except self.MaxRetriesExceededError:

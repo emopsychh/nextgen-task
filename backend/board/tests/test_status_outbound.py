@@ -101,8 +101,6 @@ class OutboundStatusPushTests(TestCase):
 
     @patch("board.realtime.publish_task_event", lambda *a, **k: None)
     def test_complete_errors_if_bitrix_stays_in_progress(self):
-        from portals.bitrix import BitrixAPIError
-
         task = make_task(
             self.project,
             created_by=self.user,
@@ -113,8 +111,9 @@ class OutboundStatusPushTests(TestCase):
         # Stay at status 3 forever → must not mark SYNCED.
         client = _mock_client(bitrix_status="3", after_complete=None)
         with patch.object(board_tasks, "BitrixClient", return_value=client):
-            with self.assertRaises(BitrixAPIError):
-                board_tasks.sync_task_to_bitrix(task.id)
+            res = board_tasks.sync_task_to_bitrix(task.id)
+        self.assertFalse(res.get("ok"))
+        self.assertIn("не завершилась", res.get("error") or "")
         task.refresh_from_db()
         self.assertEqual(task.sync_status, Task.SyncStatus.ERROR)
         self.assertIn("не завершилась", task.sync_error)
