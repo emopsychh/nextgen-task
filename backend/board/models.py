@@ -181,6 +181,7 @@ class WorkReport(models.Model):
         DISPUTED = "disputed", "Disputed"
         ACCEPTED = "accepted", "Accepted"
         PAID = "paid", "Paid"
+        DISMISSED = "dismissed", "Dismissed"
 
     ACTIVE_STATUSES = (Status.DRAFT, Status.PENDING_CLIENT, Status.DISPUTED)
 
@@ -237,6 +238,7 @@ class WorkReportEvent(models.Model):
         DISPUTED = "disputed", "Disputed"
         PAID = "paid", "Paid"
         REOPENED = "reopened", "Reopened"
+        DISMISSED = "dismissed", "Dismissed"
 
     report = models.ForeignKey(WorkReport, on_delete=models.CASCADE, related_name="events")
     actor = models.ForeignKey(

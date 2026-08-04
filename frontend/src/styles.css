@@ -5516,6 +5516,11 @@ a.task-card.is-done:hover,
   background: #e2e2e8;
 }
 
+.report-status-pill.status-dismissed {
+  background: #ececec;
+  color: var(--ink-muted);
+}
+
 .report-detail-head {
   display: flex;
   justify-content: space-between;

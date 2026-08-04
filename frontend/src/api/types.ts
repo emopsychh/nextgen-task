@@ -152,7 +152,8 @@ export type WorkReportStatus =
   | "pending_client"
   | "disputed"
   | "accepted"
-  | "paid";
+  | "paid"
+  | "dismissed";
 
 export type WorkReportTaskRow = {
   id: number;
@@ -172,7 +173,7 @@ export type WorkReportProjectBlock = {
 
 export type WorkReportEvent = {
   id: number;
-  kind: "created" | "sent" | "accepted" | "disputed" | "paid" | "reopened";
+  kind: "created" | "sent" | "accepted" | "disputed" | "paid" | "reopened" | "dismissed";
   actor: number | null;
   actor_name: string;
   payload: Record<string, unknown>;

@@ -19,11 +19,22 @@ BUCKET_STATUSES = {
     "current": (
         WorkReport.Status.DRAFT,
         WorkReport.Status.DISPUTED,
-        WorkReport.Status.ACCEPTED,
     ),
     "review": (WorkReport.Status.PENDING_CLIENT,),
-    "paid": (WorkReport.Status.PAID,),
+    # Agreed / archived happy-path (legacy `paid` included).
+    "accepted": (
+        WorkReport.Status.ACCEPTED,
+        WorkReport.Status.PAID,
+    ),
 }
+
+# Old hub tab id — keep accepting ?bucket=paid
+BUCKET_ALIASES = {"paid": "accepted"}
+
+
+def normalize_report_bucket(bucket: str | None) -> str:
+    raw = (bucket or "").strip()
+    return BUCKET_ALIASES.get(raw, raw)
 
 
 def portal_has_active_report(portal_id: int, *, exclude_id: int | None = None) -> bool:
@@ -373,6 +384,26 @@ def reopen_to_draft(report: WorkReport, actor: BitrixUser | None) -> WorkReport:
     report.save(update_fields=["status", "updated_at"])
     append_event(report, WorkReportEvent.Kind.REOPENED, actor)
     publish_report_event(report, "report_reopened")
+    return refresh_report(report)
+
+
+@transaction.atomic
+def dismiss_dispute(report: WorkReport, actor: BitrixUser | None) -> WorkReport:
+    """
+    Agency closes a «Связь с менеджером» thread without reopening the report.
+    Frees the active-report slot; history stays in «Все».
+    """
+    if report.status != WorkReport.Status.DISPUTED:
+        raise ValidationError(
+            {
+                "detail": "Снять с контроля можно только отчёт "
+                "в статусе «Связь с менеджером»."
+            }
+        )
+    report.status = WorkReport.Status.DISMISSED
+    report.save(update_fields=["status", "updated_at"])
+    append_event(report, WorkReportEvent.Kind.DISMISSED, actor)
+    publish_report_event(report, "report_dismissed")
     return refresh_report(report)
 
 

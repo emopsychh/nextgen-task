@@ -792,7 +792,7 @@ class WorkReportViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         from django.db.models import Count, Q
 
-        from board.reports import BUCKET_STATUSES
+        from board.reports import BUCKET_STATUSES, normalize_report_bucket
 
         ids = accessible_portal_ids(self.request.user)
         qs = (
@@ -816,7 +816,7 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         status = self.request.query_params.get("status")
         if status:
             qs = qs.filter(status=status)
-        bucket = self.request.query_params.get("bucket")
+        bucket = normalize_report_bucket(self.request.query_params.get("bucket"))
         if bucket in BUCKET_STATUSES:
             qs = qs.filter(status__in=BUCKET_STATUSES[bucket])
         active = self.request.query_params.get("active")
@@ -933,16 +933,19 @@ class WorkReportViewSet(viewsets.ModelViewSet):
             all=Count("id"),
             current=Count("id", filter=Q(status__in=BUCKET_STATUSES["current"])),
             review=Count("id", filter=Q(status__in=BUCKET_STATUSES["review"])),
-            paid=Count("id", filter=Q(status__in=BUCKET_STATUSES["paid"])),
+            accepted=Count("id", filter=Q(status__in=BUCKET_STATUSES["accepted"])),
             draft=Count("id", filter=Q(status=WR.Status.DRAFT)),
             disputed=Count("id", filter=Q(status=WR.Status.DISPUTED)),
         )
+        accepted_count = agg["accepted"] or 0
         return Response(
             {
                 "all": agg["all"] or 0,
                 "current": agg["current"] or 0,
                 "review": agg["review"] or 0,
-                "paid": agg["paid"] or 0,
+                "accepted": accepted_count,
+                # Legacy key for older clients
+                "paid": accepted_count,
                 "draft": agg["draft"] or 0,
                 "disputed": agg["disputed"] or 0,
             }
@@ -1009,6 +1012,18 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         if not portal or not can_access_client_portal(request.user, portal):
             raise PermissionDenied("No access to this portal")
         report = reopen_to_draft(report, self._actor())
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="dismiss")
+    def dismiss(self, request, pk=None):
+        from board.reports import dismiss_dispute, require_agency
+
+        require_agency(request.user)
+        report = self.get_object()
+        portal = self._report_portal(report)
+        if not portal or not can_access_client_portal(request.user, portal):
+            raise PermissionDenied("No access to this portal")
+        report = dismiss_dispute(report, self._actor())
         return Response(WorkReportSerializer(report, context={"request": request}).data)
 
     @action(detail=True, methods=["post"], url_path="mark_paid")

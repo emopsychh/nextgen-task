@@ -33,7 +33,7 @@ const EMPTY_REPORT_COUNTS: Record<ReportBucket, number> = {
   all: 0,
   current: 0,
   review: 0,
-  paid: 0,
+  accepted: 0,
 };
 const CACHE_REPORT_COUNTS = "report-counts";
 
@@ -86,12 +86,13 @@ export function ProjectReports() {
         : null) || EMPTY_REPORT_COUNTS
   );
 
-  const applyCounts = useCallback((next: Record<ReportBucket, number>) => {
-    const normalized = {
+  const applyCounts = useCallback((next: Record<string, number>) => {
+    const accepted = next.accepted ?? next.paid ?? 0;
+    const normalized: Record<ReportBucket, number> = {
       all: next.all ?? 0,
       current: next.current ?? 0,
       review: next.review ?? 0,
-      paid: next.paid ?? 0,
+      accepted,
     };
     setCounts(normalized);
     if (portalId) {

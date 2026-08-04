@@ -171,6 +171,57 @@ class WorkReportApiTests(TestCase):
         self.assertEqual(len(agency_view.data["projects_detail"][0]["tasks"]), 1)
         self.assertEqual(agency_view.data["projects_detail"][0]["tasks"][0]["id"], self.task.id)
 
+    def test_agency_dismiss_disputed_frees_active_slot(self):
+        create = self.agency_client.post(
+            "/api/reports/",
+            {"portal": self.client_portal.id, "project_ids": [self.project.id]},
+            format="json",
+        )
+        report_id = create.data["id"]
+        self.agency_client.post(f"/api/reports/{report_id}/send/", {}, format="json")
+        self.client_client.post(
+            f"/api/reports/{report_id}/dispute/",
+            {"client_comment": "Вопрос", "task_ids": [self.task.id]},
+            format="json",
+        )
+
+        blocked = self.agency_client.post(
+            "/api/reports/",
+            {"portal": self.client_portal.id, "project_ids": [self.project.id]},
+            format="json",
+        )
+        self.assertEqual(blocked.status_code, 400, blocked.content)
+
+        dismissed = self.agency_client.post(
+            f"/api/reports/{report_id}/dismiss/", {}, format="json"
+        )
+        self.assertEqual(dismissed.status_code, 200, dismissed.content)
+        self.assertEqual(dismissed.data["status"], "dismissed")
+        self.assertTrue(
+            WorkReportEvent.objects.filter(
+                report_id=report_id, kind=WorkReportEvent.Kind.DISMISSED
+            ).exists()
+        )
+
+        counts = self.agency_client.get(
+            f"/api/reports/counts/?portal={self.client_portal.id}"
+        )
+        self.assertEqual(counts.status_code, 200)
+        self.assertEqual(counts.data["disputed"], 0)
+        self.assertEqual(counts.data["current"], 0)
+
+        create2 = self.agency_client.post(
+            "/api/reports/",
+            {"portal": self.client_portal.id, "project_ids": [self.project.id]},
+            format="json",
+        )
+        self.assertEqual(create2.status_code, 201, create2.content)
+
+        client_denied = self.client_client.post(
+            f"/api/reports/{report_id}/dismiss/", {}, format="json"
+        )
+        self.assertEqual(client_denied.status_code, 403)
+
     def test_task_outcome_on_complete_patch(self):
         from unittest.mock import patch
 

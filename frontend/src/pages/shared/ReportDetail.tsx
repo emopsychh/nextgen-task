@@ -259,33 +259,38 @@ export function ReportDetail() {
               </button>
             ) : null}
             {isAgency && detail.status === "disputed" ? (
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={busy}
-                onClick={() =>
-                  void runAction(
-                    "reopen",
-                    undefined,
-                    "Снова на рассмотрении",
-                    "Можно отправить повторно"
-                  )
-                }
-              >
-                Вернуть на рассмотрение
-              </button>
-            ) : null}
-            {isAgency && detail.status === "accepted" ? (
-              <button
-                type="button"
-                className="btn btn-accent"
-                disabled={busy}
-                onClick={() =>
-                  void runAction("mark_paid", undefined, "Оплачен", "Отчёт в архиве")
-                }
-              >
-                Отметить оплаченным
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={busy}
+                  onClick={() =>
+                    void runAction(
+                      "reopen",
+                      undefined,
+                      "Снова на рассмотрении",
+                      "Можно отправить повторно"
+                    )
+                  }
+                >
+                  Вернуть на рассмотрение
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={busy}
+                  onClick={() =>
+                    void runAction(
+                      "dismiss",
+                      undefined,
+                      "Снято с контроля",
+                      "Можно создать новый отчёт"
+                    )
+                  }
+                >
+                  Снять с контроля
+                </button>
+              </>
             ) : null}
             {!isAgency && detail.status === "pending_client" ? (
               <>

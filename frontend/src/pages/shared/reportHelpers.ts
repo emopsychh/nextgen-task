@@ -1,13 +1,14 @@
 import type { WorkReport, WorkReportStatus } from "../../api/types";
 
-export type ReportBucket = "all" | "current" | "review" | "paid";
+export type ReportBucket = "all" | "current" | "review" | "accepted";
 
 export const STATUS_LABEL_RU: Record<WorkReportStatus, string> = {
   draft: "На рассмотрении руководителя",
   pending_client: "Требует рассмотрения",
   disputed: "Связь с менеджером",
   accepted: "Согласован",
-  paid: "Оплачен",
+  paid: "Согласован",
+  dismissed: "Снято с контроля",
 };
 
 export const EVENT_LABEL: Record<string, string> = {
@@ -15,22 +16,23 @@ export const EVENT_LABEL: Record<string, string> = {
   sent: "Отправлен клиенту",
   accepted: "Клиент согласился",
   disputed: "Клиент связался с менеджером",
-  paid: "Отмечен оплаченным",
+  paid: "Отмечен согласованным",
   reopened: "Вернут на рассмотрение руководителя",
+  dismissed: "Снято с контроля",
 };
 
 export const REPORT_BUCKETS: { id: ReportBucket; label: string }[] = [
   { id: "all", label: "Все" },
   { id: "current", label: "Актуальные" },
   { id: "review", label: "У клиента" },
-  { id: "paid", label: "Оплаченные" },
+  { id: "accepted", label: "Согласованные" },
 ];
 
 /** Mirrors backend board.reports.BUCKET_STATUSES for client-side badge fallback. */
 export const BUCKET_STATUSES: Record<Exclude<ReportBucket, "all">, WorkReportStatus[]> = {
-  current: ["draft", "disputed", "accepted"],
+  current: ["draft", "disputed"],
   review: ["pending_client"],
-  paid: ["paid"],
+  accepted: ["accepted", "paid"],
 };
 
 export function countsFromReports(
@@ -40,12 +42,12 @@ export function countsFromReports(
     all: reports.length,
     current: 0,
     review: 0,
-    paid: 0,
+    accepted: 0,
   };
   for (const r of reports) {
     if (BUCKET_STATUSES.current.includes(r.status)) next.current += 1;
     else if (BUCKET_STATUSES.review.includes(r.status)) next.review += 1;
-    else if (BUCKET_STATUSES.paid.includes(r.status)) next.paid += 1;
+    else if (BUCKET_STATUSES.accepted.includes(r.status)) next.accepted += 1;
   }
   return next;
 }
