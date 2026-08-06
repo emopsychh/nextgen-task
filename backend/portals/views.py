@@ -394,16 +394,25 @@ class PortalViewSet(viewsets.ModelViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         portal = self.get_object()
-        # Only own portal name; role is assigned from AGENCY_* env, not UI
-        if portal.id != request.user.portal.id and not request.user.is_agency:
+        user = request.user
+        # Own portal: any authenticated portal user may rename themselves.
+        # Agency may also rename a linked client (display label in agency UI).
+        if portal.id == user.portal.id:
+            pass
+        elif user.is_agency and PortalLink.objects.filter(
+            agency_portal=user.portal,
+            client_portal=portal,
+        ).exists():
+            pass
+        else:
             return Response({"detail": "Forbidden"}, status=403)
         allowed = {}
         if "name" in request.data:
-            allowed["name"] = request.data["name"]
+            allowed["name"] = str(request.data.get("name") or "").strip()[:255]
         for k, v in allowed.items():
             setattr(portal, k, v)
         if allowed:
-            portal.save()
+            portal.save(update_fields=[*allowed.keys(), "updated_at"])
         return Response(PortalSerializer(portal).data)
 
 

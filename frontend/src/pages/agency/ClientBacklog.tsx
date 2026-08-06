@@ -144,7 +144,7 @@ export function ClientBacklog() {
     async (signal?: AbortSignal) => {
       if (!token || !portalId) return;
       const data = await api<BacklogItem[]>(
-        `/api/backlog-items/?portal=&status=active`,
+        `/api/backlog-items/?portal=${portalId}&status=active`,
         { signal },
         token
       );

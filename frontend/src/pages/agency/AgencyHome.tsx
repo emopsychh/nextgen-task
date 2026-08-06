@@ -7,6 +7,7 @@ import { DealHoursCard } from "../../components/DealHoursCard";
 import { DealPickModal, type DealCandidate } from "../../components/DealPickModal";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
+import { setPortalLabel } from "../../lib/portalLabelCache";
 import { hueFromId, initialsFromLabel } from "../../lib/portalUi";
 import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
 
@@ -56,6 +57,9 @@ export function AgencyHome() {
   const [enteringPortalId, setEnteringPortalId] = useState<number | null>(null);
   const [pendingUnlink, setPendingUnlink] = useState<PendingUnlink | null>(null);
   const [unlinking, setUnlinking] = useState(false);
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renaming, setRenaming] = useState(false);
   const [dealBusyId, setDealBusyId] = useState<number | null>(null);
   const [dealPicker, setDealPicker] = useState<DealPickerState | null>(null);
   const [dealCandidates, setDealCandidates] = useState<DealCandidate[]>([]);
@@ -272,6 +276,55 @@ export function AgencyHome() {
     }
   }
 
+  function startRename(portal: Portal) {
+    setError(null);
+    setRenamingId(portal.id);
+    setRenameDraft((portal.name || portal.domain || "").trim());
+  }
+
+  function cancelRename() {
+    if (renaming) return;
+    setRenamingId(null);
+    setRenameDraft("");
+  }
+
+  async function saveRename() {
+    if (!token || renamingId == null) return;
+    const name = renameDraft.trim();
+    if (!name) {
+      setError("Укажите название клиента");
+      return;
+    }
+    setRenaming(true);
+    setError(null);
+    try {
+      const updated = await api<Portal>(
+        `/api/portals/${renamingId}/`,
+        { method: "PATCH", body: JSON.stringify({ name }) },
+        token
+      );
+      const label = (updated.name || name).trim();
+      setLinks((prev) => {
+        const next = prev.map((link) =>
+          link.client_portal.id === renamingId
+            ? { ...link, client_portal: { ...link.client_portal, name: label } }
+            : link
+        );
+        writePortalCache(CACHE_AGENCY_LINKS, agencyId, next);
+        return next;
+      });
+      setPortalLabel(renamingId, label);
+      window.dispatchEvent(new Event("clients-updated"));
+      setRenamingId(null);
+      setRenameDraft("");
+      toast.show("Название обновлено", "Клиент переименован");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось переименовать");
+    } finally {
+      setRenaming(false);
+    }
+  }
+
   async function openDealPicker(portal: Portal, currentDealId?: string | null) {
     if (!token) return;
     const portalName = portal.name || portal.domain;
@@ -453,26 +506,91 @@ export function AgencyHome() {
                   className={`linked-card${enteringPortalId === p.id ? " is-entering" : ""}${hasDeal ? " has-deal" : ""}`}
                 >
                   <header className="linked-card-top">
-                    <Link to={`/portals/${p.id}`} className="linked-card-main">
-                      <span
-                        className="linked-avatar"
-                        style={{ background: hueFromId(p.id) }}
-                      >
-                        {initials(p)}
-                      </span>
-                      <div className="linked-meta">
-                        <strong>{title}</strong>
-                        <span className="muted">{p.domain}</span>
+                    {renamingId === p.id ? (
+                      <div className="linked-card-main linked-card-rename">
+                        <span
+                          className="linked-avatar"
+                          style={{ background: hueFromId(p.id) }}
+                        >
+                          {initials(p)}
+                        </span>
+                        <div className="linked-meta">
+                          <input
+                            className="linked-rename-input"
+                            value={renameDraft}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                void saveRename();
+                              }
+                              if (e.key === "Escape") cancelRename();
+                            }}
+                            disabled={renaming}
+                            autoFocus
+                            maxLength={255}
+                            aria-label="Название клиента"
+                          />
+                          <span className="muted">{p.domain}</span>
+                        </div>
                       </div>
-                    </Link>
-                    <button
-                      type="button"
-                      className="linked-unlink"
-                      title="Отключить клиента"
-                      onClick={() => setPendingUnlink({ linkId: link.id, name: title })}
-                    >
-                      Отключить
-                    </button>
+                    ) : (
+                      <Link to={`/portals/${p.id}`} className="linked-card-main">
+                        <span
+                          className="linked-avatar"
+                          style={{ background: hueFromId(p.id) }}
+                        >
+                          {initials(p)}
+                        </span>
+                        <div className="linked-meta">
+                          <strong>{title}</strong>
+                          <span className="muted">{p.domain}</span>
+                        </div>
+                      </Link>
+                    )}
+                    <div className="linked-card-actions">
+                      {renamingId === p.id ? (
+                        <>
+                          <button
+                            type="button"
+                            className="linked-action linked-action-save"
+                            disabled={renaming || !renameDraft.trim()}
+                            onClick={() => void saveRename()}
+                          >
+                            {renaming ? "Сохраняем…" : "Сохранить"}
+                          </button>
+                          <button
+                            type="button"
+                            className="linked-action"
+                            disabled={renaming}
+                            onClick={cancelRename}
+                          >
+                            Отмена
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="linked-action"
+                            title="Переименовать клиента"
+                            onClick={() => startRename(p)}
+                          >
+                            Переименовать
+                          </button>
+                          <button
+                            type="button"
+                            className="linked-unlink"
+                            title="Отключить клиента"
+                            onClick={() =>
+                              setPendingUnlink({ linkId: link.id, name: title })
+                            }
+                          >
+                            Отключить
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </header>
 
                   <div className="deal-bind">

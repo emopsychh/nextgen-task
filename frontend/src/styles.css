@@ -1988,6 +1988,16 @@ a {
   white-space: nowrap;
 }
 
+.linked-card-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.linked-action,
 .linked-unlink {
   appearance: none;
   border: none;
@@ -1998,14 +2008,55 @@ a {
   padding: 6px 8px;
   border-radius: 10px;
   cursor: pointer;
-  flex: 0 0 auto;
-  margin-top: 2px;
   transition: color 0.15s ease, background 0.15s ease;
+}
+
+.linked-action:hover:not(:disabled) {
+  color: var(--ink);
+  background: #f0f4f3;
+}
+
+.linked-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.linked-action-save {
+  color: var(--accent-ink);
+}
+
+.linked-action-save:hover:not(:disabled) {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
 }
 
 .linked-unlink:hover {
   color: var(--danger);
   background: #fdf2f2;
+}
+
+.linked-card-rename {
+  pointer-events: auto;
+}
+
+.linked-rename-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-family: var(--display);
+  font-size: 1.02rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  background: #fff;
+  outline: none;
+}
+
+.linked-rename-input:focus {
+  border-color: #9bb8ae;
+  box-shadow: 0 0 0 3px rgba(31, 111, 91, 0.12);
 }
 
 .deal-bind {
