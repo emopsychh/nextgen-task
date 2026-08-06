@@ -7,6 +7,7 @@ from .views import (
     BitrixEventView,
     BitrixInstallView,
     DevAuthView,
+    MePreferencesView,
     MeView,
     PortalDealBindingViewSet,
     PortalLinkViewSet,
@@ -27,5 +28,6 @@ urlpatterns = [
     path("auth/dev/", DevAuthView.as_view(), name="dev-auth"),
     path("auth/refresh/", TokenRefreshView.as_view(), name="token-refresh"),
     path("me/", MeView.as_view(), name="me"),
+    path("me/preferences/", MePreferencesView.as_view(), name="me-preferences"),
     path("", include(router.urls)),
 ]

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   api,
   unwrapList,
+  type AgencyUserPreferences,
   type Portal,
   type Project,
   type Task,
@@ -20,8 +21,36 @@ type LinkRow = {
   client_portal: Portal;
 };
 
+type ContextMenuState = {
+  x: number;
+  y: number;
+  portalId: number;
+  label: string;
+  isFavorite: boolean;
+};
+
 function initials(portal: Portal): string {
   return initialsFromLabel(portal.name || portal.domain || "?");
+}
+
+function collapseStorageKey(agencyId: number, userId: number): string {
+  return `nextgen_rail_collapsed_${agencyId}_${userId}`;
+}
+
+function readCollapsed(agencyId: number, userId: number): boolean {
+  try {
+    return localStorage.getItem(collapseStorageKey(agencyId, userId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeCollapsed(agencyId: number, userId: number, value: boolean): void {
+  try {
+    localStorage.setItem(collapseStorageKey(agencyId, userId), value ? "1" : "0");
+  } catch {
+    // ignore
+  }
 }
 
 function LogoutIcon() {
@@ -75,9 +104,49 @@ function DashboardIcon() {
   );
 }
 
+function StarIcon({ filled = false }: { filled?: boolean }) {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden>
+      <path
+        d="M12 3.5l2.6 5.3 5.9.9-4.2 4.1 1 5.8L12 16.8 6.7 19.6l1-5.8L3.5 9.7l5.9-.9L12 3.5z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function CollapseIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+      {collapsed ? (
+        <path
+          d="M6 9l6 6 6-6"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : (
+        <path
+          d="M6 15l6-6 6 6"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
+  );
+}
+
 export function ClientRail() {
-  const { token, logout, portal } = useAuth();
+  const { token, logout, portal, user } = useAuth();
   const location = useLocation();
+  const agencyId = portal?.id || 0;
+  const userId = user?.id || 0;
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
   const [openTickets, setOpenTickets] = useState(
     () =>
@@ -100,6 +169,13 @@ export function ClientRail() {
       readPortalCache<LinkRow[]>(CACHE_AGENCY_LINKS, portal?.id || 0) || []
   );
   const [enteringPortalId, setEnteringPortalId] = useState<number | null>(null);
+  const [favoriteIds, setFavoriteIds] = useState<number[]>([]);
+  const [collapsed, setCollapsed] = useState(() =>
+    agencyId && userId ? readCollapsed(agencyId, userId) : false
+  );
+  const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const longPressTimer = useRef<number | null>(null);
+  const longPressFired = useRef(false);
 
   useEffect(() => {
     setLinks(
@@ -111,7 +187,10 @@ export function ClientRail() {
         portal?.id || 0
       ) || 0
     );
-  }, [portal?.id]);
+    if (agencyId && userId) {
+      setCollapsed(readCollapsed(agencyId, userId));
+    }
+  }, [portal?.id, agencyId, userId]);
 
   useEffect(() => {
     if (!token || routePortalId) {
@@ -193,6 +272,34 @@ export function ClientRail() {
 
   useEffect(() => {
     if (!token) {
+      setFavoriteIds([]);
+      return;
+    }
+    let cancelled = false;
+    async function loadPrefs() {
+      try {
+        const data = await api<AgencyUserPreferences>(
+          "/api/me/preferences/",
+          {},
+          token!
+        );
+        if (!cancelled) {
+          setFavoriteIds(
+            Array.isArray(data.favorite_client_ids) ? data.favorite_client_ids : []
+          );
+        }
+      } catch {
+        // Keep empty favorites on failure.
+      }
+    }
+    void loadPrefs();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, userId]);
+
+  useEffect(() => {
+    if (!token) {
       setOpenTickets(0);
       return;
     }
@@ -228,27 +335,193 @@ export function ClientRail() {
     };
   }, [token, location.pathname, portal?.id]);
 
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  const favoriteSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
+
+  const sortedLinks = useMemo(() => {
+    const fav: LinkRow[] = [];
+    const rest: LinkRow[] = [];
+    for (const link of links) {
+      if (favoriteSet.has(link.client_portal.id)) fav.push(link);
+      else rest.push(link);
+    }
+    // Keep favorites in the order stored in preferences when possible.
+    fav.sort((a, b) => {
+      const ai = favoriteIds.indexOf(a.client_portal.id);
+      const bi = favoriteIds.indexOf(b.client_portal.id);
+      return ai - bi;
+    });
+    return [...fav, ...rest];
+  }, [links, favoriteSet, favoriteIds]);
+
+  const visibleLinks = useMemo(() => {
+    if (!collapsed) return sortedLinks;
+    return sortedLinks.filter((link) => {
+      const id = link.client_portal.id;
+      return favoriteSet.has(id) || id === activeId;
+    });
+  }, [sortedLinks, collapsed, favoriteSet, activeId]);
+
+  const hiddenCount = Math.max(0, sortedLinks.length - visibleLinks.length);
+
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      if (agencyId && userId) writeCollapsed(agencyId, userId, next);
+      return next;
+    });
+  }, [agencyId, userId]);
+
+  const persistFavorites = useCallback(
+    async (next: number[]) => {
+      setFavoriteIds(next);
+      if (!token) return;
+      try {
+        const data = await api<AgencyUserPreferences>(
+          "/api/me/preferences/",
+          {
+            method: "PUT",
+            body: JSON.stringify({ favorite_client_ids: next }),
+          },
+          token
+        );
+        setFavoriteIds(
+          Array.isArray(data.favorite_client_ids) ? data.favorite_client_ids : next
+        );
+      } catch {
+        // Keep optimistic local state; next load will reconcile.
+      }
+    },
+    [token]
+  );
+
+  const toggleFavorite = useCallback(
+    (portalId: number) => {
+      setMenu(null);
+      const isFav = favoriteSet.has(portalId);
+      const next = isFav
+        ? favoriteIds.filter((id) => id !== portalId)
+        : [...favoriteIds, portalId];
+      void persistFavorites(next);
+    },
+    [favoriteSet, favoriteIds, persistFavorites]
+  );
+
+  function openMenu(
+    e: { clientX: number; clientY: number; preventDefault: () => void },
+    portalRow: Portal
+  ) {
+    e.preventDefault();
+    const label = portalRow.name || portalRow.domain || `Клиент #${portalRow.id}`;
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      portalId: portalRow.id,
+      label,
+      isFavorite: favoriteSet.has(portalRow.id),
+    });
+  }
+
+  function clearLongPress() {
+    if (longPressTimer.current != null) {
+      window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }
+
   return (
     <aside className="client-rail" aria-label="Клиенты" data-tour="tour-client-rail">
       <div className="client-rail-list">
-        {links.map((link) => {
+        {visibleLinks.map((link) => {
           const p = link.client_portal;
           const active = clientNavActive && activeId === p.id;
           const entering = enteringPortalId === p.id;
+          const isFavorite = favoriteSet.has(p.id);
           return (
             <NavLink
               key={link.id}
               to={`/portals/${p.id}`}
-              className={`client-avatar${active ? " active" : ""}${entering ? " is-entering" : ""}`}
+              className={`client-avatar${active ? " active" : ""}${entering ? " is-entering" : ""}${isFavorite ? " is-favorite" : ""}`}
               title={p.name || p.domain}
               style={{ ["--avatar-bg" as string]: hueFromId(p.id) }}
               data-tour={links[0]?.id === link.id ? "tour-first-client" : undefined}
+              onContextMenu={(e) => openMenu(e, p)}
+              onPointerDown={(e) => {
+                if (e.pointerType === "touch" || e.pointerType === "pen") {
+                  longPressFired.current = false;
+                  clearLongPress();
+                  longPressTimer.current = window.setTimeout(() => {
+                    longPressFired.current = true;
+                    openMenu(
+                      {
+                        clientX: e.clientX,
+                        clientY: e.clientY,
+                        preventDefault: () => undefined,
+                      },
+                      p
+                    );
+                  }, 480);
+                }
+              }}
+              onPointerUp={clearLongPress}
+              onPointerLeave={clearLongPress}
+              onPointerCancel={clearLongPress}
+              onClick={(e) => {
+                if (longPressFired.current) {
+                  e.preventDefault();
+                  longPressFired.current = false;
+                }
+              }}
             >
               <span className="client-avatar-face">{initials(p)}</span>
+              {isFavorite ? (
+                <span className="client-favorite-mark" aria-label="Избранный">
+                  <StarIcon filled />
+                </span>
+              ) : null}
             </NavLink>
           );
         })}
-        {links.length > 0 && <div className="client-rail-sep" aria-hidden />}
+
+        {sortedLinks.length > 0 ? (
+          <button
+            type="button"
+            className={`client-avatar rail-collapse${collapsed ? " is-collapsed" : ""}`}
+            title={
+              collapsed
+                ? hiddenCount > 0
+                  ? `Развернуть (+${hiddenCount})`
+                  : "Развернуть"
+                : "Свернуть список"
+            }
+            aria-expanded={!collapsed}
+            onClick={toggleCollapsed}
+          >
+            <span className="client-avatar-face">
+              <CollapseIcon collapsed={collapsed} />
+            </span>
+          </button>
+        ) : null}
+
+        {visibleLinks.length > 0 || sortedLinks.length > 0 ? (
+          <div className="client-rail-sep" aria-hidden />
+        ) : null}
+
         <NavLink
           to="/"
           end
@@ -294,6 +567,28 @@ export function ClientRail() {
           <LogoutIcon />
         </span>
       </button>
+
+      {menu ? (
+        <div
+          className="client-rail-menu"
+          style={{ left: menu.x, top: menu.y }}
+          role="menu"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="client-rail-menu-label" title={menu.label}>
+            {menu.label}
+          </div>
+          <button
+            type="button"
+            className="client-rail-menu-item"
+            role="menuitem"
+            onClick={() => toggleFavorite(menu.portalId)}
+          >
+            <StarIcon filled={menu.isFavorite} />
+            {menu.isFavorite ? "Убрать из избранного" : "В избранное"}
+          </button>
+        </div>
+      ) : null}
     </aside>
   );
 }

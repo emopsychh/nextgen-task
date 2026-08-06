@@ -335,6 +335,99 @@ a {
   animation: rail-avatar-in 0.55s cubic-bezier(0.34, 1.45, 0.64, 1);
 }
 
+.client-favorite-mark {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  color: #e6a700;
+  box-shadow: 0 0 0 1.5px #fff, 0 1px 3px rgba(18, 20, 22, 0.18);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.client-avatar.rail-collapse {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.client-avatar.rail-collapse .client-avatar-face {
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px dashed rgba(18, 20, 22, 0.18);
+  font-size: 0;
+}
+
+.client-avatar.rail-collapse:hover .client-avatar-face {
+  color: var(--ink);
+  border-color: rgba(18, 20, 22, 0.35);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.client-avatar.rail-collapse.is-collapsed .client-avatar-face {
+  color: var(--accent-ink);
+  border-color: rgba(31, 158, 138, 0.35);
+}
+
+.client-rail-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 180px;
+  max-width: 240px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 32px rgba(18, 20, 22, 0.14);
+  transform: translate(8px, 4px);
+}
+
+.client-rail-menu-label {
+  padding: 6px 10px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.client-rail-menu-item {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.client-rail-menu-item:hover {
+  background: #f3f4f6;
+}
+
+.client-rail-menu-item svg {
+  color: #e6a700;
+  flex: 0 0 auto;
+}
+
 .client-avatar-face {
   width: 48px;
   height: 48px;

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import BitrixUser, Portal, PortalDealBinding, PortalLink
+from .models import BitrixUser, Portal, PortalDealBinding, PortalLink, AgencyUserPreference
 
 
 @admin.register(Portal)
@@ -45,3 +45,10 @@ class BitrixUserAdmin(admin.ModelAdmin):
     list_display = ("display_name", "portal", "bitrix_id", "email", "is_admin")
     list_filter = ("portal", "is_admin")
     search_fields = ("name", "last_name", "email", "bitrix_id")
+
+
+@admin.register(AgencyUserPreference)
+class AgencyUserPreferenceAdmin(admin.ModelAdmin):
+    list_display = ("user", "favorite_client_ids", "updated_at")
+    search_fields = ("user__name", "user__last_name", "user__bitrix_id")
+    autocomplete_fields = ("user",)

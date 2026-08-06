@@ -19,8 +19,8 @@ from .deal_resolve import (
     serialize_deal_candidate,
     sync_deal_hours_meta,
 )
-from .models import Portal, PortalDealBinding, PortalLink
-from .permissions import IsAgencyPortal, IsPortalAuthenticated, can_access_client_portal
+from .models import Portal, PortalDealBinding, PortalLink, AgencyUserPreference
+from .permissions import IsAgencyPortal, IsPortalAuthenticated, can_access_client_portal, linked_client_portal_ids
 from .serializers import (
     MeSerializer,
     PortalDealBindingSerializer,
@@ -364,6 +364,45 @@ class MeView(APIView):
             "user": request.user.bitrix_user,
         }
         return Response(MeSerializer(data).data)
+
+
+class MePreferencesView(APIView):
+    """Personal agency UI prefs (favorite clients). Agency users only."""
+
+    permission_classes = [IsPortalAuthenticated, IsAgencyPortal]
+
+    def get(self, request):
+        bitrix_user = getattr(request.user, "bitrix_user", None)
+        if not bitrix_user:
+            return Response({"favorite_client_ids": []})
+        pref, _ = AgencyUserPreference.objects.get_or_create(user=bitrix_user)
+        return Response({"favorite_client_ids": list(pref.favorite_client_ids or [])})
+
+    def put(self, request):
+        bitrix_user = getattr(request.user, "bitrix_user", None)
+        if not bitrix_user:
+            return Response({"detail": "User required"}, status=400)
+        raw = request.data.get("favorite_client_ids", [])
+        if not isinstance(raw, list):
+            return Response({"detail": "favorite_client_ids must be a list"}, status=400)
+        try:
+            ids = [int(x) for x in raw]
+        except (TypeError, ValueError):
+            return Response({"detail": "favorite_client_ids must be integers"}, status=400)
+
+        allowed = set(linked_client_portal_ids(request.user.portal))
+        # Keep order, drop unknown / duplicates.
+        cleaned: list[int] = []
+        seen: set[int] = set()
+        for pid in ids:
+            if pid in allowed and pid not in seen:
+                cleaned.append(pid)
+                seen.add(pid)
+
+        pref, _ = AgencyUserPreference.objects.get_or_create(user=bitrix_user)
+        pref.favorite_client_ids = cleaned
+        pref.save(update_fields=["favorite_client_ids", "updated_at"])
+        return Response({"favorite_client_ids": cleaned})
 
 
 class PortalViewSet(viewsets.ModelViewSet):

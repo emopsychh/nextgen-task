@@ -20,6 +20,10 @@ export type BitrixUser = {
   is_admin: boolean;
 };
 
+export type AgencyUserPreferences = {
+  favorite_client_ids: number[];
+};
+
 export type Project = {
   id: number;
   portal: number;

@@ -88,6 +88,25 @@ class BitrixUser(models.Model):
         return full or self.email or self.bitrix_id
 
 
+class AgencyUserPreference(models.Model):
+    """Per-agency-employee UI prefs (favorites are personal, not shared)."""
+
+    user = models.OneToOneField(
+        BitrixUser,
+        on_delete=models.CASCADE,
+        related_name="agency_preference",
+    )
+    favorite_client_ids = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Prefs for {self.user_id}"
+
+
 class PortalDealBinding(models.Model):
     """Links a client portal to an agency CRM deal (воронка «Сопровождение»)."""
 
