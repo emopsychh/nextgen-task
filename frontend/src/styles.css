@@ -3041,6 +3041,18 @@ a.task-card.is-done:hover,
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.task-card-delete {
+  margin-left: auto;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+  color: #9a3b3b;
+}
+
+.task-card-delete:hover:not(:disabled) {
+  color: #7a2020;
 }
 
 .task-status-pill {

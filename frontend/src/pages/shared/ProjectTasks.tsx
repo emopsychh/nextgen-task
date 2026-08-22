@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
@@ -67,6 +67,7 @@ export function ProjectTasks() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [bitrixSyncing, setBitrixSyncing] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const loadedPagesRef = useRef(1);
   const sentinelRef = useRef<HTMLDivElement>(null);
   // Discard responses that resolve after project/filter/search changed.
@@ -367,6 +368,40 @@ export function ProjectTasks() {
     }
   }
 
+  async function deleteTask(task: Task, e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!token || !task.can_delete || deletingId) return;
+    if (
+      !window.confirm(
+        `Удалить задачу «${task.title}»? Её можно удалить только пока в ней нет описания, комментариев, файлов и учёта времени.`
+      )
+    ) {
+      return;
+    }
+    setDeletingId(task.id);
+    setError(null);
+    try {
+      await api(`/api/tasks/${task.id}/`, { method: "DELETE" }, token);
+      setTasks((prev) => prev.filter((t) => t.id !== task.id));
+      setCounts((prev) => {
+        const next = { ...prev, all: Math.max(0, prev.all - 1) };
+        if (task.status in next) {
+          const key = task.status as TaskStatus;
+          next[key] = Math.max(0, (next[key] || 0) - 1);
+        }
+        return next;
+      });
+      toast.show("Задача удалена");
+      window.dispatchEvent(new Event("projects-updated"));
+      void loadCounts();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось удалить задачу");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   const filters: { id: TaskStatus | "all"; label: string; count: number }[] = [
     { id: "all", label: "Все", count: counts.all },
     { id: "todo", label: STATUS_LABEL.todo, count: counts.todo },
@@ -561,6 +596,17 @@ export function ProjectTasks() {
                     {typeof t.comments_count === "number" && t.comments_count > 0 && (
                       <span className="task-comments muted">{t.comments_count} комм.</span>
                     )}
+                    {isAgency && t.can_delete ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost task-card-delete"
+                        disabled={deletingId === t.id}
+                        title="Удалить черновую задачу"
+                        onClick={(e) => void deleteTask(t, e)}
+                      >
+                        {deletingId === t.id ? "Удаляем…" : "Удалить"}
+                      </button>
+                    ) : null}
                   </div>
                   <strong
                     className={`task-card-title${t.status === "done" ? " is-struck" : ""}`}
