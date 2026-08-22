@@ -552,7 +552,7 @@ export function ProjectTasks() {
                     </span>
                     {t.is_working ? (
                       <span className="task-working-pill" title={t.working_by_name || undefined}>
-                        Сейчас
+                        Сейчас в работе
                       </span>
                     ) : null}
                     {isTaskOverdue(t.due_date, t.status) ? (

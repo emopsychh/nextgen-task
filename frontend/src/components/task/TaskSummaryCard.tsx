@@ -122,7 +122,7 @@ export function TaskSummaryCard({
         </span>
         {isWorking ? (
           <span className="task-working-pill" title={task.working_by_name || undefined}>
-            Сейчас
+            Сейчас в работе
           </span>
         ) : null}
         {overdue ? <span className="task-status-pill status-overdue">Опаздывает</span> : null}
