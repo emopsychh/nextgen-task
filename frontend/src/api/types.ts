@@ -6,6 +6,7 @@ export type Portal = {
   domain: string;
   role: PortalRole;
   name: string;
+  timezone?: string;
   is_active: boolean;
 };
 
@@ -35,6 +36,7 @@ export type Project = {
   bitrix_group_id?: string;
   tasks_count: number;
   done_count: number;
+  has_active_work?: boolean;
   created_at?: string;
   updated_at?: string;
 };
@@ -110,6 +112,10 @@ export type Task = {
   active_timer?: TimeEntry | null;
   deal_paid_hours?: number | null;
   deal_remaining_hours?: number | null;
+  is_working?: boolean;
+  working_started_at?: string | null;
+  working_by_name?: string | null;
+  due_timezone?: string | null;
   created_at: string;
   updated_at: string;
 };

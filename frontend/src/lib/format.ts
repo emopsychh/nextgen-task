@@ -1,4 +1,5 @@
 import { isValidDate, parseDue } from "./dates";
+import { formatInTimeZone } from "./timezone";
 
 export function formatClock(iso: string): string {
   return new Date(iso).toLocaleTimeString("ru-RU", {
@@ -18,18 +19,24 @@ export function formatDayLabel(iso: string): string {
   return d.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
 }
 
-export function formatDueFull(iso: string | null): string {
+export function formatDueFull(
+  iso: string | null,
+  timeZone: string = "Europe/Moscow"
+): string {
   if (!iso) return "Не задан";
   const d = parseDue(iso);
   if (!isValidDate(d)) return "Не задан";
-  const date = d.toLocaleDateString("ru-RU", {
+  const date = formatInTimeZone(d, timeZone, {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   });
   const hasTime = /T|\d{2}:\d{2}/.test(iso);
   if (!hasTime) return date;
-  const time = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const time = formatInTimeZone(d, timeZone, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
   return `${date}, ${time}`;
 }
 

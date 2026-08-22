@@ -32,6 +32,9 @@ type Props = {
   onCommitOutcome?: () => void;
   canAddTime?: boolean;
   onSetTime?: (hours: number, minutes: number) => Promise<void> | void;
+  onToggleWorking?: () => void;
+  /** IANA zone for due display / picker (agency → Moscow). */
+  dueTimeZone?: string;
 };
 
 export function TaskSummaryCard({
@@ -58,8 +61,11 @@ export function TaskSummaryCard({
   onCommitOutcome,
   canAddTime = false,
   onSetTime,
+  onToggleWorking,
+  dueTimeZone = "Europe/Moscow",
 }: Props) {
   const important = Boolean(task.is_important);
+  const isWorking = Boolean(task.is_working);
   return (
     <aside
       className={`task-meta-pane${canManage ? " is-editable" : ""}${task.status === "done" ? " is-done" : ""}`}
@@ -112,6 +118,11 @@ export function TaskSummaryCard({
         <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
           {STATUS_LABEL[task.status]}
         </span>
+        {isWorking ? (
+          <span className="task-working-pill" title={task.working_by_name || undefined}>
+            Сейчас
+          </span>
+        ) : null}
         {overdue ? <span className="task-status-pill status-overdue">Опаздывает</span> : null}
       </div>
 
@@ -152,10 +163,11 @@ export function TaskSummaryCard({
                 onChange={onSetDueDate}
                 status={task.status}
                 variant="inline"
+                timeZone={dueTimeZone}
               />
             ) : (
               <span className={`task-due-inline ${due.tone}`}>
-                {formatDueFull(task.due_date)}
+                {formatDueFull(task.due_date, dueTimeZone)}
                 {task.due_date ? ` · ${due.label}` : ""}
               </span>
             )}
@@ -214,6 +226,16 @@ export function TaskSummaryCard({
 
       {canChangeStatus ? (
         <div className="task-meta-actions" role="group" aria-label="Действия со статусом">
+          {task.status !== "done" && onToggleWorking ? (
+            <button
+              type="button"
+              className={`btn ${isWorking ? "btn-accent" : "btn-ghost"}`}
+              disabled={saveBusy}
+              onClick={onToggleWorking}
+            >
+              {isWorking ? "Перестал работать" : "Работаю над задачей"}
+            </button>
+          ) : null}
           {task.status === "todo" && (
             <>
               <button

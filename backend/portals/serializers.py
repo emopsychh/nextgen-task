@@ -17,11 +17,30 @@ class PortalSerializer(serializers.ModelSerializer):
             "domain",
             "role",
             "name",
+            "timezone",
             "is_active",
             "created_at",
             "updated_at",
         )
-        read_only_fields = fields
+        read_only_fields = (
+            "id",
+            "member_id",
+            "domain",
+            "role",
+            "is_active",
+            "created_at",
+            "updated_at",
+        )
+
+    def validate_timezone(self, value: str) -> str:
+        from board.due_dates import resolve_zone
+
+        raw = (value or "").strip() or "Europe/Moscow"
+        # Raises via ZoneInfoNotFound → resolve_zone falls back; still reject junk long values
+        if len(raw) > 64:
+            raise serializers.ValidationError("Некорректный часовой пояс")
+        zone = resolve_zone(raw)
+        return getattr(zone, "key", None) or raw
 
 
 class PortalLinkSerializer(serializers.ModelSerializer):

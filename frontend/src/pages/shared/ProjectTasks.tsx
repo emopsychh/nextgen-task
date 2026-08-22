@@ -25,11 +25,16 @@ import {
 import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import { CalendarGlyph, FlameIcon } from "../../components/icons";
 import { SyncHint } from "../../components/SyncHint";
+import { displayTimeZone } from "../../lib/timezone";
 
 export function ProjectTasks() {
   const { projectId } = useParams();
   const { token, portal } = useAuth();
   const isAgency = portal?.role === "agency";
+  const dueTz = displayTimeZone({
+    role: portal?.role,
+    portalTimezone: portal?.timezone,
+  });
   const toast = useFlashToast();
 
   const numericProjectId = Number(projectId || 0);
@@ -436,7 +441,12 @@ export function ProjectTasks() {
 
           <div className="field">
             <label>Срок</label>
-            <DueDatePicker value={dueDate} onChange={setDueDate} status="todo" />
+            <DueDatePicker
+              value={dueDate}
+              onChange={setDueDate}
+              status="todo"
+              timeZone={dueTz}
+            />
           </div>
 
           <button className="btn btn-accent" disabled={busy} style={{ alignSelf: "start" }}>
@@ -537,6 +547,11 @@ export function ProjectTasks() {
                     <span className={`task-status-pill ${STATUS_TONE[t.status]}`}>
                       {STATUS_LABEL[t.status]}
                     </span>
+                    {t.is_working ? (
+                      <span className="task-working-pill" title={t.working_by_name || undefined}>
+                        Сейчас
+                      </span>
+                    ) : null}
                     {isTaskOverdue(t.due_date, t.status) ? (
                       <span className="task-status-pill status-overdue">Опаздывает</span>
                     ) : null}

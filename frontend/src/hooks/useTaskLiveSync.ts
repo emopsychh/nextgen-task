@@ -25,6 +25,10 @@ function fingerprint(task: Task): string {
     tracked,
     paid,
     remaining,
+    task.is_working ? "1" : "0",
+    task.working_started_at || "",
+    task.working_by_name || "",
+    task.due_timezone || "",
   ].join("|");
 }
 

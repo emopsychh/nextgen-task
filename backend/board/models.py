@@ -69,6 +69,15 @@ class Task(models.Model):
         blank=True,
         related_name="created_tasks",
     )
+    # Live presence signal («Работаю прямо сейчас») — independent of status.
+    working_by = models.ForeignKey(
+        BitrixUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="working_tasks",
+    )
+    working_started_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

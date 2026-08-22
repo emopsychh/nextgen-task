@@ -56,6 +56,54 @@ def _clean_task_title(instance: Task) -> str:
     return instance.title or ""
 
 
+class TaskDueDateField(serializers.Field):
+    """UTC storage; API emits ISO-Z; naive writes use viewer TZ (agency=Moscow)."""
+
+    default_error_messages = {
+        "invalid": "Некорректная дата срока",
+    }
+
+    def to_representation(self, value):
+        from board.due_dates import format_utc_z
+
+        return format_utc_z(value)
+
+    def to_internal_value(self, data):
+        from board.due_dates import (
+            AGENCY_DISPLAY_TZ,
+            parse_due_value,
+            portal_zone,
+            resolve_zone,
+        )
+
+        if data in (None, "", "null"):
+            return None
+        portal = self._resolve_portal()
+        request = self.context.get("request")
+        if request is not None and getattr(request.user, "is_agency", False):
+            tz = resolve_zone(AGENCY_DISPLAY_TZ)
+        else:
+            tz = portal_zone(portal)
+        parsed = parse_due_value(data, portal_tz=tz)
+        if parsed is None and data not in (None, "", "null"):
+            self.fail("invalid")
+        return parsed
+
+    def _resolve_portal(self):
+        parent = getattr(self, "parent", None)
+        if parent is None:
+            return None
+        instance = getattr(parent, "instance", None)
+        if instance is not None and getattr(instance, "project_id", None):
+            return instance.project.portal
+        initial = getattr(parent, "initial_data", None) or {}
+        project_id = initial.get("project")
+        if project_id:
+            project = Project.objects.filter(pk=project_id).select_related("portal").first()
+            return project.portal if project else None
+        return None
+
+
 # Salt for the signed, expiring capability token embedded in attachment URLs.
 # The token proves the caller was handed the link by an access-scoped API
 # response; the download endpoint needs no separate auth header (so plain
@@ -207,20 +255,10 @@ class TaskSerializer(serializers.ModelSerializer):
     active_timer = serializers.SerializerMethodField()
     deal_paid_hours = serializers.SerializerMethodField()
     deal_remaining_hours = serializers.SerializerMethodField()
-    due_date = serializers.DateTimeField(
-        required=False,
-        allow_null=True,
-        format="%Y-%m-%dT%H:%M:%S",
-        input_formats=[
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%dT%H:%M:%SZ",
-            "%Y-%m-%dT%H:%M:%S.%fZ",
-            "%Y-%m-%dT%H:%M:%S.%f",
-            "%Y-%m-%dT%H:%M:%S%z",
-            "%Y-%m-%dT%H:%M:%S.%f%z",
-            "%Y-%m-%d",
-        ],
-    )
+    is_working = serializers.SerializerMethodField()
+    working_by_name = serializers.SerializerMethodField()
+    due_timezone = serializers.SerializerMethodField()
+    due_date = TaskDueDateField(required=False, allow_null=True)
 
     class Meta:
         model = Task
@@ -250,6 +288,10 @@ class TaskSerializer(serializers.ModelSerializer):
             "active_timer",
             "deal_paid_hours",
             "deal_remaining_hours",
+            "is_working",
+            "working_started_at",
+            "working_by_name",
+            "due_timezone",
             "created_at",
             "updated_at",
         )
@@ -266,6 +308,10 @@ class TaskSerializer(serializers.ModelSerializer):
             "active_timer",
             "deal_paid_hours",
             "deal_remaining_hours",
+            "is_working",
+            "working_started_at",
+            "working_by_name",
+            "due_timezone",
             "created_at",
             "updated_at",
         )
@@ -310,6 +356,22 @@ class TaskSerializer(serializers.ModelSerializer):
         if not running:
             return None
         return TimeEntrySerializer(running).data
+
+    def get_is_working(self, obj):
+        return obj.working_started_at is not None
+
+    def get_working_by_name(self, obj):
+        if obj.working_by_id and obj.working_by:
+            return obj.working_by.display_name
+        return None
+
+    def get_due_timezone(self, obj):
+        from board.due_dates import DEFAULT_PORTAL_TZ
+
+        portal = obj.project.portal if obj.project_id else None
+        if portal is None:
+            return DEFAULT_PORTAL_TZ
+        return (portal.timezone or "").strip() or DEFAULT_PORTAL_TZ
 
     def _deal_binding(self, obj):
         cache = self.context.setdefault("_deal_binding_by_portal", {})
@@ -369,20 +431,10 @@ class TaskListSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     created_by_role = serializers.SerializerMethodField()
     total_tracked_seconds = serializers.SerializerMethodField()
-    due_date = serializers.DateTimeField(
-        required=False,
-        allow_null=True,
-        format="%Y-%m-%dT%H:%M:%S",
-        input_formats=[
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%dT%H:%M:%SZ",
-            "%Y-%m-%dT%H:%M:%S.%fZ",
-            "%Y-%m-%dT%H:%M:%S.%f",
-            "%Y-%m-%dT%H:%M:%S%z",
-            "%Y-%m-%dT%H:%M:%S.%f%z",
-            "%Y-%m-%d",
-        ],
-    )
+    is_working = serializers.SerializerMethodField()
+    working_by_name = serializers.SerializerMethodField()
+    due_timezone = serializers.SerializerMethodField()
+    due_date = TaskDueDateField(required=False, allow_null=True)
 
     class Meta:
         model = Task
@@ -394,6 +446,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "due_date",
+            "due_timezone",
             "status",
             "is_important",
             "bitrix_task_id",
@@ -403,6 +456,9 @@ class TaskListSerializer(serializers.ModelSerializer):
             "created_by_role",
             "comments_count",
             "total_tracked_seconds",
+            "is_working",
+            "working_started_at",
+            "working_by_name",
             "created_at",
             "updated_at",
         )
@@ -429,6 +485,22 @@ class TaskListSerializer(serializers.ModelSerializer):
 
         return task_tracked_seconds(obj, include_running=False)
 
+    def get_is_working(self, obj):
+        return obj.working_started_at is not None
+
+    def get_working_by_name(self, obj):
+        if obj.working_by_id and obj.working_by:
+            return obj.working_by.display_name
+        return None
+
+    def get_due_timezone(self, obj):
+        from board.due_dates import DEFAULT_PORTAL_TZ
+
+        portal = obj.project.portal if obj.project_id else None
+        if portal is None:
+            return DEFAULT_PORTAL_TZ
+        return (portal.timezone or "").strip() or DEFAULT_PORTAL_TZ
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["title"] = _clean_task_title(instance)
@@ -438,6 +510,7 @@ class TaskListSerializer(serializers.ModelSerializer):
 class ProjectSerializer(serializers.ModelSerializer):
     tasks_count = serializers.SerializerMethodField()
     done_count = serializers.SerializerMethodField()
+    has_active_work = serializers.SerializerMethodField()
     portal_name = serializers.CharField(source="portal.name", read_only=True)
 
     class Meta:
@@ -453,6 +526,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "bitrix_group_id",
             "tasks_count",
             "done_count",
+            "has_active_work",
             "created_at",
             "updated_at",
         )
@@ -460,6 +534,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "id",
             "bitrix_task_id",
             "bitrix_group_id",
+            "has_active_work",
             "created_at",
             "updated_at",
         )
@@ -475,6 +550,12 @@ class ProjectSerializer(serializers.ModelSerializer):
         if annotated is not None:
             return annotated
         return obj.tasks.filter(status=Task.Status.DONE).count()
+
+    def get_has_active_work(self, obj):
+        annotated = getattr(obj, "_has_active_work", None)
+        if annotated is not None:
+            return bool(annotated)
+        return obj.tasks.filter(working_started_at__isnull=False).exists()
 
     def validate_portal(self, portal: Portal):
         request = self.context.get("request")

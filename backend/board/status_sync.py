@@ -438,30 +438,21 @@ def handle_bitrix_task_delete(*, portal, bitrix_task_id: str) -> dict:
     return {"ok": True, "ignored": "unknown_task"}
 
 
-def format_bitrix_deadline(due) -> str:
+def format_bitrix_deadline(due, *, portal=None) -> str:
     """
-    Write DEADLINE as wall-clock local time without a forced UTC day-shift.
-    Date-only legacy → end of day 23:59:59.
+    Write DEADLINE as wall-clock time in the portal timezone (no offset suffix).
+    Date-only legacy → end of day 23:59:59 in that zone.
     """
-    from datetime import date, datetime
+    from board.due_dates import format_wall, portal_zone
 
-    from django.utils import timezone
-
-    if not due:
-        return ""
-    if isinstance(due, date) and not isinstance(due, datetime):
-        return f"{due.isoformat()}T23:59:59"
-    dt = due
-    if timezone.is_aware(dt):
-        dt = timezone.localtime(dt)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+    return format_wall(due, portal_zone(portal))
 
 
 def deadlines_equal(a, b) -> bool:
-    """Compare due values at minute precision (ignore seconds/tz noise)."""
-    from datetime import date, datetime
+    """Compare due values at minute precision in UTC (ignore seconds/tz noise)."""
+    from datetime import date, datetime, time as dtime
 
-    from django.utils import timezone
+    from board.due_dates import DEFAULT_PORTAL_TZ, as_utc, resolve_zone, wall_to_utc
 
     if a is None and b is None:
         return True
@@ -470,10 +461,12 @@ def deadlines_equal(a, b) -> bool:
 
     def norm(v):
         if isinstance(v, date) and not isinstance(v, datetime):
-            return (v.year, v.month, v.day, 23, 59)
-        dt = v
-        if timezone.is_aware(dt):
-            dt = timezone.localtime(dt)
+            dt = wall_to_utc(
+                datetime.combine(v, dtime(23, 59, 0)),
+                resolve_zone(DEFAULT_PORTAL_TZ),
+            )
+            return (dt.year, dt.month, dt.day, dt.hour, dt.minute)
+        dt = as_utc(v)
         return (dt.year, dt.month, dt.day, dt.hour, dt.minute)
 
     return norm(a) == norm(b)
@@ -578,12 +571,9 @@ def apply_inbound_status(
     return True
 
 
-def parse_bitrix_deadline(task_data: dict):
-    """Extract aware datetime from Bitrix DEADLINE (preserves time of day)."""
-    from datetime import date, datetime, timezone as dt_timezone
-
-    from django.utils import timezone
-    from django.utils.dateparse import parse_datetime
+def parse_bitrix_deadline(task_data: dict, *, portal=None):
+    """Extract UTC-aware datetime from Bitrix DEADLINE."""
+    from board.due_dates import parse_due_value, portal_zone
 
     raw = (
         task_data.get("deadline")
@@ -592,46 +582,7 @@ def parse_bitrix_deadline(task_data: dict):
         or task_data.get("DEADLINE_D")
         or ""
     )
-    if raw in (None, "", False, "false", "0"):
-        return None
-    if isinstance(raw, datetime):
-        dt = raw
-        if timezone.is_naive(dt):
-            return timezone.make_aware(dt, dt_timezone.utc)
-        return dt
-    if isinstance(raw, date):
-        from datetime import time as dtime
-
-        dt = datetime.combine(raw, dtime(23, 59, 59))
-        return timezone.make_aware(dt, dt_timezone.utc)
-
-    text = str(raw).strip()
-    if not text or text.lower() in ("false", "none", "null"):
-        return None
-
-    normalized = text.replace(" ", "T", 1) if " " in text and "T" not in text else text
-    dt = parse_datetime(normalized)
-    if dt is None:
-        for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
-            try:
-                dt = datetime.strptime(text[:19] if len(text) >= 19 else text, fmt)
-                break
-            except ValueError:
-                continue
-    if dt is None and len(text) >= 10 and text[4] == "-" and text[7] == "-":
-        try:
-            from datetime import time as dtime
-
-            d = date.fromisoformat(text[:10])
-            dt = datetime.combine(d, dtime(23, 59, 59))
-        except ValueError:
-            return None
-    if dt is None:
-        return None
-    if timezone.is_naive(dt):
-        # Naive ISO from us / Bitrix portal-local → treat as UTC wall (matches our writes)
-        return timezone.make_aware(dt, dt_timezone.utc)
-    return dt
+    return parse_due_value(raw, portal_tz=portal_zone(portal))
 
 
 def bitrix_task_is_important(task_data: dict) -> bool | None:
@@ -1007,7 +958,7 @@ def pull_task_status_from_bitrix(task) -> bool:
             except Exception:
                 logger.exception("finalize_task_completion failed task=%s", task.id)
 
-    due = parse_bitrix_deadline(data)
+    due = parse_bitrix_deadline(data, portal=portal)
     task.refresh_from_db()
     changed = apply_inbound_deadline(task, due, allow_while_pending=True) or changed
 
@@ -1144,12 +1095,12 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
         meta_changed = title_applied or desc_changed
 
         # Prefer get_task deadline; fall back to FIELDS_AFTER
-        due = parse_bitrix_deadline(data) if data else None
+        due = parse_bitrix_deadline(data, portal=portal) if data else None
         if due is None:
-            due = parse_bitrix_deadline(after)
+            due = parse_bitrix_deadline(after, portal=portal)
         # If get_task returned empty deadline but event has one, event wins
-        event_due = parse_bitrix_deadline(after)
-        if data and parse_bitrix_deadline(data) is None and event_due is not None:
+        event_due = parse_bitrix_deadline(after, portal=portal)
+        if data and parse_bitrix_deadline(data, portal=portal) is None and event_due is not None:
             due = event_due
 
         task.refresh_from_db()
@@ -1202,7 +1153,9 @@ def handle_bitrix_task_update(*, portal, bitrix_task_id: str, event_data: dict |
                         raw_after = event_data.get("FIELDS_AFTER") or {}
                         if isinstance(raw_after, dict):
                             after = raw_after
-                    due = parse_bitrix_deadline(data) or parse_bitrix_deadline(after)
+                    due = parse_bitrix_deadline(data, portal=portal) or parse_bitrix_deadline(
+                        after, portal=portal
+                    )
                     apply_inbound_deadline(task, due, allow_while_pending=True)
                     result["due_date"] = due.isoformat() if due else None
                 except BitrixAPIError:
@@ -1232,10 +1185,12 @@ def _mirror_deadline_to_other_portals(task, due, *, source_portal=None) -> None:
     if not task.agency_bitrix_task_id:
         return
 
-    fields = {"DEADLINE": format_bitrix_deadline(due)}
+    fields = {"DEADLINE": format_bitrix_deadline(due, portal=client_portal)}
     try:
         client = BitrixClient(client_portal)
-        current = parse_bitrix_deadline(client.get_task(task.bitrix_task_id) or {})
+        current = parse_bitrix_deadline(
+            client.get_task(task.bitrix_task_id) or {}, portal=client_portal
+        )
         if deadlines_equal(current, due):
             return
         client.update_task(task.bitrix_task_id, fields)

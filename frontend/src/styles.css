@@ -1443,6 +1443,13 @@ a {
   gap: 12px;
 }
 
+.projects-hub-card-top-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .projects-hub-card-title {
   font-size: 1.05rem;
   letter-spacing: -0.02em;
@@ -3038,6 +3045,41 @@ a.task-card.is-done:hover,
   background: var(--accent-soft);
   color: #0f6d5d;
   border-color: #b8ddd3;
+}
+
+.task-working-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: #fff4e5;
+  color: #9a5b00;
+  border: 1px solid #f0d2a0;
+}
+
+.task-working-pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e08900;
+  box-shadow: 0 0 0 0 rgba(224, 137, 0, 0.55);
+  animation: working-pulse 1.6s ease-out infinite;
+}
+
+@keyframes working-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(224, 137, 0, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(224, 137, 0, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(224, 137, 0, 0);
+  }
 }
 
 .task-status-pill.status-done {

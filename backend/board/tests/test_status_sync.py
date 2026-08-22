@@ -74,13 +74,18 @@ class DeadlineTests(TestCase):
 
     def test_date_only_treated_as_end_of_day(self):
         d = date(2026, 5, 1)
-        same = datetime(2026, 5, 1, 23, 59, tzinfo=dt_timezone.utc)
+        # End of day Moscow → 20:59 UTC
+        same = datetime(2026, 5, 1, 20, 59, tzinfo=dt_timezone.utc)
         self.assertTrue(deadlines_equal(d, same))
 
     def test_parse_iso_datetime(self):
         parsed = parse_bitrix_deadline({"deadline": "2026-05-01T10:30:00"})
         self.assertIsNotNone(parsed)
-        self.assertEqual((parsed.year, parsed.month, parsed.day, parsed.hour), (2026, 5, 1, 10))
+        # Naive Bitrix wall clock is interpreted in Europe/Moscow → UTC
+        self.assertEqual(
+            (parsed.year, parsed.month, parsed.day, parsed.hour, parsed.minute),
+            (2026, 5, 1, 7, 30),
+        )
 
     def test_parse_empty_returns_none(self):
         self.assertIsNone(parse_bitrix_deadline({"deadline": ""}))

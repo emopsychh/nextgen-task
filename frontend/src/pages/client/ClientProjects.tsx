@@ -20,6 +20,7 @@ import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { useWorkspaceDismissals } from "../../hooks/useWorkspaceDismissals";
 import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
 import { formatDueFull } from "../../lib/format";
+import { displayTimeZone } from "../../lib/timezone";
 import {
   getPortalLabel,
   PORTAL_LABEL_EVENT,
@@ -47,9 +48,9 @@ type OverviewSnapshot = {
   disputedReports: WorkReport[];
 };
 
-function taskDueLabel(task: Task): string | null {
+function taskDueLabel(task: Task, timeZone: string): string | null {
   if (!task.due_date) return null;
-  return formatDueFull(task.due_date);
+  return formatDueFull(task.due_date, timeZone);
 }
 
 /** Due today / tomorrow / within N calendar days (not yet overdue). */
@@ -86,6 +87,10 @@ export function ClientProjects() {
   const [disputedReports, setDisputedReports] = useState<WorkReport[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const dueTz = displayTimeZone({
+    role: portal?.role,
+    portalTimezone: portalInfo?.timezone || portal?.timezone,
+  });
   const { dismiss, isDismissed } = useWorkspaceDismissals(
     Number.isFinite(portalId) && portalId > 0 ? portalId : null
   );
@@ -449,6 +454,9 @@ export function ClientProjects() {
                       >
                         <div className="workspace-attention-top">
                           <span className="workspace-chip tone-project">{pct}%</span>
+                          {p.has_active_work ? (
+                            <span className="task-working-pill">Работают сейчас</span>
+                          ) : null}
                           <span className="muted">
                             {done}/{total} задач
                           </span>
@@ -567,6 +575,9 @@ export function ClientProjects() {
                           >
                             <div className="workspace-attention-top">
                               <span className="workspace-chip tone-project">{pct}%</span>
+                              {p.has_active_work ? (
+                                <span className="task-working-pill">Работают сейчас</span>
+                              ) : null}
                               <span className="muted">
                                 {done}/{total} задач
                               </span>
@@ -603,7 +614,7 @@ export function ClientProjects() {
                       {hotTasks.map((t) => {
                         const overdue = isTaskOverdue(t.due_date, t.status);
                         const soon = isDueSoon(t.due_date, t.status);
-                        const due = taskDueLabel(t);
+                        const due = taskDueLabel(t, dueTz);
                         return (
                           <Link
                             key={t.id}

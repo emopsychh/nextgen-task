@@ -228,7 +228,12 @@ export function ProjectsList() {
                 >
                   <div className="projects-hub-card-top">
                     <strong className="projects-hub-card-title">{p.name}</strong>
-                    <span className="projects-hub-card-pct">{pct}%</span>
+                    <span className="projects-hub-card-top-meta">
+                      {p.has_active_work ? (
+                        <span className="task-working-pill">Работают сейчас</span>
+                      ) : null}
+                      <span className="projects-hub-card-pct">{pct}%</span>
+                    </span>
                   </div>
                   <span className="muted">
                     {done}/{total} задач

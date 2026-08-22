@@ -23,6 +23,7 @@ import { formatDayLabel } from "../../lib/format";
 import { isImageFile } from "../../lib/files";
 import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
 import { isTaskOverdue } from "../../lib/status";
+import { displayTimeZone } from "../../lib/timezone";
 
 /** Images first, then documents; drop exact duplicates (same name+size). */
 function normalizePendingFiles(files: File[]): File[] {
@@ -454,6 +455,29 @@ export function TaskDetail() {
     }
   }
 
+  async function toggleWorking() {
+    if (!token || !task || !canChangeStatus || task.status === "done") return;
+    setSaveBusy(true);
+    setError(null);
+    const starting = !task.is_working;
+    try {
+      const updated = await api<Task>(
+        `/api/tasks/${task.id}/working/${starting ? "start" : "stop"}/`,
+        { method: "POST" },
+        token
+      );
+      setTask(updated);
+      toast.show(starting ? "Клиент видит: работаете сейчас" : "Сигнал снят");
+      window.dispatchEvent(new Event("projects-updated"));
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Не удалось обновить сигнал работы"
+      );
+    } finally {
+      setSaveBusy(false);
+    }
+  }
+
   async function commitOutcome() {
     if (!task || !canManage) return;
     const outcome = draftOutcome;
@@ -672,6 +696,11 @@ export function TaskDetail() {
   const overdue = isTaskOverdue(task.due_date, task.status);
   const canSend = Boolean(comment.trim() || pendingFiles.length) && !sendBusy;
   const creator = task.created_by_name || "Команда";
+  const dueTz = displayTimeZone({
+    role: portal?.role,
+    portalTimezone: portal?.timezone,
+    taskTimezone: task.due_timezone,
+  });
 
   return (
     <div className="task-detail-page chat-mode">
@@ -742,6 +771,8 @@ export function TaskDetail() {
           onCommitOutcome={() => void commitOutcome()}
           canAddTime={canChangeStatus}
           onSetTime={setTime}
+          onToggleWorking={() => void toggleWorking()}
+          dueTimeZone={dueTz}
         />
 
         <section className="messenger task-chat-pane">

@@ -7,7 +7,10 @@ def _format_due(value: date | datetime | None) -> str:
     if not value:
         return ""
     if isinstance(value, datetime):
-        return value.strftime("%d.%m.%Y %H:%M")
+        from board.due_dates import AGENCY_DISPLAY_TZ, resolve_zone, utc_to_wall
+
+        wall = utc_to_wall(value, resolve_zone(AGENCY_DISPLAY_TZ))
+        return wall.strftime("%d.%m.%Y %H:%M")
     return value.strftime("%d.%m.%Y")
 
 

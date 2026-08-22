@@ -255,6 +255,7 @@ def _task_fields(
     parent_id: str | None = None,
     include_deadline: bool = True,
     crm_bindings: list[str] | None = None,
+    portal=None,
 ) -> dict:
     from board.status_sync import format_bitrix_deadline
 
@@ -263,7 +264,9 @@ def _task_fields(
         "DESCRIPTION": task.description or "",
     }
     if include_deadline:
-        fields["DEADLINE"] = format_bitrix_deadline(task.due_date)
+        fields["DEADLINE"] = format_bitrix_deadline(
+            task.due_date, portal=portal or task.project.portal
+        )
     if responsible_id:
         fields["RESPONSIBLE_ID"] = responsible_id
     if creator_id:
@@ -282,12 +285,14 @@ def _task_fields(
     return fields
 
 
-def _deadline_needs_push(client: BitrixClient, bitrix_task_id: str, due) -> bool:
+def _deadline_needs_push(client: BitrixClient, bitrix_task_id: str, due, *, portal=None) -> bool:
     """Skip DEADLINE in updates when Bitrix already has the same due (minute precision)."""
     from board.status_sync import deadlines_equal, parse_bitrix_deadline
 
     try:
-        current = parse_bitrix_deadline(client.get_task(bitrix_task_id) or {})
+        current = parse_bitrix_deadline(
+            client.get_task(bitrix_task_id) or {}, portal=portal
+        )
     except BitrixAPIError:
         return True
     return not deadlines_equal(current, due)
@@ -588,13 +593,16 @@ def _sync_one_portal(
         task.save(update_fields=["title", "updated_at"])
 
     if existing_id:
-        push_deadline = _deadline_needs_push(client, existing_id, task.due_date)
+        push_deadline = _deadline_needs_push(
+            client, existing_id, task.due_date, portal=portal
+        )
         fields = _task_fields(
             task,
             group_id=group_id,
             parent_id=parent_id,
             include_deadline=push_deadline,
             crm_bindings=crm_bindings,
+            portal=portal,
         )
         fields["TITLE"] = title
         logger.info(
@@ -639,6 +647,7 @@ def _sync_one_portal(
         parent_id=parent_id,
         include_deadline=True,
         crm_bindings=crm_bindings,
+        portal=portal,
     )
     fields["TITLE"] = title
     result = client.create_task(fields)

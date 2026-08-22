@@ -173,7 +173,7 @@ def upsert_task_from_bitrix_subtask(*, project, task_data: dict, agency: bool = 
     title = _task_title(task_data, project.portal)
     description = _task_description(task_data)
     status = local_status_from_bitrix_task(task_data) or Task.Status.TODO
-    due = parse_bitrix_deadline(task_data)
+    due = parse_bitrix_deadline(task_data, portal=project.portal)
     important = bitrix_task_is_important(task_data)
 
     def _apply_fields(task, *, created: bool) -> tuple:

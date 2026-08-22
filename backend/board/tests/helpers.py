@@ -15,6 +15,7 @@ def make_portal(
     domain: str | None = None,
     token: str = "tok",
     name: str = "",
+    timezone: str = "Europe/Moscow",
 ) -> Portal:
     mid = member_id or f"m-{uuid.uuid4().hex[:10]}"
     return Portal.objects.create(
@@ -22,6 +23,7 @@ def make_portal(
         domain=domain or f"{mid}.bitrix24.ru",
         role=role,
         name=name,
+        timezone=timezone,
         access_token=token,
     )
 

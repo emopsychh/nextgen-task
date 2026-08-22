@@ -12,6 +12,7 @@ import { FlameIcon } from "../../components/icons";
 import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
 import { formatDueFull } from "../../lib/format";
 import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
+import { AGENCY_DISPLAY_TZ } from "../../lib/timezone";
 
 const HOT_DUE_DAYS = 2;
 
@@ -71,7 +72,7 @@ function TaskCard({
 }) {
   const overdue = isTaskOverdue(task.due_date, task.status);
   const soon = isDueSoon(task.due_date, task.status);
-  const due = task.due_date ? formatDueFull(task.due_date) : null;
+  const due = task.due_date ? formatDueFull(task.due_date, AGENCY_DISPLAY_TZ) : null;
 
   return (
     <Link

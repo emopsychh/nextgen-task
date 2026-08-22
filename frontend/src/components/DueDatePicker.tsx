@@ -6,10 +6,13 @@ import {
   dueMeta,
   mondayIndex,
   parseDue,
-  parseISODate,
   toISODate,
-  toISODateTime,
 } from "../lib/dates";
+import {
+  AGENCY_DISPLAY_TZ,
+  getZonedParts,
+  wallToUtcIso,
+} from "../lib/timezone";
 
 type Props = {
   value: string;
@@ -17,6 +20,8 @@ type Props = {
   status?: "todo" | "in_progress" | "done";
   /** button — create forms; inline — clickable date in task card */
   variant?: "button" | "inline";
+  /** IANA zone for wall-clock editing (agency=Europe/Moscow). */
+  timeZone?: string;
 };
 
 type View = "date" | "time";
@@ -41,11 +46,13 @@ function formatShortDate(d: Date): string {
   });
 }
 
-function formatDotDate(iso: string): string {
+function formatDotDate(iso: string, timeZone: string): string {
   const d = parseDue(iso);
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  return `${dd}.${mm}.${d.getFullYear()}`;
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = getZonedParts(d, timeZone);
+  const dd = String(parts.day).padStart(2, "0");
+  const mm = String(parts.month).padStart(2, "0");
+  return `${dd}.${mm}.${parts.year}`;
 }
 
 function endOfWeek(from: Date): Date {
@@ -73,23 +80,31 @@ export function DueDatePicker({
   onChange,
   status = "todo",
   variant = "button",
+  timeZone = AGENCY_DISPLAY_TZ,
 }: Props) {
-  const todayIso = toISODate(new Date());
+  const todayParts = getZonedParts(new Date(), timeZone);
+  const todayIso = `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
   const selected = value ? parseDue(value) : null;
-  const initial = selected && !Number.isNaN(selected.getTime()) ? selected : new Date();
+  const selectedParts =
+    selected && !Number.isNaN(selected.getTime())
+      ? getZonedParts(selected, timeZone)
+      : null;
+  const initial = selectedParts
+    ? new Date(selectedParts.year, selectedParts.month - 1, selectedParts.day)
+    : new Date(todayParts.year, todayParts.month - 1, todayParts.day);
 
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>("date");
   const [viewYear, setViewYear] = useState(initial.getFullYear());
   const [viewMonth, setViewMonth] = useState(initial.getMonth());
   const [hour, setHour] = useState(() =>
-    selected && !Number.isNaN(selected.getTime())
-      ? String(selected.getHours()).padStart(2, "0")
+    selectedParts
+      ? String(selectedParts.hour).padStart(2, "0")
       : "18"
   );
   const [minute, setMinute] = useState(() =>
-    selected && !Number.isNaN(selected.getTime())
-      ? String(Math.floor(selected.getMinutes() / 5) * 5).padStart(2, "0")
+    selectedParts
+      ? String(Math.floor(selectedParts.minute / 5) * 5).padStart(2, "0")
       : "00"
   );
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -232,9 +247,8 @@ export function DueDatePicker({
   }
 
   function withTime(dateIso: string, h = hour, m = minute): string {
-    const d = parseISODate(dateIso.slice(0, 10));
-    d.setHours(Number(h), Number(m), 0, 0);
-    return toISODateTime(d);
+    const [y, mo, d] = dateIso.slice(0, 10).split("-").map(Number);
+    return wallToUtcIso(y, mo, d, Number(h), Number(m), 0, timeZone);
   }
 
   function pickDate(iso: string) {
@@ -244,32 +258,47 @@ export function DueDatePicker({
   function pickPreset(iso: string) {
     const next = withTime(iso);
     onChange(next);
-    const d = parseDue(next);
-    setViewYear(d.getFullYear());
-    setViewMonth(d.getMonth());
+    const parts = getZonedParts(parseDue(next), timeZone);
+    setViewYear(parts.year);
+    setViewMonth(parts.month - 1);
   }
 
   function pickHour(h: string) {
     setHour(h);
-    const base = value ? value.slice(0, 10) : todayIso;
+    const base = value
+      ? (() => {
+          const p = getZonedParts(parseDue(value), timeZone);
+          return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+        })()
+      : todayIso;
     onChange(withTime(base, h, minute));
   }
 
   function pickMinute(m: string) {
     setMinute(m);
-    const base = value ? value.slice(0, 10) : todayIso;
+    const base = value
+      ? (() => {
+          const p = getZonedParts(parseDue(value), timeZone);
+          return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+        })()
+      : todayIso;
     onChange(withTime(base, hour, m));
   }
 
   const timeLabel = `${hour}:${minute}`;
   const triggerLabel = value
-    ? `${formatDotDate(value)} ${timeLabel}`
+    ? `${formatDotDate(value, timeZone)} ${timeLabel}`
     : "Выбрать срок";
   const inlineLabel = value
-    ? `${formatDotDate(value)} ${timeLabel}${meta.label ? ` · ${meta.label}` : ""}`
+    ? `${formatDotDate(value, timeZone)} ${timeLabel}${meta.label ? ` · ${meta.label}` : ""}`
     : "Указать срок";
 
-  const valueDate = value ? value.slice(0, 10) : "";
+  const valueDate = value
+    ? (() => {
+        const p = getZonedParts(parseDue(value), timeZone);
+        return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+      })()
+    : "";
 
   return (
     <div className={`due-picker${variant === "inline" ? " due-picker-inline" : ""}`} ref={rootRef}>
@@ -358,7 +387,7 @@ export function DueDatePicker({
                 ‹
               </button>
               <div className="bx-due-time-title">
-                {value ? `${formatDotDate(value)} ${timeLabel}` : timeLabel}
+                {value ? `${formatDotDate(value, timeZone)} ${timeLabel}` : timeLabel}
               </div>
             </div>
           )}

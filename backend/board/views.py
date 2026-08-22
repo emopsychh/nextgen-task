@@ -245,9 +245,13 @@ class ProjectViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "description"]
 
     def get_queryset(self):
-        from django.db.models import Count, Q
+        from django.db.models import Count, Exists, OuterRef, Q
 
         ids = accessible_portal_ids(self.request.user)
+        active_work = Task.objects.filter(
+            project_id=OuterRef("pk"),
+            working_started_at__isnull=False,
+        )
         return (
             Project.objects.filter(portal_id__in=ids)
             .select_related("portal")
@@ -258,6 +262,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
                     filter=Q(tasks__status=Task.Status.DONE),
                     distinct=True,
                 ),
+                _has_active_work=Exists(active_work),
             )
         )
 
@@ -354,7 +359,11 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         ids = accessible_portal_ids(self.request.user)
         qs = Task.objects.filter(project__portal_id__in=ids).select_related(
-            "project", "project__portal", "created_by", "created_by__portal"
+            "project",
+            "project__portal",
+            "created_by",
+            "created_by__portal",
+            "working_by",
         )
         if self.action == "list":
             qs = qs.annotate(
@@ -467,6 +476,13 @@ class TaskViewSet(viewsets.ModelViewSet):
             is_locally_paused=locally_paused,
         )
 
+        if task.status == Task.Status.DONE and (
+            task.working_started_at is not None or task.working_by_id is not None
+        ):
+            task.working_by = None
+            task.working_started_at = None
+            task.save(update_fields=["working_by", "working_started_at", "updated_at"])
+
         if self.request.user.is_agency and old_status != task.status:
             author = self.request.user.bitrix_user
             # Close leftover live timers (legacy). Bitrix учёта is pushed below /
@@ -543,6 +559,65 @@ class TaskViewSet(viewsets.ModelViewSet):
             note=note,
         )
         publish_task_event(task, kind="task_update")
+        task.refresh_from_db()
+        return Response(TaskSerializer(task, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="working/start")
+    def working_start(self, request, pk=None):
+        """Mark live presence «работаю прямо сейчас» (agency only)."""
+        from django.utils import timezone
+
+        if not request.user.is_agency:
+            raise PermissionDenied("Only agency can set working presence")
+        task = self.get_object()
+        if not can_access_client_portal(request.user, task.project.portal):
+            raise PermissionDenied("No access")
+        if task.status == Task.Status.DONE:
+            return Response(
+                {"detail": "Нельзя отметить работу над завершённой задачей"},
+                status=400,
+            )
+        author = request.user.bitrix_user
+        if not author:
+            return Response({"detail": "Пользователь не найден"}, status=400)
+
+        now = timezone.now()
+        # One active presence per agency user: clear other tasks first.
+        others = list(
+            Task.objects.filter(working_by=author, working_started_at__isnull=False)
+            .exclude(pk=task.pk)
+            .select_related("project", "project__portal")
+        )
+        if others:
+            Task.objects.filter(pk__in=[t.pk for t in others]).update(
+                working_by=None,
+                working_started_at=None,
+            )
+            for other in others:
+                other.working_by = None
+                other.working_started_at = None
+                publish_task_event(other, kind="task_update")
+
+        task.working_by = author
+        task.working_started_at = now
+        task.save(update_fields=["working_by", "working_started_at", "updated_at"])
+        publish_task_event(task, kind="task_update")
+        task.refresh_from_db()
+        return Response(TaskSerializer(task, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="working/stop")
+    def working_stop(self, request, pk=None):
+        """Clear live presence «работаю прямо сейчас» (agency only)."""
+        if not request.user.is_agency:
+            raise PermissionDenied("Only agency can clear working presence")
+        task = self.get_object()
+        if not can_access_client_portal(request.user, task.project.portal):
+            raise PermissionDenied("No access")
+        if task.working_started_at is not None or task.working_by_id is not None:
+            task.working_by = None
+            task.working_started_at = None
+            task.save(update_fields=["working_by", "working_started_at", "updated_at"])
+            publish_task_event(task, kind="task_update")
         task.refresh_from_db()
         return Response(TaskSerializer(task, context={"request": request}).data)
 
