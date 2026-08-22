@@ -314,7 +314,40 @@ class ProjectViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("No access to this portal")
         if self.request.user.is_client:
             raise PermissionDenied("Клиент не может удалять проекты")
+        from board.deletion import project_is_app_deletable
+        from portals.bitrix import BitrixClient
+
+        if not project_is_app_deletable(instance):
+            raise ValidationError(
+                {"detail": "Можно удалить только пустой проект без задач"}
+            )
+        bitrix_id = (instance.bitrix_task_id or "").strip()
+        portal_id = instance.portal_id
+        project_id = instance.id
+        agency = (
+            PortalLink.objects.filter(client_portal_id=portal_id)
+            .select_related("agency_portal")
+            .first()
+        )
+        agency_portal = agency.agency_portal if agency else None
         instance.delete()
+        publish_portal_event(
+            portal_id,
+            {
+                "kind": "ontaskdelete",
+                "deleted": "project",
+                "project_id": project_id,
+            },
+        )
+        if bitrix_id and agency_portal and agency_portal.access_token:
+            try:
+                BitrixClient(agency_portal).delete_task(bitrix_id)
+            except Exception:
+                logger.exception(
+                    "Bitrix project delete failed project=%s bitrix=%s",
+                    project_id,
+                    bitrix_id,
+                )
 
 
 def default_task_board_ordering():
@@ -519,7 +552,60 @@ class TaskViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         if not can_access_client_portal(self.request.user, instance.project.portal):
             raise PermissionDenied("No access")
+        if not self.request.user.is_agency:
+            raise PermissionDenied("Удалять задачи может только агентство")
+        from board.deletion import task_is_app_deletable
+        from portals.bitrix import BitrixClient
+
+        if not task_is_app_deletable(instance):
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Можно удалить только незавершённую задачу без описания, "
+                        "комментариев, файлов, срока и учёта времени"
+                    )
+                }
+            )
+        agency_bx = (instance.agency_bitrix_task_id or "").strip()
+        client_bx = (instance.bitrix_task_id or "").strip()
+        portal_id = instance.project.portal_id
+        project_id = instance.project_id
+        task_id = instance.id
+        agency = (
+            PortalLink.objects.filter(client_portal_id=portal_id)
+            .select_related("agency_portal")
+            .first()
+        )
+        agency_portal = agency.agency_portal if agency else None
         instance.delete()
+        publish_portal_event(
+            portal_id,
+            {
+                "kind": "ontaskdelete",
+                "deleted": "task",
+                "task_id": task_id,
+                "project_id": project_id,
+            },
+        )
+        if agency_bx and agency_portal and agency_portal.access_token:
+            try:
+                BitrixClient(agency_portal).delete_task(agency_bx)
+            except Exception:
+                logger.exception(
+                    "Bitrix task delete failed task=%s bitrix=%s", task_id, agency_bx
+                )
+        # Legacy client Bitrix copy (rare)
+        if client_bx:
+            try:
+                client_portal = Portal.objects.filter(pk=portal_id).first()
+                if client_portal and client_portal.access_token:
+                    BitrixClient(client_portal).delete_task(client_bx)
+            except Exception:
+                logger.exception(
+                    "Bitrix client task delete failed task=%s bitrix=%s",
+                    task_id,
+                    client_bx,
+                )
 
     @action(detail=True, methods=["post"], url_path="time")
     def add_time(self, request, pk=None):

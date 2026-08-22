@@ -35,6 +35,7 @@ type Props = {
   onToggleWorking?: () => void;
   /** IANA zone for due display / picker (agency → Moscow). */
   dueTimeZone?: string;
+  onDelete?: () => void;
 };
 
 export function TaskSummaryCard({
@@ -63,6 +64,7 @@ export function TaskSummaryCard({
   onSetTime,
   onToggleWorking,
   dueTimeZone = "Europe/Moscow",
+  onDelete,
 }: Props) {
   const important = Boolean(task.is_important);
   const isWorking = Boolean(task.is_working);
@@ -276,6 +278,16 @@ export function TaskSummaryCard({
               </button>
             </>
           )}
+          {task.can_delete && onDelete ? (
+            <button
+              type="button"
+              className="btn btn-ghost task-delete-btn"
+              disabled={saveBusy}
+              onClick={onDelete}
+            >
+              Удалить задачу
+            </button>
+          ) : null}
         </div>
       ) : null}
     </aside>

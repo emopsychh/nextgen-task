@@ -258,6 +258,7 @@ class TaskSerializer(serializers.ModelSerializer):
     is_working = serializers.SerializerMethodField()
     working_by_name = serializers.SerializerMethodField()
     due_timezone = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
     due_date = TaskDueDateField(required=False, allow_null=True)
 
     class Meta:
@@ -292,6 +293,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "working_started_at",
             "working_by_name",
             "due_timezone",
+            "can_delete",
             "created_at",
             "updated_at",
         )
@@ -312,6 +314,7 @@ class TaskSerializer(serializers.ModelSerializer):
             "working_started_at",
             "working_by_name",
             "due_timezone",
+            "can_delete",
             "created_at",
             "updated_at",
         )
@@ -372,6 +375,14 @@ class TaskSerializer(serializers.ModelSerializer):
         if portal is None:
             return DEFAULT_PORTAL_TZ
         return (portal.timezone or "").strip() or DEFAULT_PORTAL_TZ
+
+    def get_can_delete(self, obj):
+        from board.deletion import task_is_app_deletable
+
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "is_agency", False):
+            return False
+        return task_is_app_deletable(obj)
 
     def _deal_binding(self, obj):
         cache = self.context.setdefault("_deal_binding_by_portal", {})
@@ -434,6 +445,7 @@ class TaskListSerializer(serializers.ModelSerializer):
     is_working = serializers.SerializerMethodField()
     working_by_name = serializers.SerializerMethodField()
     due_timezone = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
     due_date = TaskDueDateField(required=False, allow_null=True)
 
     class Meta:
@@ -459,6 +471,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             "is_working",
             "working_started_at",
             "working_by_name",
+            "can_delete",
             "created_at",
             "updated_at",
         )
@@ -501,6 +514,14 @@ class TaskListSerializer(serializers.ModelSerializer):
             return DEFAULT_PORTAL_TZ
         return (portal.timezone or "").strip() or DEFAULT_PORTAL_TZ
 
+    def get_can_delete(self, obj):
+        from board.deletion import task_is_app_deletable
+
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "is_agency", False):
+            return False
+        return task_is_app_deletable(obj)
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["title"] = _clean_task_title(instance)
@@ -511,6 +532,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     tasks_count = serializers.SerializerMethodField()
     done_count = serializers.SerializerMethodField()
     has_active_work = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
     portal_name = serializers.CharField(source="portal.name", read_only=True)
 
     class Meta:
@@ -527,6 +549,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "tasks_count",
             "done_count",
             "has_active_work",
+            "can_delete",
             "created_at",
             "updated_at",
         )
@@ -535,6 +558,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "bitrix_task_id",
             "bitrix_group_id",
             "has_active_work",
+            "can_delete",
             "created_at",
             "updated_at",
         )
@@ -556,6 +580,17 @@ class ProjectSerializer(serializers.ModelSerializer):
         if annotated is not None:
             return bool(annotated)
         return obj.tasks.filter(working_started_at__isnull=False).exists()
+
+    def get_can_delete(self, obj):
+        from board.deletion import project_is_app_deletable
+
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "is_agency", False):
+            return False
+        annotated = getattr(obj, "_tasks_count", None)
+        if annotated is not None:
+            return int(annotated) == 0
+        return project_is_app_deletable(obj)
 
     def validate_portal(self, portal: Portal):
         request = self.context.get("request")

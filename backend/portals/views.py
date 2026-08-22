@@ -1053,18 +1053,38 @@ def _unflatten_bitrix(flat: dict) -> dict:
 def _bitrix_event_task_id(data: dict) -> str:
     if not isinstance(data, dict):
         return ""
-    after = data.get("FIELDS_AFTER") or data.get("fields_after") or {}
-    if isinstance(after, dict):
-        tid = after.get("ID") or after.get("id") or after.get("TASK_ID") or after.get("taskId")
-        if tid not in (None, "", "0"):
-            return str(tid)
-    before = data.get("FIELDS_BEFORE") or data.get("fields_before") or {}
-    if isinstance(before, dict):
-        tid = before.get("ID") or before.get("id") or before.get("TASK_ID")
-        if tid not in (None, "", "0"):
-            return str(tid)
-    tid = data.get("ID") or data.get("id") or data.get("TASK_ID") or data.get("taskId")
-    return str(tid) if tid not in (None, "", "0") else ""
+
+    def _from_map(obj) -> str:
+        if not isinstance(obj, dict):
+            return ""
+        for key in (
+            "ID",
+            "id",
+            "TASK_ID",
+            "task_id",
+            "taskId",
+            "TASKID",
+        ):
+            tid = obj.get(key)
+            if tid not in (None, "", "0"):
+                return str(tid)
+        return ""
+
+    # OnTaskDelete often only has FIELDS_BEFORE; prefer AFTER then BEFORE then root.
+    for key in (
+        "FIELDS_AFTER",
+        "fields_after",
+        "FIELDS_BEFORE",
+        "fields_before",
+        "FIELDS",
+        "fields",
+        "data",
+        "DATA",
+    ):
+        tid = _from_map(data.get(key))
+        if tid:
+            return tid
+    return _from_map(data)
 
 
 @csrf_exempt

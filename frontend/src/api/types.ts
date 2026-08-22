@@ -37,6 +37,7 @@ export type Project = {
   tasks_count: number;
   done_count: number;
   has_active_work?: boolean;
+  can_delete?: boolean;
   created_at?: string;
   updated_at?: string;
 };
@@ -116,6 +117,7 @@ export type Task = {
   working_started_at?: string | null;
   working_by_name?: string | null;
   due_timezone?: string | null;
+  can_delete?: boolean;
   created_at: string;
   updated_at: string;
 };

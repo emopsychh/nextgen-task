@@ -100,11 +100,14 @@ export function ProjectTasks() {
     return list.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)));
   }
 
-  /** Replace page-1 rows in place; keep any extra pages already scrolled into view. */
+  /** Refresh page-1; drop deleted page-1 rows (do not keep ghosts from prev). */
   function mergePage1(prev: Task[], page1: Task[]): Task[] {
+    if (loadedPagesRef.current <= 1) {
+      return dedupeById(page1);
+    }
     const page1Ids = new Set(page1.map((t) => t.id));
-    const rest = prev.filter((t) => !page1Ids.has(t.id));
-    return dedupeById([...page1, ...rest]);
+    const older = prev.slice(page1.length).filter((t) => !page1Ids.has(t.id));
+    return dedupeById([...page1, ...older]);
   }
 
   function cacheKeyParts(): [number, string, string] | null {

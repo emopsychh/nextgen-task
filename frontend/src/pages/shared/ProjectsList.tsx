@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
@@ -45,6 +45,7 @@ export function ProjectsList() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [enteringId, setEnteringId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [title, setTitle] = useState("Проекты");
   const { isUnseen, seedIfEmpty } = useSeenProjects(portalId);
 
@@ -140,6 +141,26 @@ export function ProjectsList() {
     }
   }
 
+  async function deleteProject(project: Project, e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!token || !project.can_delete || deletingId) return;
+    if (!window.confirm(`Удалить пустой проект «${project.name}»?`)) return;
+    setDeletingId(project.id);
+    setError(null);
+    try {
+      await api(`/api/projects/${project.id}/`, { method: "DELETE" }, token);
+      setProjects((prev) => prev.filter((p) => p.id !== project.id));
+      toast.show("Проект удалён");
+      window.dispatchEvent(new Event("projects-updated"));
+      void load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось удалить проект");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   if (!portalId) {
     return (
       <div className="tasks-page">
@@ -221,7 +242,7 @@ export function ProjectsList() {
             const { done, total, pct } = projectProgress(p);
             const unseen = isUnseen(p.id);
             return (
-              <li key={p.id}>
+              <li key={p.id} className="projects-hub-item">
                 <Link
                   to={`/projects/${p.id}`}
                   className={`projects-hub-card${enteringId === p.id ? " is-entering" : ""}${unseen ? " is-new" : ""}`}
@@ -242,6 +263,17 @@ export function ProjectsList() {
                     <span style={{ width: `${pct}%` }} />
                   </span>
                 </Link>
+                {isAgency && p.can_delete ? (
+                  <button
+                    type="button"
+                    className="projects-hub-delete btn btn-ghost"
+                    disabled={deletingId === p.id}
+                    onClick={(ev) => void deleteProject(p, ev)}
+                    title="Удалить пустой проект"
+                  >
+                    {deletingId === p.id ? "Удаляем…" : "Удалить"}
+                  </button>
+                ) : null}
               </li>
             );
           })}

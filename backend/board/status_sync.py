@@ -320,13 +320,37 @@ def resolve_all_bitrix_task_sources(task) -> list[tuple]:
 
 
 def find_local_task_for_bitrix(*, portal, bitrix_task_id: str):
-    """Match local task by client or agency Bitrix id for this portal."""
+    """Match local task by agency or client Bitrix id for this portal.
+
+    Agency events must resolve ``agency_bitrix_task_id`` first — that is the
+    id managers delete in the company portal.
+    """
     from board.models import Task
+    from portals.models import Portal, PortalLink
 
     bitrix_task_id = str(bitrix_task_id)
     qs = Task.objects.select_related("project", "project__portal")
 
-    # Client portal owns project.portal
+    is_agency = getattr(portal, "role", None) == Portal.Role.AGENCY
+    client_ids: list[int] = []
+    if is_agency:
+        client_ids = list(
+            PortalLink.objects.filter(agency_portal=portal).values_list(
+                "client_portal_id", flat=True
+            )
+        )
+        agency_hit = qs.filter(
+            agency_bitrix_task_id=bitrix_task_id,
+            project__portal_id__in=client_ids,
+        ).first()
+        if agency_hit:
+            return agency_hit
+        # Global agency id (covers missing PortalLink)
+        agency_any = qs.filter(agency_bitrix_task_id=bitrix_task_id).first()
+        if agency_any:
+            return agency_any
+
+    # Client portal owns project.portal — or legacy bitrix_task_id on client copy
     client_hit = qs.filter(
         bitrix_task_id=bitrix_task_id,
         project__portal=portal,
@@ -334,22 +358,13 @@ def find_local_task_for_bitrix(*, portal, bitrix_task_id: str):
     if client_hit:
         return client_hit
 
-    # Agency copy: agency_bitrix_task_id on a client project linked to this agency
-    from portals.models import PortalLink
+    if not is_agency:
+        # Client event: still try agency id in case of mis-routed webhook
+        agency_hit = qs.filter(agency_bitrix_task_id=bitrix_task_id).first()
+        if agency_hit:
+            return agency_hit
 
-    client_ids = list(
-        PortalLink.objects.filter(agency_portal=portal).values_list(
-            "client_portal_id", flat=True
-        )
-    )
-    agency_hit = qs.filter(
-        agency_bitrix_task_id=bitrix_task_id,
-        project__portal_id__in=client_ids,
-    ).first()
-    if agency_hit:
-        return agency_hit
-
-    # Last resort: unique match by either id (covers mis-linked portals)
+    # Last resort: unique match by either id
     return (
         qs.filter(agency_bitrix_task_id=bitrix_task_id).first()
         or qs.filter(bitrix_task_id=bitrix_task_id).first()
@@ -919,6 +934,64 @@ def _inbound_work_status(task) -> str | None:
     return None
 
 
+def _bitrix_task_missing(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "not found",
+            "task not found",
+            "не найден",
+            "не найдена",
+            "не существует",
+            "does not exist",
+            "wrong task id",
+        )
+    )
+
+
+def _delete_local_if_agency_bitrix_gone(task) -> bool:
+    """If the agency Bitrix subtask is gone, remove the local task (missed webhook)."""
+    sources = resolve_all_bitrix_task_sources(task)
+    if not sources:
+        return False
+    portal, bitrix_id = sources[0]
+    try:
+        data = BitrixClient(portal).get_task(bitrix_id) or {}
+        if data:
+            return False
+        # Empty payload is ambiguous — do not delete on soft miss
+        return False
+    except BitrixAPIError as exc:
+        if not _bitrix_task_missing(exc):
+            return False
+
+    client_portal_id = task.project.portal_id
+    project_id = task.project_id
+    task_id = task.id
+    task.delete()
+    logger.info(
+        "pull: agency Bitrix task gone → deleted local task=%s bitrix=%s",
+        task_id,
+        bitrix_id,
+    )
+    try:
+        from board.realtime import publish_portal_event
+
+        publish_portal_event(
+            client_portal_id,
+            {
+                "kind": "ontaskdelete",
+                "deleted": "task",
+                "task_id": task_id,
+                "project_id": project_id,
+            },
+        )
+    except Exception:
+        logger.exception("publish ontaskdelete after pull-delete failed task=%s", task_id)
+    return True
+
+
 def pull_task_status_from_bitrix(task) -> bool:
     """
     Fetch Bitrix status + deadline + title/description from agency+client copies.
@@ -929,6 +1002,9 @@ def pull_task_status_from_bitrix(task) -> bool:
     status, data, portal, bitrix_id = resolve_inbound_status_from_sources(task)
     work = status if status in ("in_progress", "done") else None
     if not data or not portal or not bitrix_id:
+        # Safety net: agency Bitrix task gone → remove local shell
+        if _delete_local_if_agency_bitrix_gone(task):
+            return True
         # Still apply work status if we could read it from a partial scan
         if work and task.status != work:
             prev = task.status

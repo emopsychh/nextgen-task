@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
@@ -56,6 +56,7 @@ type CachedThread = {
 
 export function TaskDetail() {
   const { taskId } = useParams();
+  const navigate = useNavigate();
   const { token, portal, user } = useAuth();
   const canManage = Boolean(token);
   const canChangeStatus = portal?.role === "agency";
@@ -478,6 +479,29 @@ export function TaskDetail() {
     }
   }
 
+  async function deleteTask() {
+    if (!token || !task || !task.can_delete) return;
+    if (
+      !window.confirm(
+        `Удалить задачу «${task.title}»? Её можно удалить только пока в ней нет описания, комментариев, файлов и учёта времени.`
+      )
+    ) {
+      return;
+    }
+    setSaveBusy(true);
+    setError(null);
+    const projectId = task.project;
+    try {
+      await api(`/api/tasks/${task.id}/`, { method: "DELETE" }, token);
+      toast.show("Задача удалена");
+      window.dispatchEvent(new Event("projects-updated"));
+      navigate(`/projects/${projectId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось удалить задачу");
+      setSaveBusy(false);
+    }
+  }
+
   async function commitOutcome() {
     if (!task || !canManage) return;
     const outcome = draftOutcome;
@@ -773,6 +797,7 @@ export function TaskDetail() {
           onSetTime={setTime}
           onToggleWorking={() => void toggleWorking()}
           dueTimeZone={dueTz}
+          onDelete={() => void deleteTask()}
         />
 
         <section className="messenger task-chat-pane">
