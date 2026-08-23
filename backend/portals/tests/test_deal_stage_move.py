@@ -62,7 +62,7 @@ class DealStageMoveOnReportTests(TestCase):
         self.agency_user = make_user(self.agency, bitrix_id="a9")
         self.client_user = make_user(self.client_portal, bitrix_id="c9")
         self.project = make_project(self.client_portal)
-        make_task(self.project, title="T", status="done", outcome="ok")
+        self.task = make_task(self.project, title="T", status="done", outcome="ok")
         self.binding = PortalDealBinding.objects.create(
             agency_portal=self.agency,
             client_portal=self.client_portal,
@@ -70,6 +70,7 @@ class DealStageMoveOnReportTests(TestCase):
             deal_title="Accompany",
             category_id="5",
             stage_id="C5:NEW",
+            remaining_hours=0,
             is_active=True,
         )
 
@@ -112,17 +113,26 @@ class DealStageMoveOnReportTests(TestCase):
     @patch("portals.deal_stage_move.schedule_deal_stage_move")
     def test_send_and_accept_schedule_moves(self, schedule_mock):
         schedule_mock.return_value = None
-        report = WorkReport.objects.create(
-            portal=self.client_portal,
-            project=self.project,
-            status=WorkReport.Status.DRAFT,
-            created_by=self.agency_user,
-        )
+        from board.models import WorkReportLine
+
+        report = self.binding.work_report
+        report.project = self.project
+        report.created_by = self.agency_user
+        report.save(update_fields=["project", "created_by", "updated_at"])
         report.projects.set([self.project])
+        WorkReportLine.objects.create(report=report, task=self.task, is_reserved=True)
 
         send_to_client(report, self.agency_user)
-        schedule_mock.assert_called_with(self.client_portal.id, STAGE_REPORT_REVIEW)
+        schedule_mock.assert_called_with(
+            self.client_portal.id,
+            STAGE_REPORT_REVIEW,
+            binding_id=self.binding.id,
+        )
 
         report.refresh_from_db()
         accept_report(report, self.client_user)
-        schedule_mock.assert_called_with(self.client_portal.id, STAGE_ACT_SIGNING)
+        schedule_mock.assert_called_with(
+            self.client_portal.id,
+            STAGE_ACT_SIGNING,
+            binding_id=self.binding.id,
+        )

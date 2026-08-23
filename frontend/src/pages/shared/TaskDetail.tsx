@@ -456,29 +456,6 @@ export function TaskDetail() {
     }
   }
 
-  async function toggleWorking() {
-    if (!token || !task || !canChangeStatus || task.status === "done") return;
-    setSaveBusy(true);
-    setError(null);
-    const starting = !task.is_working;
-    try {
-      const updated = await api<Task>(
-        `/api/tasks/${task.id}/working/${starting ? "start" : "stop"}/`,
-        { method: "POST" },
-        token
-      );
-      setTask(updated);
-      toast.show(starting ? "Клиент видит: работаете сейчас" : "Сигнал снят");
-      window.dispatchEvent(new Event("projects-updated"));
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Не удалось обновить сигнал работы"
-      );
-    } finally {
-      setSaveBusy(false);
-    }
-  }
-
   async function deleteTask() {
     if (!token || !task || !task.can_delete) return;
     if (
@@ -519,7 +496,14 @@ export function TaskDetail() {
     // back over Complete/Pause before the PATCH response arrives.
     const prev = task;
     const optimisticAt = new Date().toISOString();
-    setTask({ ...task, status, updated_at: optimisticAt });
+    setTask({
+      ...task,
+      status,
+      is_working: status === "in_progress",
+      working_started_at: status === "in_progress" ? optimisticAt : null,
+      working_by_name: status === "in_progress" ? task.working_by_name : null,
+      updated_at: optimisticAt,
+    });
     setSaveBusy(true);
     setError(null);
     try {
@@ -541,7 +525,7 @@ export function TaskDetail() {
     }
   }
 
-  async function completeWithOutcome(outcome: string) {
+  async function completeWithOutcome(outcome: string, files: File[] = []) {
     if (!token || !task || !canChangeStatus) return;
     const trimmed = outcome.trim();
     if (!trimmed) {
@@ -555,6 +539,9 @@ export function TaskDetail() {
     setSaveBusy(true);
     setError(null);
     try {
+      for (const file of files) {
+        await uploadAttachment(file, { taskId: task.id });
+      }
       const updated = await api<Task>(
         `/api/tasks/${task.id}/`,
         { method: "PATCH", body: JSON.stringify({ status: "done", outcome: trimmed }) },
@@ -590,6 +577,29 @@ export function TaskDetail() {
       { is_important: next },
       next ? "Задача отмечена как важная" : "Отметка «Важная» снята"
     );
+  }
+
+  async function toggleAwaitingClient() {
+    if (!token || !task || !canChangeStatus) return;
+    const next = !task.awaiting_client;
+    setSaveBusy(true);
+    setError(null);
+    try {
+      const updated = await api<Task>(
+        `/api/tasks/${task.id}/awaiting-client/${next ? "start" : "stop"}/`,
+        { method: "POST" },
+        token
+      );
+      setTask(updated);
+      toast.show(
+        next ? "Ожидаем ответ от клиента" : "Ожидание ответа снято"
+      );
+      window.dispatchEvent(new Event("projects-updated"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось обновить ожидание ответа");
+    } finally {
+      setSaveBusy(false);
+    }
   }
 
   function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
@@ -716,15 +726,15 @@ export function TaskDetail() {
     );
   }
 
-  const due = dueMeta(task.due_date, task.status);
-  const overdue = isTaskOverdue(task.due_date, task.status);
-  const canSend = Boolean(comment.trim() || pendingFiles.length) && !sendBusy;
-  const creator = task.created_by_name || "Команда";
   const dueTz = displayTimeZone({
     role: portal?.role,
     portalTimezone: portal?.timezone,
     taskTimezone: task.due_timezone,
   });
+  const due = dueMeta(task.due_date, task.status, dueTz);
+  const overdue = isTaskOverdue(task.due_date, task.status);
+  const canSend = Boolean(comment.trim() || pendingFiles.length) && !sendBusy;
+  const creator = task.created_by_name || "Команда";
 
   return (
     <div className="task-detail-page chat-mode">
@@ -767,7 +777,7 @@ export function TaskDetail() {
         initialOutcome={task.outcome || ""}
         busy={saveBusy}
         onCancel={() => !saveBusy && setCompleteOpen(false)}
-        onConfirm={(outcome) => void completeWithOutcome(outcome)}
+        onConfirm={(outcome, files) => void completeWithOutcome(outcome, files)}
       />
 
       <div className="task-bitrix">
@@ -790,12 +800,14 @@ export function TaskDetail() {
           onRequestComplete={() => setCompleteOpen(true)}
           onSetDueDate={(iso) => void setDueDate(iso)}
           onToggleImportant={() => void toggleImportant()}
+          onToggleAwaitingClient={
+            canChangeStatus ? () => void toggleAwaitingClient() : undefined
+          }
           draftOutcome={draftOutcome}
           onDraftOutcome={setDraftOutcome}
           onCommitOutcome={() => void commitOutcome()}
           canAddTime={canChangeStatus}
           onSetTime={setTime}
-          onToggleWorking={() => void toggleWorking()}
           dueTimeZone={dueTz}
           onDelete={() => void deleteTask()}
         />

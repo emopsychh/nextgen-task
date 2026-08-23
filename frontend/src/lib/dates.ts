@@ -1,5 +1,7 @@
 /** Due date / datetime helpers. Values are ISO strings (date or datetime). */
 
+import { formatInTimeZone, viewerTimeZone } from "./timezone";
+
 export function toISODate(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -86,13 +88,36 @@ export function parseISODate(iso: string): Date {
   return parseDue(text);
 }
 
-export function formatRuDate(iso: string): string {
+export function formatRuDate(iso: string, timeZone = viewerTimeZone()): string {
   const d = parseDue(iso);
   if (!isValidDate(d)) return "";
-  return d.toLocaleDateString("ru-RU", {
+  return formatInTimeZone(d, timeZone, {
     day: "numeric",
     month: "short",
   });
+}
+
+/** Deadline display: always date + time, e.g. «23 авг., 18:00». */
+export function formatRuDateTime(iso: string, timeZone = viewerTimeZone()): string {
+  const d = parseDue(iso);
+  if (!isValidDate(d)) return "";
+  const date = formatInTimeZone(d, timeZone, {
+    day: "numeric",
+    month: "short",
+  });
+  const time = formatInTimeZone(d, timeZone, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${date}, ${time}`;
+}
+
+export function formatRuDateTimeOrDash(
+  iso: string | null | undefined,
+  timeZone = viewerTimeZone()
+): string {
+  if (!iso) return "—";
+  return formatRuDateTime(iso, timeZone) || "—";
 }
 
 export function formatRuDateLong(iso: string): string {
@@ -124,14 +149,15 @@ function pluralDays(n: number): string {
 
 export function dueMeta(
   due: string | null | undefined,
-  status: "todo" | "in_progress" | "done" = "todo"
+  status: "todo" | "in_progress" | "done" = "todo",
+  timeZone = viewerTimeZone()
 ): { label: string; tone: DueTone; detail?: string } {
   if (status === "done") {
-    const detail = due ? formatRuDate(due) : undefined;
+    const detail = due ? formatRuDateTime(due, timeZone) : undefined;
     return {
-      label: "Готово",
+      label: detail ? "Выполнено" : "Без срока",
       tone: "due-done",
-      detail: detail || undefined,
+      detail,
     };
   }
   if (!due) return { label: "Без срока", tone: "due-none" };
@@ -149,7 +175,7 @@ export function dueMeta(
     return { label: "Без срока", tone: "due-none" };
   }
 
-  const detail = formatRuDate(due) || undefined;
+  const detail = formatRuDateTime(due, timeZone) || undefined;
 
   if (target.getTime() < now.getTime()) {
     const n = Math.max(1, Math.abs(days));

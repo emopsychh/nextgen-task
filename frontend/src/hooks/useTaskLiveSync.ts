@@ -18,6 +18,7 @@ function fingerprint(task: Task): string {
     task.description || "",
     task.outcome || "",
     task.due_date || "",
+    task.completed_at || "",
     task.comments_count ?? 0,
     task.last_comment_id ?? 0,
     task.files_count ?? 0,
@@ -29,6 +30,9 @@ function fingerprint(task: Task): string {
     task.working_started_at || "",
     task.working_by_name || "",
     task.due_timezone || "",
+    task.awaiting_client ? "1" : "0",
+    task.awaiting_client_at || "",
+    task.outcome_seen_at || "",
   ].join("|");
 }
 

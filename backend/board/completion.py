@@ -80,6 +80,13 @@ def finalize_task_completion(task, *, author=None) -> dict:
     except Exception:
         pass
 
+    try:
+        from board.reports import attach_completed_task_to_report
+
+        attach_completed_task_to_report(task)
+    except Exception:
+        pass
+
     return {
         "elapsed_sync_enqueued": elapsed_sync_enqueued,
         "completion_comment_id": comment_id,

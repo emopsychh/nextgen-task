@@ -1,5 +1,5 @@
 import { isValidDate, parseDue } from "./dates";
-import { formatInTimeZone } from "./timezone";
+import { formatInTimeZone, viewerTimeZone } from "./timezone";
 
 export function formatClock(iso: string): string {
   return new Date(iso).toLocaleTimeString("ru-RU", {
@@ -21,7 +21,7 @@ export function formatDayLabel(iso: string): string {
 
 export function formatDueFull(
   iso: string | null,
-  timeZone: string = "Europe/Moscow"
+  timeZone: string = viewerTimeZone()
 ): string {
   if (!iso) return "Не задан";
   const d = parseDue(iso);
@@ -31,8 +31,6 @@ export function formatDueFull(
     month: "2-digit",
     year: "numeric",
   });
-  const hasTime = /T|\d{2}:\d{2}/.test(iso);
-  if (!hasTime) return date;
   const time = formatInTimeZone(d, timeZone, {
     hour: "2-digit",
     minute: "2-digit",
@@ -106,8 +104,42 @@ export function formatPackageHours(value: number | string | null | undefined): s
   if (minutes > 0) {
     parts.push(`${minutes} ${pluralRu(minutes, "минута", "минуты", "минут")}`);
   }
-  if (parts.length === 2) return `${parts[0]} и ${parts[1]}`;
+  if (parts.length === 2) return `${parts[0]} ${parts[1]}`;
   return parts[0];
+}
+
+/** e.g. «7 ч 50 мин» */
+export function formatPackageHoursShort(value: number | string | null | undefined): string {
+  if (value == null || value === "") return "—";
+  const n = typeof value === "number" ? value : Number(String(value).replace(",", "."));
+  if (!Number.isFinite(n)) return "—";
+  const totalMinutes = Math.max(0, Math.round(n * 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0 && minutes === 0) return "0 мин";
+  if (hours > 0 && minutes > 0) return `${hours} ч ${minutes} мин`;
+  if (hours > 0) return `${hours} ч`;
+  return `${minutes} мин`;
+}
+
+/** e.g. «30 авг.» */
+export function formatDayShort(iso: string | null | undefined, timeZone = viewerTimeZone()): string {
+  if (!iso) return "";
+  const d = parseDue(iso);
+  if (!isValidDate(d)) return "";
+  return formatInTimeZone(d, timeZone, { day: "numeric", month: "short" });
+}
+
+/** e.g. «Обновлено сегодня в 11:40» */
+export function formatUpdatedLabel(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (!isValidDate(d)) return null;
+  const day = formatDayLabel(iso);
+  const time = formatClock(iso);
+  if (day === "сегодня") return `Обновлено сегодня в ${time}`;
+  if (day === "вчера") return `Обновлено вчера в ${time}`;
+  return `Обновлено ${day} в ${time}`;
 }
 
 export function asPackageHours(value: number | string | null | undefined): number | null {

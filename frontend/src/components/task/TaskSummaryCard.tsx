@@ -3,6 +3,7 @@ import type { Task, TaskStatus } from "../../api/types";
 import { DueDatePicker } from "../DueDatePicker";
 import { FlameIcon } from "../icons";
 import { formatDateTime, formatDueFull } from "../../lib/format";
+import { formatRuDateTime } from "../../lib/dates";
 import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import type { DueTone } from "../../lib/dates";
 import { AutoGrowTextarea } from "./AutoGrowTextarea";
@@ -27,13 +28,13 @@ type Props = {
   onRequestComplete: () => void;
   onSetDueDate: (iso: string) => void;
   onToggleImportant: () => void;
+  onToggleAwaitingClient?: () => void;
   draftOutcome?: string;
   onDraftOutcome?: (value: string) => void;
   onCommitOutcome?: () => void;
   canAddTime?: boolean;
   onSetTime?: (hours: number, minutes: number) => Promise<void> | void;
-  onToggleWorking?: () => void;
-  /** IANA zone for due display / picker (agency → Moscow). */
+  /** IANA zone for due display / picker (defaults to the viewer's timezone). */
   dueTimeZone?: string;
   onDelete?: () => void;
 };
@@ -57,17 +58,18 @@ export function TaskSummaryCard({
   onRequestComplete,
   onSetDueDate,
   onToggleImportant,
+  onToggleAwaitingClient,
   draftOutcome = "",
   onDraftOutcome,
   onCommitOutcome,
   canAddTime = false,
   onSetTime,
-  onToggleWorking,
-  dueTimeZone = "Europe/Moscow",
+  dueTimeZone,
   onDelete,
 }: Props) {
   const important = Boolean(task.is_important);
   const isWorking = Boolean(task.is_working);
+  const awaitingClient = Boolean(task.awaiting_client);
   return (
     <aside
       className={`task-meta-pane${canManage ? " is-editable" : ""}${task.status === "done" ? " is-done" : ""}`}
@@ -125,6 +127,9 @@ export function TaskSummaryCard({
             Сейчас в работе
           </span>
         ) : null}
+        {awaitingClient ? (
+          <span className="task-awaiting-pill">Ожидает ответа</span>
+        ) : null}
         {overdue ? <span className="task-status-pill status-overdue">Опаздывает</span> : null}
       </div>
 
@@ -175,6 +180,16 @@ export function TaskSummaryCard({
             )}
           </dd>
         </div>
+        {task.status === "done" ? (
+          <div className="task-meta-row">
+            <dt>Реализовали</dt>
+            <dd>
+              {task.completed_at
+                ? formatRuDateTime(task.completed_at, dueTimeZone)
+                : "—"}
+            </dd>
+          </div>
+        ) : null}
         <div className="task-meta-row task-meta-row-timer">
           <dt>Время</dt>
           <dd className="task-meta-timer">
@@ -228,16 +243,6 @@ export function TaskSummaryCard({
 
       {canChangeStatus ? (
         <div className="task-meta-actions" role="group" aria-label="Действия со статусом">
-          {task.status !== "done" && onToggleWorking ? (
-            <button
-              type="button"
-              className={`btn ${isWorking ? "btn-accent" : "btn-ghost"}`}
-              disabled={saveBusy}
-              onClick={onToggleWorking}
-            >
-              {isWorking ? "Перестал работать" : "Работаю над задачей"}
-            </button>
-          ) : null}
           {task.status === "todo" && (
             <>
               <button
@@ -264,20 +269,31 @@ export function TaskSummaryCard({
                 type="button"
                 className="btn btn-accent"
                 disabled={saveBusy}
-                onClick={onRequestComplete}
+                onClick={() => onSetStatus("todo")}
               >
-                Завершить
+                Пауза
               </button>
               <button
                 type="button"
                 className="btn btn-ghost"
                 disabled={saveBusy}
-                onClick={() => onSetStatus("todo")}
+                onClick={onRequestComplete}
               >
-                Пауза
+                Завершить
               </button>
             </>
           )}
+          {task.status !== "done" && onToggleAwaitingClient ? (
+            <button
+              type="button"
+              className={`btn task-awaiting-btn${awaitingClient ? " btn-accent" : " btn-ghost"}`}
+              disabled={saveBusy}
+              onClick={onToggleAwaitingClient}
+              aria-pressed={awaitingClient}
+            >
+              {awaitingClient ? "Отменить ожидание ответа" : "Ожидаем ответ от клиента"}
+            </button>
+          ) : null}
           {task.can_delete && onDelete ? (
             <button
               type="button"

@@ -2,14 +2,45 @@
 
 export const AGENCY_DISPLAY_TZ = "Europe/Moscow";
 
-export function displayTimeZone(opts: {
+/** IANA zone of the current browser — specialists and clients sit in different cities. */
+export function viewerTimeZone(): string {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) return tz;
+  } catch {
+    /* ignore */
+  }
+  return AGENCY_DISPLAY_TZ;
+}
+
+export function displayTimeZone(_opts?: {
   role?: string | null;
   portalTimezone?: string | null;
   taskTimezone?: string | null;
 }): string {
-  if (opts.role === "agency") return AGENCY_DISPLAY_TZ;
-  const tz = (opts.taskTimezone || opts.portalTimezone || "").trim();
-  return tz || AGENCY_DISPLAY_TZ;
+  return viewerTimeZone();
+}
+
+export function timeZoneShortName(timeZone: string, at: Date = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat("ru-RU", {
+      timeZone,
+      timeZoneName: "shortOffset",
+    }).formatToParts(at);
+    const name = parts.find((part) => part.type === "timeZoneName")?.value;
+    if (name) return name.replace("GMT", "UTC");
+  } catch {
+    /* shortOffset is missing in some engines */
+  }
+  try {
+    const parts = new Intl.DateTimeFormat("ru-RU", {
+      timeZone,
+      timeZoneName: "short",
+    }).formatToParts(at);
+    return parts.find((part) => part.type === "timeZoneName")?.value || timeZone;
+  } catch {
+    return timeZone;
+  }
 }
 
 type ZonedParts = {

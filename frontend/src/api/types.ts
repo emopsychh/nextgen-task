@@ -38,6 +38,9 @@ export type Project = {
   done_count: number;
   has_active_work?: boolean;
   can_delete?: boolean;
+  due_date?: string | null;
+  total_tracked_seconds?: number;
+  completed_at?: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -118,6 +121,10 @@ export type Task = {
   working_by_name?: string | null;
   due_timezone?: string | null;
   can_delete?: boolean;
+  completed_at?: string | null;
+  awaiting_client?: boolean;
+  awaiting_client_at?: string | null;
+  outcome_seen_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -145,6 +152,12 @@ export type TaskCounts = {
   done: number;
 };
 
+export type ProjectCounts = {
+  all: number;
+  open: number;
+  done: number;
+};
+
 export type TimeEntry = {
   id: number;
   task: number;
@@ -167,6 +180,12 @@ export type WorkReportStatus =
   | "paid"
   | "dismissed";
 
+export type WorkReportTaskFile = {
+  id: number;
+  name: string;
+  url: string;
+};
+
 export type WorkReportTaskRow = {
   id: number;
   title: string;
@@ -174,6 +193,10 @@ export type WorkReportTaskRow = {
   tracked_seconds: number;
   outcome?: string;
   disputed?: boolean;
+  awaiting_client?: boolean;
+  comment?: string;
+  file_name?: string;
+  files?: WorkReportTaskFile[];
 };
 
 export type WorkReportProjectBlock = {
@@ -201,16 +224,42 @@ export type WorkReportDisputeItem = {
 };
 
 export type WorkReportDealHours = {
-  deal_id: string;
-  deal_title: string;
   paid_hours: number | null;
   remaining_hours: number | null;
-} | null;
+  hours_overage?: number | null;
+  hours_overage_source_title?: string;
+  carried_overage_hours?: number | null;
+};
+
+export type WorkReportAvailableTask = {
+  id: number;
+  title: string;
+  status: TaskStatus;
+  tracked_seconds: number;
+  selected: boolean;
+  unavailable: boolean;
+  unavailable_report_id: number | null;
+};
+
+export type WorkReportAvailableProject = {
+  id: number;
+  name: string;
+  tasks: WorkReportAvailableTask[];
+};
+
+export type WorkReportAvailableTasks = {
+  projects: WorkReportAvailableProject[];
+};
 
 export type WorkReport = {
   id: number;
   portal_id: number;
   portal_name?: string;
+  deal_binding_id: number;
+  deal_id: string;
+  deal_title: string;
+  selected_task_ids: number[];
+  tasks_count: number;
   project?: number | null;
   project_ids?: number[];
   project_names?: string[];
@@ -227,7 +276,9 @@ export type WorkReport = {
   is_active: boolean;
   projects_detail?: WorkReportProjectBlock[];
   total_tracked_seconds: number;
-  deal_hours?: WorkReportDealHours;
+  task_tracked_seconds?: number;
+  carried_overage_seconds?: number;
+  deal_hours: WorkReportDealHours;
   events?: WorkReportEvent[];
   dispute_items?: WorkReportDisputeItem[];
   dispute_count?: number;
@@ -318,6 +369,10 @@ export type DealBinding = {
   hours_credit?: string | number | null;
   hours_credit_source_deal_id?: string;
   hours_credit_source_title?: string;
+  hours_overage?: string | number | null;
+  hours_overage_source_deal_id?: string;
+  hours_overage_source_title?: string;
+  hours_overage_applied?: string | number | null;
   bitrix_company_id?: string;
   is_active: boolean;
   created_at: string;

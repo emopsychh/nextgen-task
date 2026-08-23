@@ -1,10 +1,28 @@
 import type { WorkReport, WorkReportStatus } from "../../api/types";
+import { asPackageHours } from "../../lib/format";
+
+/** Report fill comes from closed tasks in the report, not CRM remaining hours. */
+export function reportPackageFill(
+  report: Pick<
+    WorkReport,
+    "deal_hours" | "total_tracked_seconds" | "carried_overage_seconds"
+  >
+) {
+  const paid = asPackageHours(report.deal_hours?.paid_hours);
+  const used = (report.total_tracked_seconds || 0) / 3600;
+  const carried = (report.carried_overage_seconds || 0) / 3600;
+  const leftover = paid != null ? Math.max(0, paid - used) : null;
+  const overage = paid != null ? Math.max(0, used - paid) : 0;
+  const usedPct = paid && paid > 0 ? Math.min(100, (used / paid) * 100) : null;
+  const isFull = leftover != null && leftover <= 1 / 60;
+  return { paid, used, leftover, overage, carried, usedPct, isFull };
+}
 
 export type ReportBucket = "all" | "current" | "review" | "accepted";
 
 export const STATUS_LABEL_RU: Record<WorkReportStatus, string> = {
   draft: "На рассмотрении руководителя",
-  pending_client: "Требует рассмотрения",
+  pending_client: "Требует согласования",
   disputed: "Связь с менеджером",
   accepted: "Согласован",
   paid: "Согласован",
@@ -27,6 +45,16 @@ export const REPORT_BUCKETS: { id: ReportBucket; label: string }[] = [
   { id: "review", label: "У клиента" },
   { id: "accepted", label: "Согласованные" },
 ];
+
+export const CLIENT_REPORT_BUCKETS: { id: ReportBucket; label: string }[] = [
+  { id: "all", label: "Все" },
+  { id: "review", label: "На согласовании" },
+  { id: "accepted", label: "Согласованные" },
+];
+
+export function reportBucketsForRole(isAgency: boolean): { id: ReportBucket; label: string }[] {
+  return isAgency ? REPORT_BUCKETS : CLIENT_REPORT_BUCKETS;
+}
 
 /** Mirrors backend board.reports.BUCKET_STATUSES for client-side badge fallback. */
 export const BUCKET_STATUSES: Record<Exclude<ReportBucket, "all">, WorkReportStatus[]> = {
@@ -53,22 +81,27 @@ export function countsFromReports(
 }
 
 export function reportTitle(
-  r: Pick<WorkReport, "id" | "project_names" | "projects_count">
+  r: Pick<WorkReport, "id" | "deal_title" | "deal_id">
 ): string {
-  const names = r.project_names || [];
-  if (names.length === 0) return `Отчёт №${r.id}`;
-  if (names.length === 1) return names[0];
-  if (names.length === 2) return `${names[0]} и ${names[1]}`;
-  return `${names[0]} и ещё ${names.length - 1}`;
+  return r.deal_title?.trim() || `Сделка №${r.deal_id || r.id}`;
+}
+
+export function reportSheetTitle(
+  r: Pick<WorkReport, "id" | "deal_title" | "deal_id">
+): string {
+  const title = reportTitle(r);
+  return `${title} · сделка №${r.deal_id || r.id}`;
 }
 
 export function reportSubtitle(
-  r: Pick<WorkReport, "project_names" | "projects_count">
+  r: Pick<WorkReport, "tasks_count">
 ): string {
-  const n = r.projects_count || r.project_names?.length || 0;
-  if (n <= 1) return "1 проект";
-  if (n >= 2 && n <= 4) return `${n} проекта`;
-  return `${n} проектов`;
+  const n = r.tasks_count || 0;
+  if (n % 10 === 1 && n % 100 !== 11) return `${n} задача`;
+  if (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14)) {
+    return `${n} задачи`;
+  }
+  return `${n} задач`;
 }
 
 export function reportsListPath(portalId: number | null, isAgency: boolean): string {

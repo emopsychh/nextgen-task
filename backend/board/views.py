@@ -9,7 +9,7 @@ from django.http import FileResponse, Http404, HttpResponse
 from django.utils import timezone
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import MethodNotAllowed, PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -245,12 +245,58 @@ class ProjectViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "description"]
 
     def get_queryset(self):
-        from django.db.models import Count, Exists, OuterRef, Q
+        from django.db.models import (
+            Case,
+            Count,
+            DateTimeField,
+            Exists,
+            F,
+            IntegerField,
+            OuterRef,
+            Q,
+            Subquery,
+            Sum,
+            Value,
+            When,
+        )
+        from django.db.models.functions import Coalesce
 
         ids = accessible_portal_ids(self.request.user)
         active_work = Task.objects.filter(
             project_id=OuterRef("pk"),
-            working_started_at__isnull=False,
+            status=Task.Status.IN_PROGRESS,
+        )
+        open_tasks = Task.objects.filter(project_id=OuterRef("pk")).exclude(
+            status=Task.Status.DONE
+        )
+        nearest_due = (
+            Task.objects.filter(project_id=OuterRef("pk"))
+            .exclude(status=Task.Status.DONE)
+            .exclude(due_date=None)
+            .order_by("due_date")
+            .values("due_date")[:1]
+        )
+        latest_due = (
+            Task.objects.filter(project_id=OuterRef("pk"))
+            .exclude(due_date=None)
+            .order_by("-due_date")
+            .values("due_date")[:1]
+        )
+        latest_completed = (
+            Task.objects.filter(project_id=OuterRef("pk"))
+            .exclude(completed_at=None)
+            .order_by("-completed_at")
+            .values("completed_at")[:1]
+        )
+        tracked = (
+            TimeEntry.objects.filter(
+                task__project_id=OuterRef("pk"),
+                ended_at__isnull=False,
+            )
+            .order_by()
+            .values("task__project_id")
+            .annotate(total=Sum("duration_seconds"))
+            .values("total")[:1]
         )
         return (
             Project.objects.filter(portal_id__in=ids)
@@ -263,7 +309,64 @@ class ProjectViewSet(viewsets.ModelViewSet):
                     distinct=True,
                 ),
                 _has_active_work=Exists(active_work),
+                _due_date=Coalesce(
+                    Subquery(nearest_due, output_field=DateTimeField()),
+                    Subquery(latest_due, output_field=DateTimeField()),
+                ),
+                _tracked_seconds=Coalesce(
+                    Subquery(tracked, output_field=IntegerField()),
+                    0,
+                ),
+                _completed_at=Case(
+                    When(
+                        Exists(open_tasks),
+                        then=Value(None, output_field=DateTimeField()),
+                    ),
+                    default=Subquery(
+                        latest_completed, output_field=DateTimeField()
+                    ),
+                    output_field=DateTimeField(),
+                ),
             )
+            .order_by(
+                Case(
+                    When(
+                        _tasks_count__gt=0,
+                        _tasks_count=F("_done_count"),
+                        then=1,
+                    ),
+                    default=0,
+                    output_field=IntegerField(),
+                ),
+                "name",
+                "id",
+            )
+        )
+
+    def filter_queryset(self, queryset):
+        from django.db.models import F
+
+        qs = super().filter_queryset(queryset)
+        complete = (self.request.query_params.get("complete") or "").strip().lower()
+        if complete in ("1", "true", "yes", "done"):
+            return qs.filter(_tasks_count__gt=0, _tasks_count=F("_done_count"))
+        if complete in ("0", "false", "no", "open"):
+            return qs.exclude(_tasks_count__gt=0, _tasks_count=F("_done_count"))
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="counts")
+    def counts(self, request):
+        from django.db.models import F
+
+        qs = super().filter_queryset(self.get_queryset())
+        all_n = qs.count()
+        done_n = qs.filter(_tasks_count__gt=0, _tasks_count=F("_done_count")).count()
+        return Response(
+            {
+                "all": all_n,
+                "done": done_n,
+                "open": max(0, all_n - done_n),
+            }
         )
 
     def list(self, request, *args, **kwargs):
@@ -375,6 +478,28 @@ def default_task_board_ordering():
     )
 
 
+def set_task_working(task, author):
+    """Mark live presence on this task. Other started tasks stay in work."""
+    from django.utils import timezone
+
+    fields = ["working_by", "updated_at"]
+    task.working_by = author
+    if task.working_started_at is None:
+        task.working_started_at = timezone.now()
+        fields.append("working_started_at")
+    task.save(update_fields=fields)
+
+
+def clear_task_working(task):
+    """Drop live presence on this task if it was set."""
+    if task.working_started_at is None and task.working_by_id is None:
+        return False
+    task.working_by = None
+    task.working_started_at = None
+    task.save(update_fields=["working_by", "working_started_at", "updated_at"])
+    return True
+
+
 class TaskViewSet(viewsets.ModelViewSet):
     permission_classes = [IsPortalAuthenticated]
     filterset_fields = ["project", "status", "sync_status"]
@@ -387,7 +512,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         return TaskSerializer
 
     def get_queryset(self):
-        from django.db.models import Count, IntegerField, Q, Sum, Value
+        from django.db.models import Count, F, IntegerField, Q, Sum, Value
         from django.db.models.functions import Coalesce
 
         ids = accessible_portal_ids(self.request.user)
@@ -415,8 +540,26 @@ class TaskViewSet(viewsets.ModelViewSet):
             qs = qs.filter(project__portal_id=portal_id)
         if self.request.query_params.get("open") in ("1", "true", "yes"):
             qs = qs.exclude(status=Task.Status.DONE)
+        working = self.request.query_params.get("working") in ("1", "true", "yes")
+        if working:
+            qs = qs.filter(status=Task.Status.IN_PROGRESS)
+        attention = self.request.query_params.get("attention") in ("1", "true", "yes")
+        if attention:
+            qs = qs.filter(
+                Q(status=Task.Status.DONE, outcome_seen_at__isnull=True)
+                | Q(awaiting_client_at__isnull=False)
+            )
         if self.action == "list" and not self.request.query_params.get("ordering"):
-            qs = qs.order_by(*default_task_board_ordering())
+            if working:
+                qs = qs.order_by(
+                    F("working_started_at").desc(nulls_last=True),
+                    "-updated_at",
+                    "-id",
+                )
+            elif attention:
+                qs = qs.order_by("-updated_at", "-id")
+            else:
+                qs = qs.order_by(*default_task_board_ordering())
         return qs
 
     def list(self, request, *args, **kwargs):
@@ -444,6 +587,16 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
+        if (
+            request.user.is_client
+            and instance.status == Task.Status.DONE
+            and instance.outcome_seen_at is None
+        ):
+            from django.utils import timezone
+
+            instance.outcome_seen_at = timezone.now()
+            instance.save(update_fields=["outcome_seen_at", "updated_at"])
+            publish_task_event(instance, kind="task_update")
         # Return local DB immediately; slow Bitrix calls run in Celery.
         if request.query_params.get("pull") in ("1", "true", "yes"):
             enqueue_task_pull(instance.id)
@@ -509,20 +662,29 @@ class TaskViewSet(viewsets.ModelViewSet):
             is_locally_paused=locally_paused,
         )
 
-        if task.status == Task.Status.DONE and (
-            task.working_started_at is not None or task.working_by_id is not None
-        ):
-            task.working_by = None
-            task.working_started_at = None
-            task.save(update_fields=["working_by", "working_started_at", "updated_at"])
+        if old_status != task.status:
+            author = self.request.user.bitrix_user
+            if (
+                task.status == Task.Status.IN_PROGRESS
+                and self.request.user.is_agency
+                and author
+            ):
+                set_task_working(task, author)
+            else:
+                clear_task_working(task)
 
         if self.request.user.is_agency and old_status != task.status:
             author = self.request.user.bitrix_user
             # Close leftover live timers (legacy). Bitrix учёта is pushed below /
             # on finalize so we do not race two elapseditem.add calls.
             if task.status in (Task.Status.TODO, Task.Status.DONE):
-                for running in task.time_entries.filter(ended_at__isnull=True):
-                    stop_time_entry(running, sync_bitrix=False)
+                try:
+                    for running in task.time_entries.filter(ended_at__isnull=True):
+                        stop_time_entry(running, sync_bitrix=False)
+                except Exception:
+                    logger.exception(
+                        "stop leftover timers failed task=%s", task.id
+                    )
             if task.status == Task.Status.DONE and old_status != Task.Status.DONE:
                 try:
                     from board.completion import finalize_task_completion
@@ -544,7 +706,10 @@ class TaskViewSet(viewsets.ModelViewSet):
             old_status=old_status,
             old_due=old_due,
         )
-        enqueue_bitrix_sync(task.id)
+        try:
+            enqueue_bitrix_sync(task.id)
+        except Exception:
+            logger.exception("enqueue_bitrix_sync failed task=%s", task.id)
         publish_task_event(task, kind="task_update")
         task.refresh_from_db()
         serializer.instance = task
@@ -651,8 +816,6 @@ class TaskViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="working/start")
     def working_start(self, request, pk=None):
         """Mark live presence «работаю прямо сейчас» (agency only)."""
-        from django.utils import timezone
-
         if not request.user.is_agency:
             raise PermissionDenied("Only agency can set working presence")
         task = self.get_object()
@@ -667,26 +830,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         if not author:
             return Response({"detail": "Пользователь не найден"}, status=400)
 
-        now = timezone.now()
-        # One active presence per agency user: clear other tasks first.
-        others = list(
-            Task.objects.filter(working_by=author, working_started_at__isnull=False)
-            .exclude(pk=task.pk)
-            .select_related("project", "project__portal")
-        )
-        if others:
-            Task.objects.filter(pk__in=[t.pk for t in others]).update(
-                working_by=None,
-                working_started_at=None,
-            )
-            for other in others:
-                other.working_by = None
-                other.working_started_at = None
-                publish_task_event(other, kind="task_update")
-
-        task.working_by = author
-        task.working_started_at = now
-        task.save(update_fields=["working_by", "working_started_at", "updated_at"])
+        set_task_working(task, author)
         publish_task_event(task, kind="task_update")
         task.refresh_from_db()
         return Response(TaskSerializer(task, context={"request": request}).data)
@@ -699,10 +843,43 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = self.get_object()
         if not can_access_client_portal(request.user, task.project.portal):
             raise PermissionDenied("No access")
-        if task.working_started_at is not None or task.working_by_id is not None:
-            task.working_by = None
-            task.working_started_at = None
-            task.save(update_fields=["working_by", "working_started_at", "updated_at"])
+        if clear_task_working(task):
+            publish_task_event(task, kind="task_update")
+        task.refresh_from_db()
+        return Response(TaskSerializer(task, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="awaiting-client/start")
+    def awaiting_client_start(self, request, pk=None):
+        """Ask the client to reply — shows the task on their attention list."""
+        from django.utils import timezone
+
+        if not request.user.is_agency:
+            raise PermissionDenied("Only agency can wait for a client reply")
+        task = self.get_object()
+        if not can_access_client_portal(request.user, task.project.portal):
+            raise PermissionDenied("No access")
+        if task.status == Task.Status.DONE:
+            return Response(
+                {"detail": "Нельзя ждать ответ по завершённой задаче"},
+                status=400,
+            )
+        if task.awaiting_client_at is None:
+            task.awaiting_client_at = timezone.now()
+            task.save(update_fields=["awaiting_client_at", "updated_at"])
+            publish_task_event(task, kind="task_update")
+        task.refresh_from_db()
+        return Response(TaskSerializer(task, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="awaiting-client/stop")
+    def awaiting_client_stop(self, request, pk=None):
+        if not request.user.is_agency:
+            raise PermissionDenied("Only agency can clear the wait")
+        task = self.get_object()
+        if not can_access_client_portal(request.user, task.project.portal):
+            raise PermissionDenied("No access")
+        if task.awaiting_client_at is not None:
+            task.awaiting_client_at = None
+            task.save(update_fields=["awaiting_client_at", "updated_at"])
             publish_task_event(task, kind="task_update")
         task.refresh_from_db()
         return Response(TaskSerializer(task, context={"request": request}).data)
@@ -847,6 +1024,13 @@ class CommentViewSet(viewsets.ModelViewSet):
         comment = serializer.save(
             author=author, author_name=author.display_name, is_system=False
         )
+        if (
+            self.request.user.is_client
+            and task.awaiting_client_at is not None
+        ):
+            task.awaiting_client_at = None
+            task.save(update_fields=["awaiting_client_at", "updated_at"])
+            publish_task_event(task, kind="task_update")
         enqueue_comment_sync(comment.id)
         publish_task_event(task, kind="comment")
 
@@ -972,26 +1156,39 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         return Portal.objects.filter(pk=portal_id).first()
 
     def get_queryset(self):
-        from django.db.models import Count, Q
+        from django.db.models import Case, Count, IntegerField, Q, When
 
         from board.reports import BUCKET_STATUSES, normalize_report_bucket
 
         ids = accessible_portal_ids(self.request.user)
         qs = (
             WorkReport.objects.filter(
-                Q(portal_id__in=ids) | Q(project__portal_id__in=ids)
+                Q(deal_binding__client_portal_id__in=ids)
+                | Q(portal_id__in=ids)
+                | Q(project__portal_id__in=ids)
             )
-            .select_related("portal", "project", "project__portal", "created_by")
+            .select_related(
+                "portal", "project", "project__portal", "created_by",
+                "deal_binding", "deal_binding__client_portal",
+            )
             .annotate(_dispute_count=Count("dispute_items", distinct=True))
             .distinct()
         )
         if self.action == "list":
-            qs = qs.prefetch_related("projects")
+            qs = qs.prefetch_related("projects", "lines")
         else:
-            qs = qs.prefetch_related("projects", "events__actor", "dispute_items__task")
+            qs = qs.prefetch_related(
+                "projects", "lines", "events__actor", "dispute_items__task"
+            )
         portal_id = self.request.query_params.get("portal")
         if portal_id:
-            qs = qs.filter(Q(portal_id=portal_id) | Q(project__portal_id=portal_id))
+            qs = qs.filter(
+                Q(deal_binding__client_portal_id=portal_id)
+                | Q(portal_id=portal_id)
+                | Q(project__portal_id=portal_id)
+            )
+        if self.request.user.is_client:
+            qs = qs.exclude(status=WorkReport.Status.DRAFT)
         project_id = self.request.query_params.get("project")
         if project_id:
             qs = qs.filter(Q(projects__id=project_id) | Q(project_id=project_id))
@@ -1004,7 +1201,14 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         active = self.request.query_params.get("active")
         if active in ("1", "true", "yes"):
             qs = qs.filter(status__in=WorkReport.ACTIVE_STATUSES)
-        return qs.order_by("-created_at")
+        return qs.order_by(
+            Case(
+                When(status__in=WorkReport.ACTIVE_STATUSES, then=0),
+                default=1,
+                output_field=IntegerField(),
+            ),
+            "-created_at",
+        )
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -1015,30 +1219,9 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         return getattr(self.request.user, "bitrix_user", None)
 
     def create(self, request, *args, **kwargs):
-        from board.reports import create_report, require_agency
-
-        require_agency(request.user)
-        portal_id = request.data.get("portal")
-        project_ids = request.data.get("project_ids") or []
-        # Back-compat: single project
-        if not project_ids and request.data.get("project"):
-            project_ids = [request.data.get("project")]
-        if not portal_id:
-            return Response({"detail": "portal required"}, status=400)
-        try:
-            portal = Portal.objects.get(pk=portal_id)
-        except Portal.DoesNotExist:
-            return Response({"detail": "Portal not found"}, status=404)
-        if not can_access_client_portal(request.user, portal):
-            raise PermissionDenied("No access to this portal")
-        try:
-            ids = [int(x) for x in project_ids]
-        except (TypeError, ValueError):
-            return Response({"detail": "project_ids invalid"}, status=400)
-        report = create_report(portal, ids, self._actor())
-        # List payload is enough to navigate; detail page loads the heavy body once.
-        serializer = WorkReportListSerializer(report, context={"request": request})
-        return Response(serializer.data, status=201)
+        raise MethodNotAllowed(
+            "POST", detail="Отчёты создаются автоматически при привязке CRM-сделки."
+        )
 
     def update(self, request, *args, **kwargs):
         raise PermissionDenied("Отчёты изменяются только через действия")
@@ -1050,10 +1233,13 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         raise PermissionDenied("Удаление отчётов отключено")
 
     def retrieve(self, request, *args, **kwargs):
+        from board.reports import sync_draft_report_completed_tasks
+
         report = self.get_object()
         portal = self._report_portal(report)
         if not portal or not can_access_client_portal(request.user, portal):
             raise PermissionDenied("No access to this portal")
+        report = sync_draft_report_completed_tasks(report)
         return Response(WorkReportSerializer(report, context={"request": request}).data)
 
     @action(detail=True, methods=["get"], url_path="pdf")
@@ -1072,34 +1258,83 @@ class WorkReportViewSet(viewsets.ModelViewSet):
         return response
 
     def list(self, request, *args, **kwargs):
-        from django.db.models import Sum
+        from board.reports import ensure_reports_for_portals
+
+        if request.user.is_agency:
+            ensure_reports_for_portals(accessible_portal_ids(request.user))
 
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         reports = list(page) if page is not None else list(queryset)
 
-        all_pids: set[int] = set()
-        for report in reports:
-            projects = list(report.projects.all())
-            if projects:
-                all_pids.update(p.id for p in projects)
-            elif report.project_id:
-                all_pids.add(report.project_id)
-        seconds_by_project: dict[int, int] = {}
-        if all_pids:
-            seconds_by_project = {
-                int(row["task__project_id"]): int(row["total"] or 0)
-                for row in TimeEntry.objects.filter(task__project_id__in=all_pids)
-                .values("task__project_id")
-                .annotate(total=Sum("duration_seconds"))
-            }
-
         context = self.get_serializer_context()
-        context["seconds_by_project"] = seconds_by_project
         serializer = self.get_serializer(reports, many=True, context=context)
         if page is not None:
             return self.get_paginated_response(serializer.data)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["get"], url_path="available-tasks")
+    def available_tasks(self, request, pk=None):
+        from board.reports import available_tasks_payload, require_agency
+
+        require_agency(request.user)
+        report = self.get_object()
+        return Response(available_tasks_payload(report))
+
+    @action(detail=True, methods=["post"], url_path="tasks")
+    def tasks(self, request, pk=None):
+        from board.reports import require_agency, set_report_tasks
+
+        require_agency(request.user)
+        task_ids = request.data.get("task_ids")
+        if not isinstance(task_ids, list):
+            raise ValidationError({"task_ids": "Передайте список task_ids."})
+        try:
+            task_ids = [int(value) for value in task_ids]
+        except (TypeError, ValueError):
+            raise ValidationError({"task_ids": "task_ids должны быть целыми числами."})
+        report = set_report_tasks(self.get_object(), task_ids)
+        return Response(WorkReportSerializer(report, context={"request": request}).data)
+
+    @action(detail=False, methods=["get"], url_path="weekly")
+    def weekly(self, request):
+        from board.reports import weekly_reports_payload
+
+        portal_id = request.query_params.get("portal")
+        if not portal_id:
+            return Response({"detail": "portal required"}, status=400)
+        try:
+            portal = Portal.objects.get(pk=portal_id)
+        except Portal.DoesNotExist:
+            return Response({"detail": "Portal not found"}, status=404)
+        if not can_access_client_portal(request.user, portal):
+            raise PermissionDenied("No access to this portal")
+        try:
+            weeks = int(request.query_params.get("weeks", 12))
+        except (TypeError, ValueError):
+            raise ValidationError({"weeks": "weeks должен быть целым числом."})
+        return Response(weekly_reports_payload(portal, weeks=weeks))
+
+    @action(detail=False, methods=["get"], url_path="activity")
+    def activity(self, request):
+        from board.reports import period_activity_payload
+
+        portal_id = request.query_params.get("portal")
+        if not portal_id:
+            return Response({"detail": "portal required"}, status=400)
+        try:
+            portal = Portal.objects.get(pk=portal_id)
+        except Portal.DoesNotExist:
+            return Response({"detail": "Portal not found"}, status=404)
+        if not can_access_client_portal(request.user, portal):
+            raise PermissionDenied("No access to this portal")
+        return Response(
+            period_activity_payload(
+                portal,
+                date_from=request.query_params.get("from"),
+                date_to=request.query_params.get("to"),
+            )
+        )
 
     @action(detail=False, methods=["get"])
     def counts(self, request):
@@ -1119,9 +1354,21 @@ class WorkReportViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("No access to this portal")
 
         ids = accessible_portal_ids(request.user)
+        if request.user.is_agency:
+            from board.reports import ensure_reports_for_portals
+
+            ensure_reports_for_portals([portal.id])
         qs = WorkReport.objects.filter(
-            Q(portal_id__in=ids) | Q(project__portal_id__in=ids)
-        ).filter(Q(portal_id=portal_id) | Q(project__portal_id=portal_id))
+            Q(deal_binding__client_portal_id__in=ids)
+            | Q(portal_id__in=ids)
+            | Q(project__portal_id__in=ids)
+        ).filter(
+            Q(deal_binding__client_portal_id=portal_id)
+            | Q(portal_id=portal_id)
+            | Q(project__portal_id=portal_id)
+        )
+        if request.user.is_client:
+            qs = qs.exclude(status=WorkReport.Status.DRAFT)
         from django.db.models import Count
 
         from board.models import WorkReport as WR

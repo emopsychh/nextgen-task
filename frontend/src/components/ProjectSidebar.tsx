@@ -14,38 +14,19 @@ import {
   portalDisplayName,
   setPortalLabel,
 } from "../lib/portalLabelCache";
+import { PICKER_PAGE_SIZE, withPage } from "../lib/pagination";
 import {
   CACHE_PROJECTS,
   readPortalCache,
   writePortalCache,
 } from "../lib/portalSessionCache";
-import { useSupportWidget } from "./support/SupportWidgetContext";
-
-function TicketsNavIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M4 7a2 2 0 0 1 2-2h8l4 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M14 5v4h4M8 13h8M8 17h5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
+import { HeadsetGlyph, HouseGlyph } from "./icons";
 
 export function ProjectSidebarNav() {
   const { token, portal } = useAuth();
   const params = useParams();
   const location = useLocation();
   const isAgency = portal?.role === "agency";
-  const supportWidget = useSupportWidget();
 
   const routePortalId = params.portalId ? Number(params.portalId) : null;
   const routeProjectId = params.projectId ? Number(params.projectId) : null;
@@ -167,7 +148,7 @@ export function ProjectSidebarNav() {
     async function load() {
       try {
         const data = await api<Project[] | { results: Project[] }>(
-          `/api/projects/?portal=${contextPortalId}`,
+          withPage(`/api/projects/?portal=${contextPortalId}`, 1, PICKER_PAGE_SIZE),
           {},
           token!
         );
@@ -299,7 +280,7 @@ export function ProjectSidebarNav() {
         try {
           if (refreshProjects && contextPortalId && !(isAgency && onTicketsRoute)) {
             const data = await api<Project[] | { results: Project[] }>(
-              `/api/projects/?portal=${contextPortalId}`,
+              withPage(`/api/projects/?portal=${contextPortalId}`, 1, PICKER_PAGE_SIZE),
               {},
               token
             );
@@ -344,14 +325,15 @@ export function ProjectSidebarNav() {
   });
 
   const ticketsLink = !isAgency ? (
-    <button
-      type="button"
-      className={`${showClientNav ? "feed-nav-item" : "nav-item"}${supportWidget.isOpen ? " active" : ""}`}
-      onClick={() => supportWidget.toggle()}
+    <NavLink
+      to="/tickets"
+      className={({ isActive }) =>
+        `${showClientNav ? "feed-nav-item" : "nav-item"}${isActive || onTicketsRoute ? " active" : ""}`
+      }
     >
       {showClientNav ? (
         <span className="feed-nav-icon" aria-hidden>
-          <TicketsNavIcon />
+          <HeadsetGlyph />
         </span>
       ) : null}
       <span className={showClientNav ? "feed-nav-label" : undefined}>Поддержка</span>
@@ -360,7 +342,7 @@ export function ProjectSidebarNav() {
           {openTickets > 99 ? "99+" : openTickets}
         </span>
       ) : null}
-    </button>
+    </NavLink>
   ) : null;
 
   if (!showClientNav) {
@@ -404,7 +386,7 @@ export function ProjectSidebarNav() {
   return (
     <div className="project-sidebar" data-tour="tour-sidebar">
       <div className="sidebar-section-label">
-        {clientLabel || (isAgency ? "Кабинет клиента" : "Ваш кабинет")}
+        {isAgency ? clientLabel || "Кабинет клиента" : "Навигация"}
       </div>
       <NavLink
         to={feedTo}
@@ -412,14 +394,7 @@ export function ProjectSidebarNav() {
         className={({ isActive }) => `feed-nav-item${isActive || onFeed ? " active" : ""}`}
       >
         <span className="feed-nav-icon" aria-hidden>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M4 6h16M4 12h10M4 18h14"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-          </svg>
+          <HouseGlyph />
         </span>
         Обзор
       </NavLink>

@@ -84,6 +84,10 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
     hours_credit = serializers.SerializerMethodField()
     hours_credit_source_deal_id = serializers.SerializerMethodField()
     hours_credit_source_title = serializers.SerializerMethodField()
+    hours_overage = serializers.SerializerMethodField()
+    hours_overage_source_deal_id = serializers.SerializerMethodField()
+    hours_overage_source_title = serializers.SerializerMethodField()
+    hours_overage_applied = serializers.SerializerMethodField()
 
     class Meta:
         model = PortalDealBinding
@@ -103,6 +107,10 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
             "hours_credit",
             "hours_credit_source_deal_id",
             "hours_credit_source_title",
+            "hours_overage",
+            "hours_overage_source_deal_id",
+            "hours_overage_source_title",
+            "hours_overage_applied",
             "bitrix_company_id",
             "is_active",
             "created_at",
@@ -123,6 +131,10 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
             "hours_credit",
             "hours_credit_source_deal_id",
             "hours_credit_source_title",
+            "hours_overage",
+            "hours_overage_source_deal_id",
+            "hours_overage_source_title",
+            "hours_overage_applied",
             "bitrix_company_id",
             "created_at",
             "updated_at",
@@ -166,6 +178,42 @@ class PortalDealBindingSerializer(serializers.ModelSerializer):
     def get_hours_credit_source_title(self, obj):
         link = self._link(obj)
         return (link.hours_credit_source_title if link else "") or ""
+
+    def _pending_overage(self, obj):
+        link = self._link(obj)
+        if not link:
+            return None
+        source = str(link.hours_overage_source_deal_id or "")
+        if source and source != str(obj.deal_id or ""):
+            return None
+        try:
+            val = float(link.hours_overage or 0)
+        except (TypeError, ValueError):
+            return None
+        return val if val > 0 else None
+
+    def get_hours_overage(self, obj):
+        pending = self._pending_overage(obj)
+        return pending if pending else 0.0
+
+    def get_hours_overage_source_deal_id(self, obj):
+        if not self._pending_overage(obj):
+            return ""
+        link = self._link(obj)
+        return (link.hours_overage_source_deal_id if link else "") or ""
+
+    def get_hours_overage_source_title(self, obj):
+        if not self._pending_overage(obj):
+            return ""
+        link = self._link(obj)
+        return (link.hours_overage_source_title if link else "") or ""
+
+    def get_hours_overage_applied(self, obj):
+        try:
+            val = float(obj.hours_overage_applied or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        return val if val > 0 else 0.0
 
 
 class BitrixUserSerializer(serializers.ModelSerializer):

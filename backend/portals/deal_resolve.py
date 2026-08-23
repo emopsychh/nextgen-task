@@ -18,6 +18,10 @@ from portals.deal_hours_credit import (
     capture_hours_credit_if_won,
     read_deal_stage_fields,
 )
+from portals.deal_hours_overage import (
+    apply_hours_overage_to_binding,
+    apply_hours_overage_to_new_deal,
+)
 
 _HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", re.I)
 
@@ -347,6 +351,13 @@ def _deal_has_billed_time_entries(deal_id: str) -> bool:
         "client_portal_id", "created_at"
     ):
         if TimeEntry.objects.filter(
+            billed_deal_binding_id=binding.id,
+        ).exists():
+            return True
+        # Legacy rows predate the binding snapshot; constrain by portal and
+        # binding lifetime to avoid attributing arbitrary historical time.
+        if TimeEntry.objects.filter(
+            billed_deal_binding__isnull=True,
             task__project__portal_id=binding.client_portal_id,
             billed_to_deal_at__isnull=False,
             billed_to_deal_at__gte=binding.created_at,
@@ -597,6 +608,16 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
         meta["remaining_hours"] = applied
         link.refresh_from_db()
 
+    billed = apply_hours_overage_to_new_deal(
+        link=link,
+        client=client,
+        new_deal_id=deal_id,
+        current_remaining=meta.get("remaining_hours"),
+    )
+    if billed is not None:
+        meta["remaining_hours"] = billed
+        link.refresh_from_db()
+
     # Cache company + Bitrix workgroup id from company UF
     cache_company_and_group_on_link(client, link, deal)
 
@@ -653,6 +674,8 @@ def resolve_or_refresh_binding(*, agency_portal, client_portal, company_id: str 
             fields.append("updated_at")
             binding.save(update_fields=list(set(fields)))
 
+    apply_hours_overage_to_binding(binding)
+    binding.refresh_from_db()
     return binding
 
 

@@ -1,7 +1,8 @@
 """Due-date timezone helpers.
 
-Canonical storage is UTC-aware DateTime. Wall-clock interpretation uses the
-client portal's IANA timezone. Agency UI displays Europe/Moscow.
+Canonical storage is UTC-aware DateTime. Naive API writes and Bitrix
+DEADLINE wall clocks use the client portal's IANA timezone. The web UI
+shows and edits due dates in the viewer's browser timezone.
 """
 
 from __future__ import annotations

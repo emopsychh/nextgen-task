@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.db.models import Sum
 from rest_framework import serializers
 
 from portals.models import Portal
@@ -57,7 +58,7 @@ def _clean_task_title(instance: Task) -> str:
 
 
 class TaskDueDateField(serializers.Field):
-    """UTC storage; API emits ISO-Z; naive writes use viewer TZ (agency=Moscow)."""
+    """UTC storage; API emits ISO-Z; naive writes use the client portal timezone."""
 
     default_error_messages = {
         "invalid": "Некорректная дата срока",
@@ -69,21 +70,12 @@ class TaskDueDateField(serializers.Field):
         return format_utc_z(value)
 
     def to_internal_value(self, data):
-        from board.due_dates import (
-            AGENCY_DISPLAY_TZ,
-            parse_due_value,
-            portal_zone,
-            resolve_zone,
-        )
+        from board.due_dates import parse_due_value, portal_zone
 
         if data in (None, "", "null"):
             return None
         portal = self._resolve_portal()
-        request = self.context.get("request")
-        if request is not None and getattr(request.user, "is_agency", False):
-            tz = resolve_zone(AGENCY_DISPLAY_TZ)
-        else:
-            tz = portal_zone(portal)
+        tz = portal_zone(portal)
         parsed = parse_due_value(data, portal_tz=tz)
         if parsed is None and data not in (None, "", "null"):
             self.fail("invalid")
@@ -259,6 +251,7 @@ class TaskSerializer(serializers.ModelSerializer):
     working_by_name = serializers.SerializerMethodField()
     due_timezone = serializers.SerializerMethodField()
     can_delete = serializers.SerializerMethodField()
+    awaiting_client = serializers.SerializerMethodField()
     due_date = TaskDueDateField(required=False, allow_null=True)
 
     class Meta:
@@ -294,6 +287,10 @@ class TaskSerializer(serializers.ModelSerializer):
             "working_by_name",
             "due_timezone",
             "can_delete",
+            "completed_at",
+            "awaiting_client",
+            "awaiting_client_at",
+            "outcome_seen_at",
             "created_at",
             "updated_at",
         )
@@ -315,6 +312,10 @@ class TaskSerializer(serializers.ModelSerializer):
             "working_by_name",
             "due_timezone",
             "can_delete",
+            "completed_at",
+            "awaiting_client",
+            "awaiting_client_at",
+            "outcome_seen_at",
             "created_at",
             "updated_at",
         )
@@ -361,11 +362,15 @@ class TaskSerializer(serializers.ModelSerializer):
         return TimeEntrySerializer(running).data
 
     def get_is_working(self, obj):
-        return obj.working_started_at is not None
+        return obj.status == Task.Status.IN_PROGRESS or obj.working_started_at is not None
 
     def get_working_by_name(self, obj):
-        if obj.working_by_id and obj.working_by:
-            return obj.working_by.display_name
+        try:
+            person = obj.working_by if obj.working_by_id else None
+        except Exception:
+            person = None
+        if person:
+            return person.display_name
         return None
 
     def get_due_timezone(self, obj):
@@ -375,6 +380,9 @@ class TaskSerializer(serializers.ModelSerializer):
         if portal is None:
             return DEFAULT_PORTAL_TZ
         return (portal.timezone or "").strip() or DEFAULT_PORTAL_TZ
+
+    def get_awaiting_client(self, obj):
+        return obj.awaiting_client_at is not None
 
     def get_can_delete(self, obj):
         from board.deletion import task_is_app_deletable
@@ -446,6 +454,7 @@ class TaskListSerializer(serializers.ModelSerializer):
     working_by_name = serializers.SerializerMethodField()
     due_timezone = serializers.SerializerMethodField()
     can_delete = serializers.SerializerMethodField()
+    awaiting_client = serializers.SerializerMethodField()
     due_date = TaskDueDateField(required=False, allow_null=True)
 
     class Meta:
@@ -472,6 +481,10 @@ class TaskListSerializer(serializers.ModelSerializer):
             "working_started_at",
             "working_by_name",
             "can_delete",
+            "completed_at",
+            "awaiting_client",
+            "awaiting_client_at",
+            "outcome_seen_at",
             "created_at",
             "updated_at",
         )
@@ -499,11 +512,15 @@ class TaskListSerializer(serializers.ModelSerializer):
         return task_tracked_seconds(obj, include_running=False)
 
     def get_is_working(self, obj):
-        return obj.working_started_at is not None
+        return obj.status == Task.Status.IN_PROGRESS or obj.working_started_at is not None
 
     def get_working_by_name(self, obj):
-        if obj.working_by_id and obj.working_by:
-            return obj.working_by.display_name
+        try:
+            person = obj.working_by if obj.working_by_id else None
+        except Exception:
+            person = None
+        if person:
+            return person.display_name
         return None
 
     def get_due_timezone(self, obj):
@@ -513,6 +530,9 @@ class TaskListSerializer(serializers.ModelSerializer):
         if portal is None:
             return DEFAULT_PORTAL_TZ
         return (portal.timezone or "").strip() or DEFAULT_PORTAL_TZ
+
+    def get_awaiting_client(self, obj):
+        return obj.awaiting_client_at is not None
 
     def get_can_delete(self, obj):
         from board.deletion import task_is_app_deletable
@@ -533,6 +553,9 @@ class ProjectSerializer(serializers.ModelSerializer):
     done_count = serializers.SerializerMethodField()
     has_active_work = serializers.SerializerMethodField()
     can_delete = serializers.SerializerMethodField()
+    due_date = serializers.SerializerMethodField()
+    total_tracked_seconds = serializers.SerializerMethodField()
+    completed_at = serializers.SerializerMethodField()
     portal_name = serializers.CharField(source="portal.name", read_only=True)
 
     class Meta:
@@ -550,6 +573,9 @@ class ProjectSerializer(serializers.ModelSerializer):
             "done_count",
             "has_active_work",
             "can_delete",
+            "due_date",
+            "total_tracked_seconds",
+            "completed_at",
             "created_at",
             "updated_at",
         )
@@ -559,6 +585,9 @@ class ProjectSerializer(serializers.ModelSerializer):
             "bitrix_group_id",
             "has_active_work",
             "can_delete",
+            "due_date",
+            "total_tracked_seconds",
+            "completed_at",
             "created_at",
             "updated_at",
         )
@@ -579,7 +608,7 @@ class ProjectSerializer(serializers.ModelSerializer):
         annotated = getattr(obj, "_has_active_work", None)
         if annotated is not None:
             return bool(annotated)
-        return obj.tasks.filter(working_started_at__isnull=False).exists()
+        return obj.tasks.filter(status=Task.Status.IN_PROGRESS).exists()
 
     def get_can_delete(self, obj):
         from board.deletion import project_is_app_deletable
@@ -591,6 +620,45 @@ class ProjectSerializer(serializers.ModelSerializer):
         if annotated is not None:
             return int(annotated) == 0
         return project_is_app_deletable(obj)
+
+    def get_due_date(self, obj):
+        if hasattr(obj, "_due_date"):
+            return obj._due_date
+        open_due = (
+            obj.tasks.exclude(status=Task.Status.DONE)
+            .exclude(due_date=None)
+            .order_by("due_date")
+            .values_list("due_date", flat=True)
+            .first()
+        )
+        if open_due:
+            return open_due
+        return (
+            obj.tasks.exclude(due_date=None)
+            .order_by("-due_date")
+            .values_list("due_date", flat=True)
+            .first()
+        )
+
+    def get_total_tracked_seconds(self, obj):
+        if hasattr(obj, "_tracked_seconds"):
+            return int(obj._tracked_seconds or 0)
+        total = TimeEntry.objects.filter(
+            task__project=obj, ended_at__isnull=False
+        ).aggregate(total=Sum("duration_seconds"))["total"]
+        return int(total or 0)
+
+    def get_completed_at(self, obj):
+        if hasattr(obj, "_completed_at"):
+            return obj._completed_at
+        if obj.tasks.exclude(status=Task.Status.DONE).exists():
+            return None
+        return (
+            obj.tasks.exclude(completed_at=None)
+            .order_by("-completed_at")
+            .values_list("completed_at", flat=True)
+            .first()
+        )
 
     def validate_portal(self, portal: Portal):
         request = self.context.get("request")
@@ -633,7 +701,14 @@ class WorkReportSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     projects_detail = serializers.SerializerMethodField()
     total_tracked_seconds = serializers.SerializerMethodField()
+    task_tracked_seconds = serializers.SerializerMethodField()
+    carried_overage_seconds = serializers.SerializerMethodField()
     deal_hours = serializers.SerializerMethodField()
+    deal_binding_id = serializers.IntegerField(read_only=True)
+    deal_id = serializers.CharField(source="deal_binding.deal_id", read_only=True)
+    deal_title = serializers.CharField(source="deal_binding.deal_title", read_only=True)
+    selected_task_ids = serializers.SerializerMethodField()
+    tasks_count = serializers.SerializerMethodField()
     events = WorkReportEventSerializer(many=True, read_only=True)
     dispute_items = WorkReportDisputeItemSerializer(many=True, read_only=True)
     is_active = serializers.BooleanField(read_only=True)
@@ -644,6 +719,9 @@ class WorkReportSerializer(serializers.ModelSerializer):
             "id",
             "portal_id",
             "portal_name",
+            "deal_binding_id",
+            "deal_id",
+            "deal_title",
             "project",
             "project_ids",
             "project_names",
@@ -659,7 +737,11 @@ class WorkReportSerializer(serializers.ModelSerializer):
             "is_active",
             "projects_detail",
             "total_tracked_seconds",
+            "task_tracked_seconds",
+            "carried_overage_seconds",
             "deal_hours",
+            "selected_task_ids",
+            "tasks_count",
             "events",
             "dispute_items",
         )
@@ -703,11 +785,22 @@ class WorkReportSerializer(serializers.ModelSerializer):
     def get_total_tracked_seconds(self, obj):
         return self._metrics(obj)["total_tracked_seconds"]
 
-    def get_deal_hours(self, obj):
-        from board.reports import deal_hours_for_portal, report_portal_id
+    def get_task_tracked_seconds(self, obj):
+        return self._metrics(obj)["task_tracked_seconds"]
 
-        pid = report_portal_id(obj)
-        return deal_hours_for_portal(pid) if pid else None
+    def get_carried_overage_seconds(self, obj):
+        return self._metrics(obj)["carried_overage_seconds"]
+
+    def get_deal_hours(self, obj):
+        from board.reports import deal_hours_for_report
+
+        return deal_hours_for_report(obj)
+
+    def get_selected_task_ids(self, obj):
+        return self._metrics(obj)["selected_task_ids"]
+
+    def get_tasks_count(self, obj):
+        return self._metrics(obj)["tasks_count"]
 
 
 class WorkReportListSerializer(serializers.ModelSerializer):
@@ -717,9 +810,17 @@ class WorkReportListSerializer(serializers.ModelSerializer):
     project_names = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
     total_tracked_seconds = serializers.SerializerMethodField()
+    task_tracked_seconds = serializers.SerializerMethodField()
+    carried_overage_seconds = serializers.SerializerMethodField()
     is_active = serializers.BooleanField(read_only=True)
     dispute_count = serializers.SerializerMethodField()
     projects_count = serializers.SerializerMethodField()
+    deal_binding_id = serializers.IntegerField(read_only=True)
+    deal_id = serializers.CharField(source="deal_binding.deal_id", read_only=True)
+    deal_title = serializers.CharField(source="deal_binding.deal_title", read_only=True)
+    deal_hours = serializers.SerializerMethodField()
+    selected_task_ids = serializers.SerializerMethodField()
+    tasks_count = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkReport
@@ -727,6 +828,10 @@ class WorkReportListSerializer(serializers.ModelSerializer):
             "id",
             "portal_id",
             "portal_name",
+            "deal_binding_id",
+            "deal_id",
+            "deal_title",
+            "deal_hours",
             "project",
             "project_ids",
             "project_names",
@@ -742,7 +847,11 @@ class WorkReportListSerializer(serializers.ModelSerializer):
             "updated_at",
             "is_active",
             "total_tracked_seconds",
+            "task_tracked_seconds",
+            "carried_overage_seconds",
             "dispute_count",
+            "selected_task_ids",
+            "tasks_count",
         )
         read_only_fields = fields
 
@@ -784,13 +893,32 @@ class WorkReportListSerializer(serializers.ModelSerializer):
         return ""
 
     def get_total_tracked_seconds(self, obj):
-        by_project = self.context.get("seconds_by_project")
-        ids = self.get_project_ids(obj)
-        if by_project is not None:
-            return sum(int(by_project.get(pid, 0)) for pid in ids)
-        from board.reports import live_total_seconds_for_projects
+        return self._metrics(obj)["total_tracked_seconds"]
 
-        return live_total_seconds_for_projects(ids)
+    def get_task_tracked_seconds(self, obj):
+        return self._metrics(obj)["task_tracked_seconds"]
+
+    def get_carried_overage_seconds(self, obj):
+        return self._metrics(obj)["carried_overage_seconds"]
+
+    def _metrics(self, obj):
+        cache = self.context.setdefault("_report_metrics", {})
+        if obj.pk not in cache:
+            from board.reports import report_detail_metrics
+
+            cache[obj.pk] = report_detail_metrics(obj)
+        return cache[obj.pk]
+
+    def get_deal_hours(self, obj):
+        from board.reports import deal_hours_for_report
+
+        return deal_hours_for_report(obj)
+
+    def get_selected_task_ids(self, obj):
+        return self._metrics(obj)["selected_task_ids"]
+
+    def get_tasks_count(self, obj):
+        return self._metrics(obj)["tasks_count"]
 
     def get_dispute_count(self, obj):
         if hasattr(obj, "_dispute_count"):

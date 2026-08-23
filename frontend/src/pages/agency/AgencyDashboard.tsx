@@ -11,8 +11,10 @@ import { useAuth } from "../../auth/AuthContext";
 import { FlameIcon } from "../../components/icons";
 import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
 import { formatDueFull } from "../../lib/format";
+import { PICKER_PAGE_SIZE, withPage } from "../../lib/pagination";
+import { PaginationBar } from "../../components/PaginationBar";
 import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
-import { AGENCY_DISPLAY_TZ } from "../../lib/timezone";
+import { viewerTimeZone } from "../../lib/timezone";
 
 const HOT_DUE_DAYS = 2;
 
@@ -42,25 +44,18 @@ function portalLabel(task: Task, projects: Project[]): string {
   return project?.portal_name || `Клиент #${task.portal_id}`;
 }
 
-async function fetchAllPages<T>(
+async function fetchPage<T>(
   path: string,
   token: string,
   signal?: AbortSignal
 ): Promise<T[]> {
-  const out: T[] = [];
-  for (let page = 1; page <= 30; page++) {
-    const sep = path.includes("?") ? "&" : "?";
-    const data = await api<Paginated<T> | T[]>(
-      `${path}${sep}page=${page}`,
-      { signal },
-      token
-    );
-    if (Array.isArray(data)) return data;
-    const batch = data.results || [];
-    out.push(...batch);
-    if (!data.next || batch.length === 0) break;
-  }
-  return out;
+  const data = await api<Paginated<T> | T[]>(
+    withPage(path, 1, PICKER_PAGE_SIZE),
+    { signal },
+    token
+  );
+  if (Array.isArray(data)) return data;
+  return data.results || [];
 }
 
 function TaskCard({
@@ -72,7 +67,7 @@ function TaskCard({
 }) {
   const overdue = isTaskOverdue(task.due_date, task.status);
   const soon = isDueSoon(task.due_date, task.status);
-  const due = task.due_date ? formatDueFull(task.due_date, AGENCY_DISPLAY_TZ) : null;
+  const due = task.due_date ? formatDueFull(task.due_date, viewerTimeZone()) : null;
 
   return (
     <Link
@@ -103,6 +98,34 @@ function TaskCard({
   );
 }
 
+const DASH_PAGE_SIZE = 8;
+
+function PagedTasks({
+  tasks,
+  projects,
+}: {
+  tasks: Task[];
+  projects: Project[];
+}) {
+  const [page, setPage] = useState(1);
+  const slice = tasks.slice((page - 1) * DASH_PAGE_SIZE, page * DASH_PAGE_SIZE);
+  return (
+    <>
+      <div className="workspace-attention-list dashboard-attention-grid">
+        {slice.map((t) => (
+          <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
+        ))}
+      </div>
+      <PaginationBar
+        page={page}
+        total={tasks.length}
+        pageSize={DASH_PAGE_SIZE}
+        onChange={setPage}
+      />
+    </>
+  );
+}
+
 export function AgencyDashboard() {
   const { token } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -118,8 +141,8 @@ export function AgencyDashboard() {
       setError(null);
       try {
         const [projectList, taskList] = await Promise.all([
-          fetchAllPages<Project>("/api/projects/?is_active=true", token, signal),
-          fetchAllPages<Task>("/api/tasks/?open=1", token, signal),
+          fetchPage<Project>("/api/projects/?is_active=true", token, signal),
+          fetchPage<Task>("/api/tasks/?open=1", token, signal),
         ]);
         if (signal?.aborted) return;
         setProjects(projectList);
@@ -302,11 +325,7 @@ export function AgencyDashboard() {
                 </h2>
                 <p className="muted">Срок уже прошёл — взять в работу в первую очередь</p>
               </div>
-              <div className="workspace-attention-list dashboard-attention-grid">
-                {overdue.map((t) => (
-                  <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
-                ))}
-              </div>
+              <PagedTasks key={`overdue-${clientFilter}`} tasks={overdue} projects={projects} />
             </section>
           ) : null}
 
@@ -326,11 +345,7 @@ export function AgencyDashboard() {
                 </h2>
                 <p className="muted">Срок сегодня или в ближайшие 1–2 дня</p>
               </div>
-              <div className="workspace-attention-list dashboard-attention-grid">
-                {dueSoon.map((t) => (
-                  <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
-                ))}
-              </div>
+              <PagedTasks key={`soon-${clientFilter}`} tasks={dueSoon} projects={projects} />
             </section>
           ) : null}
 
@@ -343,11 +358,7 @@ export function AgencyDashboard() {
                 </h2>
                 <p className="muted">Помечены важными, без ближайшего дедлайна</p>
               </div>
-              <div className="workspace-attention-list dashboard-attention-grid">
-                {important.map((t) => (
-                  <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
-                ))}
-              </div>
+              <PagedTasks key={`important-${clientFilter}`} tasks={important} projects={projects} />
             </section>
           ) : null}
 
@@ -360,11 +371,7 @@ export function AgencyDashboard() {
                 </h2>
                 <p className="muted">Открыты в статусе «Выполняется» по всем клиентам</p>
               </div>
-              <div className="workspace-attention-list dashboard-attention-grid">
-                {inProgress.map((t) => (
-                  <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
-                ))}
-              </div>
+              <PagedTasks key={`progress-${clientFilter}`} tasks={inProgress} projects={projects} />
             </section>
           ) : null}
         </div>

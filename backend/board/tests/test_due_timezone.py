@@ -96,3 +96,35 @@ class DueDateApiTimezoneTests(TestCase):
             format_wall(self.task.due_date, portal_zone(self.client_portal)),
             "2026-05-01T18:00:00",
         )
+
+    def test_naive_write_uses_client_portal_timezone_not_moscow(self):
+        self.client_portal.timezone = "Asia/Novosibirsk"
+        self.client_portal.save(update_fields=["timezone"])
+        from unittest.mock import patch
+
+        with patch("board.views.publish_task_event"), patch(
+            "board.views.enqueue_bitrix_sync"
+        ), patch("board.views.append_task_change_events"):
+            res = self.api.patch(
+                f"/api/tasks/{self.task.id}/",
+                {"due_date": "2026-05-01T15:00:00"},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        # 15:00 NSK (UTC+7) must stay 08:00Z, not 12:00Z as if it were Moscow.
+        self.assertEqual(res.data["due_date"], "2026-05-01T08:00:00Z")
+        self.assertEqual(res.data["due_timezone"], "Asia/Novosibirsk")
+
+    def test_explicit_utc_instant_is_kept(self):
+        from unittest.mock import patch
+
+        with patch("board.views.publish_task_event"), patch(
+            "board.views.enqueue_bitrix_sync"
+        ), patch("board.views.append_task_change_events"):
+            res = self.api.patch(
+                f"/api/tasks/{self.task.id}/",
+                {"due_date": "2026-05-01T08:00:00Z"},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.data["due_date"], "2026-05-01T08:00:00Z")

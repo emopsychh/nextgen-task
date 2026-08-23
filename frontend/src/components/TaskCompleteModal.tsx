@@ -5,7 +5,7 @@ type Props = {
   taskTitle: string;
   initialOutcome?: string;
   busy?: boolean;
-  onConfirm: (outcome: string) => void;
+  onConfirm: (outcome: string, files: File[]) => void;
   onCancel: () => void;
 };
 
@@ -18,9 +18,13 @@ export function TaskCompleteModal({
   onCancel,
 }: Props) {
   const [outcome, setOutcome] = useState(initialOutcome);
+  const [files, setFiles] = useState<File[]>([]);
 
   useEffect(() => {
-    if (open) setOutcome(initialOutcome);
+    if (open) {
+      setOutcome(initialOutcome);
+      setFiles([]);
+    }
   }, [open, initialOutcome]);
 
   useEffect(() => {
@@ -71,6 +75,25 @@ export function TaskCompleteModal({
             <p className="complete-outcome-hint muted">Без итога задачу завершить нельзя</p>
           ) : null}
         </div>
+        <div className="field">
+          <label htmlFor="complete-outcome-files">Файлы к результату</label>
+          <input
+            id="complete-outcome-files"
+            type="file"
+            multiple
+            disabled={busy}
+            onChange={(e) => setFiles(Array.from(e.target.files || []))}
+          />
+          {files.length ? (
+            <ul className="complete-outcome-files">
+              {files.map((file) => (
+                <li key={`${file.name}-${file.size}`}>{file.name}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="complete-outcome-hint muted">Необязательно. Эти файлы попадут в отчёт.</p>
+          )}
+        </div>
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>
             Отмена
@@ -81,7 +104,7 @@ export function TaskCompleteModal({
             disabled={busy || !trimmed}
             onClick={() => {
               if (!trimmed) return;
-              onConfirm(trimmed);
+              onConfirm(trimmed, files);
             }}
           >
             {busy ? "Сохраняем…" : "Завершить"}

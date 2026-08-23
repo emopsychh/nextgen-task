@@ -139,6 +139,17 @@ class ManualTimeApiTests(TestCase):
         self.assertFalse(TimeEntry.objects.filter(task=self.task, ended_at__isnull=True).exists())
         self.assertEqual(res.data["total_tracked_seconds"], 0)
 
+    def test_manual_time_saves_without_bitrix_token(self):
+        res = self.agency_client.post(
+            f"/api/tasks/{self.task.id}/time/",
+            {"hours": 3, "minutes": 0},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertEqual(res.data["total_tracked_seconds"], 10800)
+        entry = TimeEntry.objects.get(task=self.task)
+        self.assertEqual(entry.duration_seconds, 10800)
+
     def test_client_cannot_add_time(self):
         res = self.client_client.post(
             f"/api/tasks/{self.task.id}/time/",

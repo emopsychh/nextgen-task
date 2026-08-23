@@ -97,12 +97,26 @@ def _active_binding_for_portal(portal_id: int):
     )
 
 
-def move_client_deal_stage(portal_id: int, stage_key: str) -> dict:
+def move_client_deal_stage(
+    portal_id: int, stage_key: str, *, binding_id: int | None = None
+) -> dict:
     """
     Move the client's accompaniment deal to the target stage.
     Returns a small result dict for logs/tests; never raises to callers of schedule_*.
     """
-    binding = _active_binding_for_portal(portal_id)
+    binding = None
+    if binding_id:
+        from portals.models import PortalDealBinding
+
+        binding = (
+            PortalDealBinding.objects.filter(
+                pk=binding_id, client_portal_id=portal_id
+            )
+            .select_related("agency_portal", "client_portal")
+            .first()
+        )
+    if binding is None:
+        binding = _active_binding_for_portal(portal_id)
     if not binding:
         return {"ok": False, "reason": "no_binding"}
 
@@ -194,13 +208,16 @@ def move_client_deal_stage(portal_id: int, stage_key: str) -> dict:
     }
 
 
-def schedule_deal_stage_move(portal_id: int | None, stage_key: str) -> None:
+def schedule_deal_stage_move(
+    portal_id: int | None, stage_key: str, *, binding_id: int | None = None
+) -> None:
     """Enqueue after commit — never block the HTTP request on Bitrix CRM."""
     if not portal_id:
         return
 
     pid = int(portal_id)
     key = str(stage_key)
+    bid = int(binding_id) if binding_id else None
 
     def _run() -> None:
         from django.conf import settings
@@ -212,7 +229,7 @@ def schedule_deal_stage_move(portal_id: int | None, stage_key: str) -> None:
 
                 def _worker() -> None:
                     try:
-                        move_client_deal_stage(pid, key)
+                        move_client_deal_stage(pid, key, binding_id=bid)
                     except Exception:
                         logger.exception(
                             "deal stage move crashed portal=%s key=%s", pid, key
@@ -223,7 +240,7 @@ def schedule_deal_stage_move(portal_id: int | None, stage_key: str) -> None:
 
             from board.tasks import move_deal_stage_task
 
-            move_deal_stage_task.delay(pid, key)
+            move_deal_stage_task.delay(pid, key, bid)
         except Exception:
             logger.exception(
                 "deal stage enqueue failed portal=%s key=%s — running inline thread",
@@ -233,7 +250,7 @@ def schedule_deal_stage_move(portal_id: int | None, stage_key: str) -> None:
             import threading
 
             threading.Thread(
-                target=lambda: move_client_deal_stage(pid, key),
+                target=lambda: move_client_deal_stage(pid, key, binding_id=bid),
                 daemon=True,
             ).start()
 

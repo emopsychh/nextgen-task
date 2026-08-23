@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
@@ -9,25 +9,55 @@ import {
   type WorkReport,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
-import { FlashToast } from "../../components/FlashToast";
-import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
-import { formatDateTime, formatDuration } from "../../lib/format";
+import { BoardDoneSplit } from "../../components/BoardDoneSplit";
+import { PaginationBar } from "../../components/PaginationBar";
+import { formatPackageHours } from "../../lib/format";
+import { LIST_PAGE_SIZE, pageTotal, withPage } from "../../lib/pagination";
+import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
 import {
-  CACHE_PROJECTS,
-  readPortalCache,
-  writePortalCache,
-} from "../../lib/portalSessionCache";
-import {
-  REPORT_BUCKETS,
   type ReportBucket,
   countsFromReports,
+  reportBucketsForRole,
   reportDetailPath,
+  reportPackageFill,
   reportsApiQuery,
   reportSubtitle,
   reportTitle,
   STATUS_LABEL_RU,
 } from "./reportHelpers";
+
+function reportRowTitle(r: WorkReport): string {
+  return reportTitle(r);
+}
+
+function reportStatusTone(status: WorkReport["status"]): string {
+  if (status === "accepted" || status === "paid" || status === "dismissed") return "status-done";
+  if (status === "pending_client") return "status-progress";
+  if (status === "disputed") return "status-overdue";
+  return "status-todo";
+}
+
+function packageHint(report: WorkReport, isAgency: boolean): string | null {
+  const fill = reportPackageFill(report);
+  if (report.status === "accepted" || report.status === "paid") return "Пакет закрыт";
+  if (report.status === "dismissed") return "Снято с контроля";
+  if (report.status === "disputed") return isAgency ? "Клиент оставил замечания" : "Менеджер смотрит замечания";
+  if (report.status === "pending_client") {
+    return isAgency ? "Ждём согласования клиента" : "Нужно согласовать закрытие пакета";
+  }
+  if (fill.leftover == null) return null;
+  if (fill.leftover > 0) return `Ещё ${formatPackageHours(fill.leftover)} закрыть в отчёт`;
+  if (fill.overage > 0) {
+    return isAgency
+      ? `Перерасход ${formatPackageHours(fill.overage)} уйдёт в следующий пакет`
+      : `Перерасход ${formatPackageHours(fill.overage)} перейдёт в следующий пакет`;
+  }
+  if (fill.carried > 0) {
+    return `В том числе ${formatPackageHours(fill.carried)} с прошлого пакета`;
+  }
+  return isAgency ? "Отчёт заполнен — можно отправлять" : "Отчёт заполнен";
+}
 
 const EMPTY_REPORT_COUNTS: Record<ReportBucket, number> = {
   all: 0,
@@ -41,8 +71,7 @@ export function ProjectReports() {
   const { portalId: routePortalId, projectId: routeProjectId } = useParams();
   const { token, portal } = useAuth();
   const isAgency = portal?.role === "agency";
-  const navigate = useNavigate();
-  const toast = useFlashToast();
+  const buckets = reportBucketsForRole(isAgency);
 
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
 
@@ -66,16 +95,12 @@ export function ProjectReports() {
 
   const [bucket, setBucket] = useState<ReportBucket>("all");
   const [reports, setReports] = useState<WorkReport[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [listLoading, setListLoading] = useState(true);
   const [listLoaded, setListLoaded] = useState(false);
-  const [projectsLoading, setProjectsLoading] = useState(true);
-  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const listGenRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
-  const [pickedProjects, setPickedProjects] = useState<Set<number>>(new Set());
   const [counts, setCounts] = useState<Record<ReportBucket, number>>(
     () =>
       (portalId
@@ -137,42 +162,24 @@ export function ProjectReports() {
       if (!token || !portalId) return;
       const gen = ++listGenRef.current;
       const data = await api<WorkReport[] | Paginated<WorkReport>>(
-        reportsApiQuery(portalId, bucket),
+        withPage(reportsApiQuery(portalId, bucket), page, LIST_PAGE_SIZE),
         { signal },
         token
       );
       if (signal?.aborted || gen !== listGenRef.current) return;
       const list = unwrapList(data);
       setReports(list);
-      writePortalCache(`reports:${bucket}`, portalId, list);
+      setTotal(pageTotal(data));
+      writePortalCache(`reports:${bucket}:p${page}`, portalId, list);
       setListLoaded(true);
       void loadCounts(signal, bucket === "all" ? list : undefined);
     },
-    [token, portalId, bucket, loadCounts]
-  );
-
-  const loadProjects = useCallback(
-    async (signal?: AbortSignal) => {
-      if (!token || !portalId) return;
-      const data = await api<Project[] | Paginated<Project>>(
-        `/api/projects/?portal=${portalId}`,
-        { signal },
-        token
-      );
-      if (signal?.aborted) return;
-      const list = unwrapList(data).filter(
-        (project) => project.portal === portalId
-      );
-      setProjects(list);
-      setProjectsLoaded(true);
-      writePortalCache(CACHE_PROJECTS, portalId, list);
-    },
-    [token, portalId]
+    [token, portalId, bucket, page, loadCounts]
   );
 
   useEffect(() => {
     if (!token || !portalId) return;
-    const cached = readPortalCache<WorkReport[]>(`reports:${bucket}`, portalId);
+    const cached = readPortalCache<WorkReport[]>(`reports:${bucket}:p${page}`, portalId);
     setReports(cached || []);
     setListLoaded(cached !== null);
     setListLoading(true);
@@ -184,7 +191,7 @@ export function ProjectReports() {
       if (!ac.signal.aborted) setListLoading(false);
     });
     return () => ac.abort();
-  }, [token, portalId, bucket, loadList]);
+  }, [token, portalId, bucket, page, loadList]);
 
   useEffect(() => {
     if (!portalId) {
@@ -198,23 +205,6 @@ export function ProjectReports() {
     setCounts(cached || EMPTY_REPORT_COUNTS);
   }, [portalId]);
 
-  useEffect(() => {
-    if (!token || !portalId) return;
-    const cached = readPortalCache<Project[]>(CACHE_PROJECTS, portalId);
-    setProjects(
-      cached?.filter((project) => project.portal === portalId) || []
-    );
-    setProjectsLoaded(cached !== null);
-    setProjectsLoading(true);
-    const ac = new AbortController();
-    void loadProjects(ac.signal)
-      .catch(() => undefined)
-      .finally(() => {
-        if (!ac.signal.aborted) setProjectsLoading(false);
-      });
-    return () => ac.abort();
-  }, [token, portalId, loadProjects]);
-
   usePortalLiveSync({
     token,
     portalId,
@@ -225,47 +215,6 @@ export function ProjectReports() {
       }
     },
   });
-
-  async function createReport() {
-    if (!token || !portalId || pickedProjects.size === 0) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await api<WorkReport>(
-        "/api/reports/",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            portal: portalId,
-            project_ids: Array.from(pickedProjects),
-          }),
-        },
-        token
-      );
-      toast.show("Итоги задач подтянутся автоматически", "Отчёт создан");
-      setShowCreate(false);
-      setPickedProjects(new Set());
-      setBucket("all");
-      navigate(reportDetailPath(portalId, isAgency, created.id));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Не удалось создать отчёт");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function toggleProjectPick(id: number) {
-    setPickedProjects((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function openReport(id: number) {
-    navigate(reportDetailPath(portalId, isAgency, id));
-  }
 
   if (!portalId) {
     return (
@@ -280,142 +229,145 @@ export function ProjectReports() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Отчёты</h1>
-          <p className="page-sub">
-            Согласование выполненных работ по проектам клиента
-          </p>
+          {isAgency ? (
+            <p className="page-sub">
+              Завершённые задачи сами попадают в отчёт. Когда пакет выработан — отправьте клиенту
+            </p>
+          ) : null}
         </div>
-        {isAgency ? (
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={busy}
-            onClick={() => {
-              setShowCreate(true);
-              void loadProjects();
-            }}
-          >
-            Создать отчёт
-          </button>
-        ) : null}
       </div>
 
       {error && <div className="error-banner">{error}</div>}
-      <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
-      <div className="task-filters report-filter-row">
-        {REPORT_BUCKETS.map((b) => (
-          <button
-            key={b.id}
-            type="button"
-            className={`task-filter-chip${bucket === b.id ? " active" : ""}`}
-            onClick={() => {
-              if (b.id === bucket) return;
-              listGenRef.current += 1;
-              const cached = readPortalCache<WorkReport[]>(
-                `reports:${b.id}`,
-                portalId
-              );
-              setReports(cached || []);
-              setListLoaded(cached !== null);
-              setListLoading(true);
-              setBucket(b.id);
-            }}
-          >
-            {b.label}
-            <span className="task-filter-count">{counts[b.id]}</span>
-          </button>
-        ))}
-      </div>
-
-      {showCreate && isAgency ? (
-        <div className="connect-panel stack report-create-panel">
-          <div>
-            <h2 className="section-title">Новый отчёт</h2>
-            <p className="muted">Выберите один или несколько проектов.</p>
-          </div>
-          <ul className="report-project-pick">
-            {projects.map((p) => (
-              <li key={p.id}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={pickedProjects.has(p.id)}
-                    onChange={() => toggleProjectPick(p.id)}
-                  />
-                  <span>{p.name}</span>
-                  <span className="muted">
-                    {p.done_count}/{p.tasks_count} задач
-                  </span>
-                </label>
-              </li>
-            ))}
-            {projectsLoading && !projectsLoaded ? (
-              <li className="muted">Загружаем проекты…</li>
-            ) : projects.length === 0 ? (
-              <li className="muted">Пока нет проектов у этого клиента</li>
-            ) : null}
-          </ul>
-          <div className="report-create-actions">
+      <section className="package-reports">
+        <div className="report-filter-row" role="tablist" aria-label="Статус отчётов">
+          {buckets.map((b) => (
             <button
+              key={b.id}
               type="button"
-              className="btn btn-ghost"
+              className={`report-filter-chip${bucket === b.id ? " active" : ""}`}
               onClick={() => {
-                setShowCreate(false);
-                setPickedProjects(new Set());
+                if (b.id === bucket) return;
+                listGenRef.current += 1;
+                const cached = readPortalCache<WorkReport[]>(
+                  `reports:${b.id}:p1`,
+                  portalId
+                );
+                setReports(cached || []);
+                setListLoaded(cached !== null);
+                setListLoading(true);
+                setPage(1);
+                setBucket(b.id);
               }}
             >
-              Отмена
+              {b.label}
+              <span className="report-filter-count">{counts[b.id]}</span>
             </button>
-            <button
-              type="button"
-              className="btn btn-accent"
-              disabled={busy || pickedProjects.size === 0}
-              onClick={() => void createReport()}
-            >
-              Создать
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {listLoading && !listLoaded ? (
-        <div className="report-list-empty-card data-loading-state">
-          <span className="data-loading-spinner" aria-hidden />
-          <p className="muted">Загружаем отчёты…</p>
-        </div>
-      ) : !listLoaded && error ? null : reports.length === 0 ? (
-        <div className="report-list-empty-card">
-          <p>В этой вкладке пока пусто.</p>
-          {isAgency && (bucket === "all" || bucket === "current") ? (
-            <p className="muted">Нажмите «Создать отчёт», чтобы собрать проекты.</p>
-          ) : null}
-        </div>
-      ) : (
-        <ul className="report-card-grid">
-          {reports.map((r) => (
-            <li key={r.id}>
-              <button
-                type="button"
-                className="report-list-item report-card"
-                onClick={() => openReport(r.id)}
-              >
-                <div className="report-list-item-top">
-                  <span className={`report-status-pill status-${r.status}`}>
-                    {STATUS_LABEL_RU[r.status]}
-                  </span>
-                  <span className="report-list-hours">
-                    {formatDuration(r.total_tracked_seconds)}
-                  </span>
-                </div>
-                <strong className="report-list-title">{reportTitle(r)}</strong>
-                <span className="report-list-sub">
-                  {reportSubtitle(r)} · {formatDateTime(r.created_at)}
-                </span>
-              </button>
-            </li>
           ))}
-        </ul>
-      )}
+        </div>
+
+        {listLoading && !listLoaded ? (
+          <div className="empty-linked workspace-empty data-loading-state">
+            <span className="data-loading-spinner" aria-hidden />
+            <p className="muted">Загружаем отчёты…</p>
+          </div>
+        ) : !listLoaded && error ? null : reports.length === 0 ? (
+          <div className="empty-linked workspace-empty">
+            <p className="muted">
+              {isAgency
+                ? "В этой вкладке пока нет отчётов по сделкам."
+                : bucket === "review"
+                  ? "Сейчас нет отчётов, которые нужно согласовать."
+                  : bucket === "accepted"
+                    ? "Пока нет согласованных отчётов."
+                    : "Пока нет отчётов по пакетам часов."}
+            </p>
+          </div>
+        ) : (
+          <BoardDoneSplit
+            items={reports}
+            split={bucket === "all"}
+            isDone={(r) =>
+              r.status === "accepted" || r.status === "paid" || r.status === "dismissed"
+            }
+            doneLabel="Закрытые пакеты"
+            renderItem={(r) => {
+              const done = r.status === "accepted" || r.status === "paid" || r.status === "dismissed";
+              const fill = reportPackageFill(r);
+              const paid = fill.paid;
+              const used = fill.used;
+              const leftover = fill.leftover;
+              const usedPct = fill.usedPct != null ? Math.round(fill.usedPct) : 0;
+              const hint = packageHint(r, isAgency);
+              const readyToClose = !done && fill.isFull && (r.tasks_count || 0) > 0 && r.status === "draft";
+              const needsAction = r.status === "pending_client" || r.status === "disputed";
+              return (
+                <li key={r.id} className="board-list-item">
+                  <Link
+                    to={reportDetailPath(portalId, isAgency, r.id)}
+                    className={`board-row${done ? " is-done" : ""}${needsAction ? " needs-action" : ""}${readyToClose ? " is-ready" : ""}`}
+                  >
+                    <div className="board-row-main">
+                      <div className="board-row-chips">
+                        <span className={`task-status-pill ${reportStatusTone(r.status)}`}>
+                          {STATUS_LABEL_RU[r.status]}
+                        </span>
+                        {readyToClose ? (
+                          <span className="report-ready-pill">
+                            {isAgency ? "Можно закрывать" : "Часы израсходованы"}
+                          </span>
+                        ) : null}
+                        {r.dispute_count ? (
+                          <span className="task-working-pill">Есть замечания</span>
+                        ) : null}
+                      </div>
+                      <strong className="board-row-title">{reportRowTitle(r)}</strong>
+                      <span className="board-row-note muted">
+                        Сделка №{r.deal_id} · {reportSubtitle(r)}
+                        {hint ? ` · ${hint}` : ""}
+                      </span>
+                      {paid != null ? (
+                        <div className={`board-progress report-package-progress${readyToClose ? " is-ready" : ""}`}>
+                          <span className="board-progress-pct">{usedPct}%</span>
+                          <span className="board-progress-track" aria-hidden>
+                            <span style={{ width: `${usedPct}%` }} />
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="board-row-meta is-report">
+                      <div className="board-meta">
+                        <span className="board-meta-label">Пакет</span>
+                        <span className="board-meta-due">
+                          <strong>{paid == null ? "—" : formatPackageHours(paid)}</strong>
+                        </span>
+                      </div>
+                      <div className="board-meta">
+                        <span className="board-meta-label">В отчёте</span>
+                        <span className="board-meta-time">
+                          {formatPackageHours(used)}
+                        </span>
+                      </div>
+                      <div className={`board-meta${readyToClose ? " is-ready" : ""}`}>
+                        <span className="board-meta-label">Осталось закрыть</span>
+                        <span className="board-meta-due">
+                          <strong>{leftover == null ? "—" : formatPackageHours(leftover)}</strong>
+                        </span>
+                      </div>
+                    </div>
+                  </Link>
+                </li>
+              );
+            }}
+          />
+        )}
+        <PaginationBar
+          page={page}
+          total={total}
+          disabled={listLoading}
+          onChange={setPage}
+        />
+      </section>
     </div>
   );
 }

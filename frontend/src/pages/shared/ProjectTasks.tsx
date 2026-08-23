@@ -15,17 +15,27 @@ import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { useSeenProjects } from "../../hooks/useSeenProjects";
-import { dueMeta } from "../../lib/dates";
+import { dueMeta, formatRuDateTime, formatRuDateTimeOrDash } from "../../lib/dates";
 import {
   readPortalCache,
   readBoardTasksCache,
   writePortalCache,
   writeBoardTasksCache,
 } from "../../lib/portalSessionCache";
-import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
-import { CalendarGlyph, FlameIcon } from "../../components/icons";
-import { SyncHint } from "../../components/SyncHint";
+import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
+import { BoardAvatar } from "../../components/BoardAvatar";
+import { FlameIcon } from "../../components/icons";
+import { formatDuration } from "../../lib/format";
+import { BoardDoneSplit } from "../../components/BoardDoneSplit";
+import { PaginationBar } from "../../components/PaginationBar";
+import { LIST_PAGE_SIZE, pageTotal } from "../../lib/pagination";
 import { displayTimeZone } from "../../lib/timezone";
+import { SyncHint } from "../../components/SyncHint";
+
+function dueHint(due: ReturnType<typeof dueMeta>): string {
+  if (due.tone === "due-overdue") return "Срок истёк";
+  return due.label;
+}
 
 export function ProjectTasks() {
   const { projectId } = useParams();
@@ -63,21 +73,19 @@ export function ProjectTasks() {
         done: 0,
       }
   );
-  const [hasMore, setHasMore] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [initialLoading, setInitialLoading] = useState(true);
   const [bitrixSyncing, setBitrixSyncing] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const loadedPagesRef = useRef(1);
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  // Discard responses that resolve after project/filter/search changed.
   const genRef = useRef(0);
+  const pageRef = useRef(1);
+  pageRef.current = page;
 
-  // Filtering / search / sorting now happen server-side, so render as-is.
   const visible = tasks;
 
-  function buildListUrl(page: number, withPull: boolean): string {
-    let url = `/api/tasks/?project=${projectId}&page=${page}`;
+  function buildListUrl(pageNum: number, withPull: boolean): string {
+    let url = `/api/tasks/?project=${projectId}&page=${pageNum}&page_size=${LIST_PAGE_SIZE}`;
     if (filter !== "all") url += `&status=${filter}`;
     const q = debouncedQuery.trim();
     if (q) url += `&search=${encodeURIComponent(q)}`;
@@ -85,30 +93,24 @@ export function ProjectTasks() {
     return url;
   }
 
-  function fetchPage(page: number, withPull: boolean, signal?: AbortSignal) {
-    return api<Paginated<Task>>(buildListUrl(page, withPull), { signal }, token!);
+  function fetchPage(pageNum: number, withPull: boolean, signal?: AbortSignal) {
+    return api<Paginated<Task>>(buildListUrl(pageNum, withPull), { signal }, token!);
   }
 
-  function mergeById(base: Task[], incoming: Task[]): Task[] {
-    const seen = new Set(base.map((t) => t.id));
-    const merged = base.slice();
-    for (const t of incoming) if (!seen.has(t.id)) merged.push(t);
-    return merged;
-  }
-
-  function dedupeById(list: Task[]): Task[] {
-    const seen = new Set<number>();
-    return list.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)));
-  }
-
-  /** Refresh page-1; drop deleted page-1 rows (do not keep ghosts from prev). */
-  function mergePage1(prev: Task[], page1: Task[]): Task[] {
-    if (loadedPagesRef.current <= 1) {
-      return dedupeById(page1);
+  function applyPage(data: Paginated<Task>, pageNum: number) {
+    const list = data.results || [];
+    const count = pageTotal(data);
+    setTasks(list);
+    setTotal(count);
+    setPage(pageNum);
+    const parts = cacheKeyParts();
+    if (parts) {
+      writeBoardTasksCache(parts[0], parts[1], parts[2], pageNum, {
+        tasks: list,
+        count,
+        page: pageNum,
+      });
     }
-    const page1Ids = new Set(page1.map((t) => t.id));
-    const older = prev.slice(page1.length).filter((t) => !page1Ids.has(t.id));
-    return dedupeById([...page1, ...older]);
   }
 
   function cacheKeyParts(): [number, string, string] | null {
@@ -128,43 +130,25 @@ export function ProjectTasks() {
     }
   }
 
-  async function loadFirst(signal?: AbortSignal) {
+  async function loadPage(pageNum: number, withPull: boolean, signal?: AbortSignal) {
     if (!token || !projectId) return;
     const gen = genRef.current;
-    const parts = cacheKeyParts();
-
-    // Paint from DB first; Bitrix soft-pull runs in the background.
     const [projectData, taskData] = await Promise.all([
       api<Project>(`/api/projects/${projectId}/`, { signal }, token),
-      fetchPage(1, false, signal),
+      fetchPage(pageNum, false, signal),
     ]);
     if (gen !== genRef.current || signal?.aborted) return;
     setProject(projectData);
     writePortalCache("project-meta", Number(projectId), projectData);
-    setTasks(taskData.results);
-    setHasMore(Boolean(taskData.next));
-    loadedPagesRef.current = 1;
-    if (parts) {
-      writeBoardTasksCache(parts[0], parts[1], parts[2], {
-        tasks: taskData.results,
-        hasMore: Boolean(taskData.next),
-      });
-    }
+    applyPage(taskData, pageNum);
     void loadCounts();
 
-    // Background Bitrix status pull — merge when ready.
+    if (!withPull || pageNum !== 1) return;
     setBitrixSyncing(true);
     void fetchPage(1, true, signal)
       .then((pulled) => {
         if (gen !== genRef.current || signal?.aborted) return;
-        setTasks((prev) => mergePage1(prev, pulled.results));
-        setHasMore(Boolean(pulled.next) || loadedPagesRef.current > 1);
-        if (parts) {
-          writeBoardTasksCache(parts[0], parts[1], parts[2], {
-            tasks: pulled.results,
-            hasMore: Boolean(pulled.next),
-          });
-        }
+        applyPage(pulled, 1);
         void loadCounts();
       })
       .catch((e) => {
@@ -175,31 +159,14 @@ export function ProjectTasks() {
       });
   }
 
-  async function loadMore() {
-    if (loadingMore || !hasMore || !token || !projectId) return;
-    const gen = genRef.current;
-    setLoadingMore(true);
-    try {
-      const nextPage = loadedPagesRef.current + 1;
-      const data = await fetchPage(nextPage, false);
-      if (gen !== genRef.current) return;
-      setTasks((prev) => mergeById(prev, data.results));
-      setHasMore(Boolean(data.next));
-      loadedPagesRef.current = nextPage;
-    } catch {
-      // retry on next scroll
-    } finally {
-      setLoadingMore(false);
-    }
-  }
-
-  // Debounce the search box → server-side search.
   useEffect(() => {
-    const id = window.setTimeout(() => setDebouncedQuery(query), 300);
+    const id = window.setTimeout(() => {
+      setDebouncedQuery(query);
+      setPage(1);
+    }, 300);
     return () => window.clearTimeout(id);
   }, [query]);
 
-  // Opening a project clears it from the "new" badge.
   useEffect(() => {
     const id = Number(projectId);
     if (!id || !project) return;
@@ -207,8 +174,6 @@ export function ProjectTasks() {
   }, [projectId, project, markSeen]);
 
   useEffect(() => {
-    // Project routes reuse this component; never keep the previous project's
-    // identity or live-sync portal while the new project is resolving.
     const id = Number(projectId || 0);
     setProject(readPortalCache<Project>("project-meta", id));
     setCounts(
@@ -220,9 +185,9 @@ export function ProjectTasks() {
       }
     );
     setError(null);
+    setPage(1);
   }, [projectId]);
 
-  // Reset & reload page 1 whenever project / filter / search change.
   useEffect(() => {
     if (!token || !projectId) return;
     genRef.current += 1;
@@ -231,21 +196,18 @@ export function ProjectTasks() {
     const ac = new AbortController();
     const parts = cacheKeyParts();
     const cached = parts
-      ? readBoardTasksCache(parts[0], parts[1], parts[2])
+      ? readBoardTasksCache(parts[0], parts[1], parts[2], page)
       : null;
-    // An empty cached page is still a valid loaded snapshot. Treating [] as a
-    // cache miss made the full-page loader reappear on every revisit.
     if (cached) {
       setTasks(cached.tasks as Task[]);
-      setHasMore(Boolean(cached.hasMore));
+      setTotal(cached.count || 0);
       setInitialLoading(false);
     } else {
       setInitialLoading(true);
       setTasks([]);
-      setHasMore(false);
+      setTotal(0);
     }
-    loadedPagesRef.current = 1;
-    void loadFirst(ac.signal)
+    void loadPage(page, page === 1, ac.signal)
       .catch((e) => {
         if (!isAbortError(e)) setError(e instanceof Error ? e.message : "Ошибка");
       })
@@ -256,22 +218,7 @@ export function ProjectTasks() {
       });
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, projectId, filter, debouncedQuery]);
-
-  // Infinite scroll: auto-load the next page when the sentinel comes into view.
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) void loadMore();
-      },
-      { rootMargin: "300px 0px" }
-    );
-    io.observe(el);
-    return () => io.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasMore, loadingMore, filter, debouncedQuery]);
+  }, [token, projectId, filter, debouncedQuery, page]);
 
   const pullNowRef = useRef(false);
   usePortalLiveSync({
@@ -279,13 +226,10 @@ export function ProjectTasks() {
     portalId: project?.portal ?? null,
     enabled: !!projectId,
     onEvent: () => {
-      // The 2.5s local poll will pick up the DB change. Do not turn a
-      // pull-complete event into another Bitrix pull.
       pullNowRef.current = false;
     },
   });
 
-  // Soft realtime: refresh page 1 locally; Bitrix catch-up about once a minute.
   useEffect(() => {
     if (!token || !projectId) return;
     let cancelled = false;
@@ -302,14 +246,12 @@ export function ProjectTasks() {
       tickAc = new AbortController();
       const signal = tickAc.signal;
       try {
-        const wantPull = pullNowRef.current || tickCount % 24 === 0;
+        const currentPage = pageRef.current;
+        const wantPull = currentPage === 1 && (pullNowRef.current || tickCount % 24 === 0);
         pullNowRef.current = false;
-        const data = await fetchPage(1, wantPull, signal);
+        const data = await fetchPage(currentPage, wantPull, signal);
         if (cancelled || signal.aborted) return;
-        setTasks((prev) => mergePage1(prev, data.results));
-        if (loadedPagesRef.current <= 1) {
-          setHasMore(Boolean(data.next));
-        }
+        applyPage(data, currentPage);
         void loadCounts();
       } catch (e) {
         if (!isAbortError(e)) undefined;
@@ -358,7 +300,8 @@ export function ProjectTasks() {
       setShowCreate(false);
       setEnteringId(created.id);
       toast.show("Она появилась в списке ниже", "Задача создана");
-      await loadFirst();
+      setPage(1);
+      await loadPage(1, true);
       window.dispatchEvent(new Event("projects-updated"));
       window.setTimeout(() => setEnteringId(null), 900);
     } catch (err) {
@@ -383,17 +326,10 @@ export function ProjectTasks() {
     setError(null);
     try {
       await api(`/api/tasks/${task.id}/`, { method: "DELETE" }, token);
-      setTasks((prev) => prev.filter((t) => t.id !== task.id));
-      setCounts((prev) => {
-        const next = { ...prev, all: Math.max(0, prev.all - 1) };
-        if (task.status in next) {
-          const key = task.status as TaskStatus;
-          next[key] = Math.max(0, (next[key] || 0) - 1);
-        }
-        return next;
-      });
       toast.show("Задача удалена");
       window.dispatchEvent(new Event("projects-updated"));
+      if (tasks.length <= 1 && page > 1) setPage(page - 1);
+      else await loadPage(page, false);
       void loadCounts();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось удалить задачу");
@@ -418,22 +354,16 @@ export function ProjectTasks() {
             {counts.all
               ? `${counts.done} из ${counts.all} выполнено`
               : "Задачи этого модуля"}
+            {project?.due_date
+              ? ` · срок ${formatRuDateTime(project.due_date, dueTz)}`
+              : ""}
+            {project && (project.total_tracked_seconds || 0) > 0
+              ? ` · учёт ${formatDuration(project.total_tracked_seconds || 0)}`
+              : ""}
             {bitrixSyncing ? <SyncHint>Обновляем статусы…</SyncHint> : null}
           </p>
         </div>
         <div className="report-header-actions">
-          {project?.portal ? (
-            <Link
-              to={
-                isAgency
-                  ? `/portals/${project.portal}/reports`
-                  : "/reports"
-              }
-              className="btn btn-ghost"
-            >
-              Отчёты
-            </Link>
-          ) : null}
           <button
             type="button"
             className="btn btn-primary"
@@ -536,8 +466,7 @@ export function ProjectTasks() {
               }`}
               onClick={() => {
                 if (f.id === filter) return;
-                setTasks([]);
-                setHasMore(false);
+                setPage(1);
                 setInitialLoading(true);
                 setFilter(f.id);
               }}
@@ -566,82 +495,111 @@ export function ProjectTasks() {
             </p>
           </div>
         ) : (
-          visible.map((t) => {
-            const due = dueMeta(t.due_date, t.status);
-            return (
-              <Link
-                key={t.id}
-                to={`/tasks/${t.id}`}
-                className={`task-card${t.status === "done" ? " is-done" : ""}${t.is_important ? " is-important" : ""}${enteringId === t.id ? " is-entering" : ""}`}
-              >
-                <div className="task-card-main">
-                  <div className="task-card-top">
-                    {t.is_important ? (
-                      <span className="task-important-pill" title="Важная задача">
-                        <FlameIcon filled size={14} />
-                        Важно
+          <BoardDoneSplit
+            items={visible}
+            split={filter === "all"}
+            isDone={(t) => t.status === "done"}
+            doneLabel="Завершённые задачи"
+            as="div"
+            className="task-list-group"
+            renderItem={(t) => {
+              const due = dueMeta(t.due_date, t.status, dueTz);
+              const person = t.working_by_name || t.created_by_name || "";
+              const personLabel = t.working_by_name ? "Исполнитель" : "Автор";
+              const tracked = t.total_tracked_seconds || 0;
+              return (
+                <Link
+                  key={t.id}
+                  to={`/tasks/${t.id}`}
+                  className={`board-row task-card${t.status === "done" ? " is-done" : ""}${t.is_important ? " is-important" : ""}${enteringId === t.id ? " is-entering" : ""}`}
+                >
+                  <div className="board-row-main">
+                    <div className="board-row-chips">
+                      <span className={`task-status-pill ${STATUS_TONE[t.status]}`}>
+                        {STATUS_LABEL[t.status]}
                       </span>
+                      {t.is_important ? (
+                        <span className="task-important-pill" title="Важная задача">
+                          <FlameIcon filled size={14} />
+                          Важно
+                        </span>
+                      ) : null}
+                      {t.is_working ? (
+                        <span className="task-working-pill" title={t.working_by_name || undefined}>
+                          Сейчас в работе
+                        </span>
+                      ) : null}
+                      {t.awaiting_client ? (
+                        <span className="task-awaiting-pill">Ожидает ответа</span>
+                      ) : null}
+                    </div>
+                    <strong
+                      className={`board-row-title task-card-title${t.status === "done" ? " is-struck" : ""}`}
+                    >
+                      {t.title}
+                    </strong>
+                    {t.description ? (
+                      <span className="board-row-desc task-card-desc muted">{t.description}</span>
                     ) : null}
-                    <span className={`task-status-pill ${STATUS_TONE[t.status]}`}>
-                      {STATUS_LABEL[t.status]}
-                    </span>
-                    {t.is_working ? (
-                      <span className="task-working-pill" title={t.working_by_name || undefined}>
-                        Сейчас в работе
-                      </span>
-                    ) : null}
-                    {isTaskOverdue(t.due_date, t.status) ? (
-                      <span className="task-status-pill status-overdue">Опаздывает</span>
-                    ) : null}
-                    {typeof t.comments_count === "number" && t.comments_count > 0 && (
-                      <span className="task-comments muted">{t.comments_count} комм.</span>
-                    )}
-                    {isAgency && t.can_delete ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost task-card-delete"
-                        disabled={deletingId === t.id}
-                        title="Удалить черновую задачу"
-                        onClick={(e) => void deleteTask(t, e)}
-                      >
-                        {deletingId === t.id ? "Удаляем…" : "Удалить"}
-                      </button>
+                    {typeof t.comments_count === "number" && t.comments_count > 0 ? (
+                      <span className="board-row-note muted">{t.comments_count} комм.</span>
                     ) : null}
                   </div>
-                  <strong
-                    className={`task-card-title${t.status === "done" ? " is-struck" : ""}`}
-                  >
-                    {t.title}
-                  </strong>
-                  {t.description ? (
-                    <span className="task-card-desc muted">{t.description}</span>
+                  <div className="board-row-meta is-task">
+                    <div className="board-meta">
+                      <span className="board-meta-label">{personLabel}</span>
+                      {person ? (
+                        <span className="board-meta-person">
+                          <BoardAvatar name={person} />
+                          <span className="board-meta-text">{person}</span>
+                        </span>
+                      ) : (
+                        <span className="board-meta-empty">—</span>
+                      )}
+                    </div>
+                    <div className="board-meta">
+                      <span className="board-meta-label">Срок</span>
+                      <span className={`board-meta-due ${due.tone}`}>
+                        <strong>{due.detail || "Без срока"}</strong>
+                        {t.status !== "done" && due.detail ? <small>{dueHint(due)}</small> : null}
+                      </span>
+                    </div>
+                    <div className="board-meta">
+                      <span className="board-meta-label">Учёт</span>
+                      <span className="board-meta-time">{formatDuration(tracked)}</span>
+                    </div>
+                    <div className="board-meta">
+                      <span className="board-meta-label">Реализовали</span>
+                      <span className="board-meta-due">
+                        <strong>{formatRuDateTimeOrDash(t.completed_at, dueTz)}</strong>
+                      </span>
+                    </div>
+                  </div>
+                  {isAgency && t.can_delete ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost board-row-delete"
+                      disabled={deletingId === t.id}
+                      title="Удалить черновую задачу"
+                      onClick={(e) => void deleteTask(t, e)}
+                    >
+                      {deletingId === t.id ? "Удаляем…" : "Удалить"}
+                    </button>
                   ) : null}
-                </div>
-                <div className={`task-due ${due.tone}`}>
-                  <span className="task-due-icon" aria-hidden>
-                    <CalendarGlyph />
-                  </span>
-                  <span className="task-due-body">
-                    {due.detail ? (
-                      <>
-                        <span className="task-due-date">{due.detail}</span>
-                        <span className="task-due-label">{due.label}</span>
-                      </>
-                    ) : (
-                      <span className="task-due-date">{due.label}</span>
-                    )}
-                  </span>
-                </div>
-              </Link>
-            );
-          })
+                </Link>
+              );
+            }}
+          />
         )}
-
-        {hasMore ? (
-          <div ref={sentinelRef} className="task-list-sentinel muted">
-            {loadingMore ? "Загрузка…" : ""}
-          </div>
-        ) : null}
+        <PaginationBar
+          page={page}
+          total={total}
+          disabled={initialLoading}
+          onChange={(next) => {
+            setPage(next);
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+        />
       </div>
     </div>
   );

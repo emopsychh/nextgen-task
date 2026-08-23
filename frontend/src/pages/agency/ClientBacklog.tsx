@@ -11,6 +11,8 @@ import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { getPortalLabel } from "../../lib/portalLabelCache";
 
+const COLUMN_LIMIT = 15;
+
 type PendingDelete = { id: number; title: string };
 
 /** Active kanban stages only (closed/converted stay in API but not on the board). */
@@ -139,6 +141,9 @@ export function ClientBacklog() {
   const [dragId, setDragId] = useState<number | null>(null);
   const [dragOverStage, setDragOverStage] = useState<BacklogStatus | null>(null);
   const [pageTitle, setPageTitle] = useState("Бэклог");
+  const [expandedCols, setExpandedCols] = useState<Partial<Record<BacklogStatus, boolean>>>(
+    {}
+  );
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -547,6 +552,11 @@ export function ClientBacklog() {
         <div className="backlog-funnel">
           {visibleStages.map((stage, stageIndex) => {
             const colItems = columns[stage.id] || [];
+            const expanded = Boolean(expandedCols[stage.id]);
+            const shownItems =
+              expanded || colItems.length <= COLUMN_LIMIT
+                ? colItems
+                : colItems.slice(0, COLUMN_LIMIT);
             return (
               <section
                 key={stage.id}
@@ -579,7 +589,7 @@ export function ClientBacklog() {
                   {colItems.length === 0 ? (
                     <p className="backlog-funnel-empty muted">Перетащите сюда</p>
                   ) : (
-                    colItems.map((item) => {
+                    shownItems.map((item) => {
                       const busy = savingId === item.id;
                       return (
                         <article
@@ -654,6 +664,22 @@ export function ClientBacklog() {
                       );
                     })
                   )}
+                  {colItems.length > COLUMN_LIMIT ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost backlog-col-more"
+                      onClick={() =>
+                        setExpandedCols((prev) => ({
+                          ...prev,
+                          [stage.id]: !expanded,
+                        }))
+                      }
+                    >
+                      {expanded
+                        ? "Свернуть"
+                        : `Ещё ${colItems.length - COLUMN_LIMIT}`}
+                    </button>
+                  ) : null}
                 </div>
               </section>
             );

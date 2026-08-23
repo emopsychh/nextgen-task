@@ -119,3 +119,42 @@ class CompletionHelpersTests(TestCase):
         result = board_tasks.sync_completion_time_to_bitrix(task.id)
         self.assertTrue(result["ok"])
         self.assertEqual(result["skipped"], "per_entry_sync")
+
+    def test_save_sets_completed_at_when_task_is_done(self):
+        task = make_task(self.project, created_by=self.user)
+        self.assertIsNone(task.completed_at)
+        task.status = Task.Status.DONE
+        task.outcome = "Готово"
+        task.save()
+        task.refresh_from_db()
+        self.assertIsNotNone(task.completed_at)
+        first = task.completed_at
+        task.title = "Updated"
+        task.save()
+        task.refresh_from_db()
+        self.assertEqual(task.completed_at, first)
+
+    def test_project_completed_at_is_last_task_when_all_done(self):
+        from board.serializers import ProjectSerializer
+
+        first = make_task(
+            self.project, created_by=self.user, status=Task.Status.DONE, outcome="a"
+        )
+        second = make_task(
+            self.project, created_by=self.user, status=Task.Status.DONE, outcome="b"
+        )
+        later = timezone.now() + timedelta(hours=2)
+        Task.objects.filter(pk=second.pk).update(completed_at=later)
+        data = ProjectSerializer(self.project).data
+        self.assertEqual(data["completed_at"], later)
+        self.assertNotEqual(first.completed_at, later)
+
+    def test_project_completed_at_empty_while_open_tasks_remain(self):
+        from board.serializers import ProjectSerializer
+
+        make_task(
+            self.project, created_by=self.user, status=Task.Status.DONE, outcome="a"
+        )
+        make_task(self.project, created_by=self.user, status=Task.Status.TODO)
+        data = ProjectSerializer(self.project).data
+        self.assertIsNone(data["completed_at"])

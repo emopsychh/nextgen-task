@@ -13,5 +13,11 @@ export function projectProgress(p: Pick<Project, "tasks_count" | "done_count">):
 
 /** Projects still in progress (not fully completed). */
 export function isProjectInProgress(p: Pick<Project, "tasks_count" | "done_count">): boolean {
-  return projectProgress(p).pct < 100;
+  return !isProjectComplete(p);
+}
+
+/** Fully completed projects (all tasks done). Empty projects stay open. */
+export function isProjectComplete(p: Pick<Project, "tasks_count" | "done_count">): boolean {
+  const { pct, total } = projectProgress(p);
+  return pct >= 100 && total > 0;
 }

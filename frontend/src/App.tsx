@@ -1,15 +1,10 @@
-import { Fragment, useEffect, type ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Brand } from "./components/Brand";
 import { ClientRail } from "./components/ClientRail";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ProjectSidebarNav } from "./components/ProjectSidebar";
-import { ClientSupportWidget } from "./components/support/ClientSupportWidget";
-import {
-  SupportWidgetProvider,
-  useSupportWidget,
-} from "./components/support/SupportWidgetContext";
 import { LoginPage } from "./pages/LoginPage";
 import { AgencyDashboard } from "./pages/agency/AgencyDashboard";
 import { AgencyHome } from "./pages/agency/AgencyHome";
@@ -36,16 +31,6 @@ function RouteDataBoundary({ children }: { children: ReactNode }) {
   return <Fragment key={key}>{children}</Fragment>;
 }
 
-/** Client deep-links /tickets → stay on work, open corner widget. */
-function ClientTicketsRedirect() {
-  const { ticketId } = useParams();
-  const { open } = useSupportWidget();
-  useEffect(() => {
-    open(ticketId ? Number(ticketId) : null);
-  }, [open, ticketId]);
-  return <Navigate to="/" replace />;
-}
-
 function AppLayout() {
   const { portal, error } = useAuth();
   const location = useLocation();
@@ -54,25 +39,22 @@ function AppLayout() {
   const taskFocus = /^\/tasks\/[^/]+\/?$/.test(location.pathname);
 
   return (
-    <SupportWidgetProvider>
-      <div
-        className={`app-shell${isAgency ? " with-client-rail" : ""}${taskFocus ? " task-focus" : ""}`}
-      >
-        {isAgency ? <ClientRail /> : null}
-        {!taskFocus ? (
-          <aside className="sidebar">
-            <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
-            <ProjectSidebarNav />
-          </aside>
-        ) : null}
-        <main className="main">
-          {error && <div className="error-banner">{error}</div>}
-          <Outlet />
-        </main>
-        <OnboardingTour />
-        {!isAgency ? <ClientSupportWidget /> : null}
-      </div>
-    </SupportWidgetProvider>
+    <div
+      className={`app-shell${isAgency ? " with-client-rail" : ""}${taskFocus ? " task-focus" : ""}`}
+    >
+      {isAgency ? <ClientRail /> : null}
+      {!taskFocus ? (
+        <aside className="sidebar">
+          <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
+          <ProjectSidebarNav />
+        </aside>
+      ) : null}
+      <main className="main">
+        {error && <div className="error-banner">{error}</div>}
+        <Outlet />
+      </main>
+      <OnboardingTour />
+    </div>
   );
 }
 
@@ -127,6 +109,10 @@ export default function App() {
           element={<RouteDataBoundary><ProjectReports /></RouteDataBoundary>}
         />
         <Route
+          path="portals/:portalId/reports/new"
+          element={<Navigate to=".." relative="path" replace />}
+        />
+        <Route
           path="portals/:portalId/reports/:reportId"
           element={<RouteDataBoundary><ReportDetail /></RouteDataBoundary>}
         />
@@ -143,13 +129,10 @@ export default function App() {
           path="reports/:reportId"
           element={<RouteDataBoundary><ReportDetail /></RouteDataBoundary>}
         />
-        <Route
-          path="tickets"
-          element={isAgency ? <SupportTickets /> : <ClientTicketsRedirect />}
-        />
+        <Route path="tickets" element={<SupportTickets />} />
         <Route
           path="tickets/:ticketId"
-          element={isAgency ? <SupportTickets /> : <ClientTicketsRedirect />}
+          element={<RouteDataBoundary><SupportTickets /></RouteDataBoundary>}
         />
         <Route
           path="projects/:projectId"

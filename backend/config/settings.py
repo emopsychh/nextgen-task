@@ -157,8 +157,8 @@ REST_FRAMEWORK = {
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ),
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    "PAGE_SIZE": 50,
+    "DEFAULT_PAGINATION_CLASS": "board.pagination.BoardPagination",
+    "PAGE_SIZE": 20,
 }
 
 from datetime import timedelta  # noqa: E402

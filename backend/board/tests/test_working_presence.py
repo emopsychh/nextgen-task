@@ -77,25 +77,52 @@ class WorkingPresenceApiTests(TestCase):
         )
         self.assertEqual(res.status_code, 403)
 
-    def test_start_clears_previous_task_for_same_user(self):
+    def test_start_keeps_other_started_tasks(self):
         from unittest.mock import patch
 
-        with patch("board.views.publish_task_event"):
-            self.agency_client.post(
-                f"/api/tasks/{self.task.id}/working/start/", format="json"
+        with patch("board.views.publish_task_event"), patch(
+            "board.views.enqueue_bitrix_sync"
+        ), patch("board.views.append_task_change_events"):
+            first = self.agency_client.patch(
+                f"/api/tasks/{self.task.id}/",
+                {"status": "in_progress"},
+                format="json",
             )
-            second = self.agency_client.post(
-                f"/api/tasks/{self.task_b.id}/working/start/", format="json"
+            second = self.agency_client.patch(
+                f"/api/tasks/{self.task_b.id}/",
+                {"status": "in_progress"},
+                format="json",
             )
+        self.assertEqual(first.status_code, 200, first.content)
         self.assertEqual(second.status_code, 200, second.content)
+        self.assertTrue(first.data["is_working"])
         self.assertTrue(second.data["is_working"])
 
         self.task.refresh_from_db()
         self.task_b.refresh_from_db()
-        self.assertIsNone(self.task.working_started_at)
-        self.assertIsNone(self.task.working_by_id)
-        self.assertEqual(self.task_b.working_by_id, self.agency_user.id)
+        self.assertEqual(self.task.status, Task.Status.IN_PROGRESS)
+        self.assertEqual(self.task_b.status, Task.Status.IN_PROGRESS)
+        self.assertIsNotNone(self.task.working_started_at)
         self.assertIsNotNone(self.task_b.working_started_at)
+
+        with patch("board.views.publish_task_event"), patch(
+            "board.views.enqueue_bitrix_sync"
+        ), patch("board.views.append_task_change_events"):
+            pause = self.agency_client.patch(
+                f"/api/tasks/{self.task_b.id}/",
+                {"status": "todo"},
+                format="json",
+            )
+        self.assertEqual(pause.status_code, 200, pause.content)
+        self.assertFalse(pause.data["is_working"])
+
+        res = self.agency_client.get(
+            f"/api/tasks/?portal={self.client_portal.id}&working=1"
+        )
+        rows = res.data["results"] if isinstance(res.data, dict) else res.data
+        ids = [row["id"] for row in rows]
+        self.assertEqual(ids, [self.task.id])
+        self.assertTrue(rows[0]["is_working"])
 
     def test_completing_task_clears_working(self):
         from unittest.mock import patch
@@ -121,12 +148,58 @@ class WorkingPresenceApiTests(TestCase):
         self.assertIsNone(self.task.working_started_at)
         self.assertIsNone(self.task.working_by_id)
 
+    def test_start_status_sets_working(self):
+        from unittest.mock import patch
+
+        with patch("board.views.publish_task_event"), patch(
+            "board.views.enqueue_bitrix_sync"
+        ), patch("board.views.append_task_change_events"):
+            res = self.agency_client.patch(
+                f"/api/tasks/{self.task.id}/",
+                {"status": "in_progress"},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertTrue(res.data["is_working"])
+        self.assertEqual(res.data["working_by_name"], self.agency_user.display_name)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, Task.Status.IN_PROGRESS)
+        self.assertEqual(self.task.working_by_id, self.agency_user.id)
+        self.assertIsNotNone(self.task.working_started_at)
+
+    def test_pause_status_clears_working(self):
+        from unittest.mock import patch
+
+        with patch("board.views.publish_task_event"), patch(
+            "board.views.enqueue_bitrix_sync"
+        ), patch("board.views.append_task_change_events"):
+            self.agency_client.patch(
+                f"/api/tasks/{self.task.id}/",
+                {"status": "in_progress"},
+                format="json",
+            )
+            res = self.agency_client.patch(
+                f"/api/tasks/{self.task.id}/",
+                {"status": "todo"},
+                format="json",
+            )
+        self.assertEqual(res.status_code, 200, res.content)
+        self.assertFalse(res.data["is_working"])
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, Task.Status.TODO)
+        self.assertIsNone(self.task.working_started_at)
+        self.assertIsNone(self.task.working_by_id)
+
     def test_project_has_active_work_flag(self):
         from unittest.mock import patch
 
-        with patch("board.views.publish_task_event"):
-            self.agency_client.post(
-                f"/api/tasks/{self.task.id}/working/start/", format="json"
+        with patch("board.views.publish_task_event"), patch(
+            "board.views.enqueue_bitrix_sync"
+        ), patch("board.views.append_task_change_events"):
+            self.agency_client.patch(
+                f"/api/tasks/{self.task.id}/",
+                {"status": "in_progress"},
+                format="json",
             )
 
         res = self.agency_client.get(
@@ -137,9 +210,13 @@ class WorkingPresenceApiTests(TestCase):
         match = next(p for p in projects if p["id"] == self.project.id)
         self.assertTrue(match["has_active_work"])
 
-        with patch("board.views.publish_task_event"):
-            self.agency_client.post(
-                f"/api/tasks/{self.task.id}/working/stop/", format="json"
+        with patch("board.views.publish_task_event"), patch(
+            "board.views.enqueue_bitrix_sync"
+        ), patch("board.views.append_task_change_events"):
+            self.agency_client.patch(
+                f"/api/tasks/{self.task.id}/",
+                {"status": "todo"},
+                format="json",
             )
 
         res2 = self.agency_client.get(
@@ -157,3 +234,28 @@ class WorkingPresenceApiTests(TestCase):
             f"/api/tasks/{self.task.id}/working/start/", format="json"
         )
         self.assertEqual(res.status_code, 400)
+
+    def test_list_working_filter(self):
+        from unittest.mock import patch
+
+        with patch("board.views.publish_task_event"), patch(
+            "board.views.enqueue_bitrix_sync"
+        ), patch("board.views.append_task_change_events"):
+            self.agency_client.patch(
+                f"/api/tasks/{self.task.id}/",
+                {"status": "in_progress"},
+                format="json",
+            )
+            self.agency_client.patch(
+                f"/api/tasks/{self.task_b.id}/",
+                {"status": "in_progress"},
+                format="json",
+            )
+        res = self.agency_client.get(
+            f"/api/tasks/?portal={self.client_portal.id}&working=1"
+        )
+        self.assertEqual(res.status_code, 200)
+        rows = res.data["results"] if isinstance(res.data, dict) else res.data
+        ids = {row["id"] for row in rows}
+        self.assertEqual(ids, {self.task.id, self.task_b.id})
+        self.assertTrue(all(row["is_working"] for row in rows))

@@ -586,7 +586,7 @@ def _summary_section(
     rows: list = [[metrics]]
     if deal:
         rows.append([Spacer(1, 10)])
-        rows.append([_deal_hours_block(deal, styles, content_w)])
+        rows.append([_deal_hours_block(deal, styles, content_w, used_seconds=total_seconds)])
 
     stack = Table(rows, colWidths=[content_w])
     stack.hAlign = "LEFT"
@@ -632,20 +632,24 @@ def _parse_hours(value) -> float | None:
     return n if n == n else None  # NaN guard
 
 
-def _deal_hours_block(deal: dict, styles: dict[str, ParagraphStyle], width: float) -> Flowable:
+def _deal_hours_block(
+    deal: dict,
+    styles: dict[str, ParagraphStyle],
+    width: float,
+    *,
+    used_seconds: int = 0,
+) -> Flowable:
     paid_n = _parse_hours(deal.get("paid_hours"))
-    rem_n = _parse_hours(deal.get("remaining_hours"))
-    used_n = None
-    if paid_n is not None and rem_n is not None:
-        used_n = max(0.0, paid_n - max(0.0, rem_n))
+    used_n = max(0.0, used_seconds / 3600)
+    leftover_n = max(0.0, paid_n - used_n) if paid_n is not None else None
     ratio = 0.0
-    if paid_n and paid_n > 0 and rem_n is not None:
-        ratio = max(0.0, min(1.0, max(0.0, rem_n) / paid_n))
+    if paid_n and paid_n > 0:
+        ratio = max(0.0, min(1.0, used_n / paid_n))
 
-    rem_label = _fmt_hours_package(rem_n)
+    rem_label = _fmt_hours_package(leftover_n)
     paid_label = _fmt_hours_package(paid_n)
-    used_label = _fmt_hours_package(used_n) if used_n is not None else "—"
-    pct_label = f"{int(round(ratio * 100))}% пакета ещё доступно" if paid_n else ""
+    used_label = _fmt_hours_package(used_n)
+    pct_label = f"{int(round(ratio * 100))}% пакета в отчёте" if paid_n else ""
 
     inner_w = width - 28
     left_w = inner_w * 0.55
@@ -655,7 +659,7 @@ def _deal_hours_block(deal: dict, styles: dict[str, ParagraphStyle], width: floa
         [
             [Paragraph("ПАКЕТ СОПРОВОЖДЕНИЯ", styles["deal_kicker"])],
             [Paragraph(_esc(rem_label), styles["deal_big"])],
-            [Paragraph("осталось", styles["deal_small"])],
+            [Paragraph("осталось закрыть", styles["deal_small"])],
         ],
         colWidths=[left_w],
     )
@@ -675,7 +679,7 @@ def _deal_hours_block(deal: dict, styles: dict[str, ParagraphStyle], width: floa
     side = Table(
         [
             [
-                Paragraph("Использовано", styles["deal_small"]),
+                Paragraph("В отчёте", styles["deal_small"]),
                 Paragraph(_esc(used_label), styles["deal_small_value"]),
             ],
             [
@@ -925,7 +929,12 @@ def build_report_pdf(report) -> tuple[bytes, str]:
     """Return (pdf_bytes, download_filename)."""
     from django.utils import timezone
 
-    from board.reports import deal_hours_for_portal, report_detail_metrics, report_portal_id
+    from board.reports import (
+        deal_hours_for_portal,
+        deal_hours_for_report,
+        report_detail_metrics,
+        report_portal_id,
+    )
 
     metrics = report_detail_metrics(report)
     project_names = list(metrics.get("project_names") or [])
@@ -944,7 +953,9 @@ def build_report_pdf(report) -> tuple[bytes, str]:
     generated = timezone.localtime().strftime("%d.%m.%Y %H:%M")
 
     portal_id = report_portal_id(report)
-    deal = deal_hours_for_portal(portal_id) if portal_id else None
+    deal = deal_hours_for_report(report) if getattr(report, "deal_binding_id", None) else (
+        deal_hours_for_portal(portal_id) if portal_id else None
+    )
     comment = None
     if report.status == "disputed" and (report.client_comment or "").strip():
         comment = report.client_comment.strip()

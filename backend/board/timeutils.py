@@ -1,8 +1,11 @@
+import logging
 from datetime import timedelta
 
 from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 def format_duration_ru(total_seconds: int) -> str:
@@ -61,7 +64,15 @@ def stop_time_entry(entry, ended_at=None, *, bill: bool = True, sync_bitrix: boo
     if entry.ended_at is not None:
         return entry.duration_seconds
     end = ended_at or timezone.now()
-    duration = max(0, int((end - entry.started_at).total_seconds()))
+    started = entry.started_at
+    if started is None:
+        duration = 0
+    else:
+        if timezone.is_naive(started) and timezone.is_aware(end):
+            started = timezone.make_aware(started, timezone.get_current_timezone())
+        elif timezone.is_aware(started) and timezone.is_naive(end):
+            end = timezone.make_aware(end, timezone.get_current_timezone())
+        duration = max(0, int((end - started).total_seconds()))
     entry.ended_at = end
     entry.duration_seconds = duration
     entry.save(update_fields=["ended_at", "duration_seconds", "updated_at"])
@@ -175,9 +186,20 @@ def set_manual_time_entry(
         _enqueue_bitrix_elapsed_cleanup(task.id, stale_bitrix_ids)
 
     if bill:
-        _bill_absolute_time(entry, total_seconds=seconds, old_billed=old_billed)
+        try:
+            _bill_absolute_time(entry, total_seconds=seconds, old_billed=old_billed)
+        except Exception:
+            logger.exception("bill time failed entry=%s", entry.id)
+            entry.refresh_from_db()
+            entry.duration_seconds = seconds
+            if entry.billed_to_deal_at is None:
+                entry.billed_to_deal_at = timezone.now()
+            entry.save(update_fields=["duration_seconds", "billed_to_deal_at", "updated_at"])
 
-    enqueue_timer_bitrix_sync(entry.id, "set")
+    try:
+        enqueue_timer_bitrix_sync(entry.id, "set")
+    except Exception:
+        logger.exception("bitrix elapsed sync failed entry=%s", entry.id)
     return entry
 
 

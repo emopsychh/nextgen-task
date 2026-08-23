@@ -14,7 +14,9 @@ import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
+import { PaginationBar } from "../../components/PaginationBar";
 import { formatDateTime } from "../../lib/format";
+import { LIST_PAGE_SIZE, PICKER_PAGE_SIZE, pageTotal, withPage } from "../../lib/pagination";
 import {
   CACHE_PROJECTS,
   readPortalCache,
@@ -48,6 +50,8 @@ export function SupportTickets() {
 
   const [bucket, setBucket] = useState<TicketBucket>("open");
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [listLoading, setListLoading] = useState(true);
   const [listLoaded, setListLoaded] = useState(false);
   const [detail, setDetail] = useState<SupportTicket | null>(null);
@@ -78,22 +82,23 @@ export function SupportTickets() {
       setListLoading(true);
       try {
         const data = await api<SupportTicket[] | Paginated<SupportTicket>>(
-          ticketsApiQuery(listPortalId, bucket),
+          withPage(ticketsApiQuery(listPortalId, bucket), page, LIST_PAGE_SIZE),
           { signal },
           token
         );
         if (signal?.aborted || gen !== listGenRef.current) return;
         const list = unwrapList(data);
         setTickets(list);
+        setTotal(pageTotal(data));
         setListLoaded(true);
         if (ticketCacheScope) {
-          writePortalCache(ticketCacheKind, ticketCacheScope, list);
+          writePortalCache(`${ticketCacheKind}:p${page}`, ticketCacheScope, list);
         }
       } finally {
         if (!signal?.aborted && gen === listGenRef.current) setListLoading(false);
       }
     },
-    [token, isAgency, listPortalId, bucket, ticketCacheScope, ticketCacheKind]
+    [token, isAgency, listPortalId, bucket, page, ticketCacheScope, ticketCacheKind]
   );
 
   const loadDetail = useCallback(
@@ -117,7 +122,7 @@ export function SupportTickets() {
     async (signal?: AbortSignal) => {
       if (!token || !listPortalId) return;
       const data = await api<Project[] | Paginated<Project>>(
-        `/api/projects/?portal=${listPortalId}`,
+        withPage(`/api/projects/?portal=${listPortalId}`, 1, PICKER_PAGE_SIZE),
         { signal },
         token
       );
@@ -136,7 +141,7 @@ export function SupportTickets() {
     if (!isAgency && !listPortalId) return;
     // A reused route must not show rows from the previous portal/filter.
     const cached = ticketCacheScope
-      ? readPortalCache<SupportTicket[]>(ticketCacheKind, ticketCacheScope)
+      ? readPortalCache<SupportTicket[]>(`${ticketCacheKind}:p${page}`, ticketCacheScope)
       : null;
     setTickets(cached || []);
     setListLoaded(cached !== null);
@@ -153,6 +158,7 @@ export function SupportTickets() {
     isAgency,
     listPortalId,
     bucket,
+    page,
     ticketCacheScope,
     ticketCacheKind,
     loadList,
@@ -188,7 +194,7 @@ export function SupportTickets() {
     }
     const ac = new AbortController();
     void api<Task[] | Paginated<Task>>(
-      `/api/tasks/?project=${projectId}`,
+      withPage(`/api/tasks/?project=${projectId}`, 1, PICKER_PAGE_SIZE),
       { signal: ac.signal },
       token
     )
@@ -473,11 +479,12 @@ export function SupportTickets() {
                   listGenRef.current += 1;
                   const nextKind = `tickets:${isAgency ? "agency" : "client"}:${b.id}`;
                   const cached = ticketCacheScope
-                    ? readPortalCache<SupportTicket[]>(nextKind, ticketCacheScope)
+                    ? readPortalCache<SupportTicket[]>(`${nextKind}:p1`, ticketCacheScope)
                     : null;
                   setTickets(cached || []);
                   setListLoaded(cached !== null);
                   setListLoading(true);
+                  setPage(1);
                   setBucket(b.id);
                   if (selectedId) navigate(listPath);
                 }}
@@ -554,6 +561,12 @@ export function SupportTickets() {
               })}
             </ul>
           )}
+          <PaginationBar
+            page={page}
+            total={total}
+            disabled={listLoading}
+            onChange={setPage}
+          />
         </aside>
 
         <section className="tickets-pane tickets-detail-pane">
@@ -691,7 +704,7 @@ export function SupportTickets() {
                   }}
                 >
                   <textarea
-                    rows={2}
+                    rows={1}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={onComposerKeyDown}

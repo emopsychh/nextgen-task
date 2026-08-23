@@ -57,6 +57,17 @@ class PortalLink(models.Model):
         max_digits=10, decimal_places=2, default=0, blank=True
     )
     hours_credit_last_source_deal_id = models.CharField(max_length=64, blank=True)
+    # Closed-task hours above paid package — billed against the next deal
+    hours_overage = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0, blank=True
+    )
+    hours_overage_source_deal_id = models.CharField(max_length=64, blank=True)
+    hours_overage_source_title = models.CharField(max_length=500, blank=True)
+    hours_overage_applied_to_deal_id = models.CharField(max_length=64, blank=True)
+    hours_overage_last_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0, blank=True
+    )
+    hours_overage_last_source_deal_id = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -136,6 +147,9 @@ class PortalDealBinding(models.Model):
     )
     paid_hours = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     remaining_hours = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    hours_overage_applied = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0, blank=True
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

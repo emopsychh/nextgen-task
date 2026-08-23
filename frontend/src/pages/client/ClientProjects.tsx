@@ -12,14 +12,21 @@ import {
   type WorkReport,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
-import { DealHoursCard } from "../../components/DealHoursCard";
+import { DealHoursCard, hasDealHoursPackage } from "../../components/DealHoursCard";
+import { NowWorkingCard } from "../../components/NowWorkingCard";
 import { FlashToast } from "../../components/FlashToast";
-import { FlameIcon, DisputeIcon } from "../../components/icons";
+import {
+  CheckCircleGlyph,
+  DisputeIcon,
+  FlameIcon,
+  GridGlyph,
+} from "../../components/icons";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { useWorkspaceDismissals } from "../../hooks/useWorkspaceDismissals";
-import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
-import { formatDueFull } from "../../lib/format";
+import { formatRuDateTime, isValidDate, parseDue, startOfDay } from "../../lib/dates";
+import { formatDayShort, formatDueFull, formatDuration } from "../../lib/format";
+import { PICKER_PAGE_SIZE, withPage } from "../../lib/pagination";
 import { displayTimeZone } from "../../lib/timezone";
 import {
   getPortalLabel,
@@ -36,7 +43,7 @@ import {
 } from "../../lib/portalSessionCache";
 import { isProjectInProgress, projectProgress } from "../../lib/projectProgress";
 import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
-import { reportDetailPath } from "../shared/reportHelpers";
+import { reportDetailPath, reportTitle, reportsApiQuery } from "../shared/reportHelpers";
 
 const RECENT_DONE_MS = 7 * 24 * 60 * 60 * 1000;
 const HOT_DUE_DAYS = 2;
@@ -46,7 +53,32 @@ type OverviewSnapshot = {
   openTasks: Task[];
   recentDone: Task[];
   disputedReports: WorkReport[];
+  pendingReports?: WorkReport[];
+  attentionTasks?: Task[];
+  workingTasks?: Task[];
 };
+
+type AttentionTone = "review" | "confirm" | "reply";
+
+type AttentionItem = {
+  key: string;
+  tone: AttentionTone;
+  chip: string;
+  title: string;
+  requestedAt: string | null;
+  href: string;
+  openLabel: string;
+};
+
+const ATTENTION_CAP = 8;
+
+function earliestProjectDue(projectId: number, tasks: Task[]): string | null {
+  const dues = tasks
+    .filter((t) => t.project === projectId && t.status !== "done" && t.due_date)
+    .map((t) => t.due_date as string)
+    .sort();
+  return dues[0] || null;
+}
 
 function taskDueLabel(task: Task, timeZone: string): string | null {
   if (!task.due_date) return null;
@@ -83,8 +115,11 @@ export function ClientProjects() {
   const [dealHours, setDealHours] = useState<DealBinding | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [openTasks, setOpenTasks] = useState<Task[]>([]);
+  const [workingTasks, setWorkingTasks] = useState<Task[]>([]);
   const [recentDone, setRecentDone] = useState<Task[]>([]);
   const [disputedReports, setDisputedReports] = useState<WorkReport[]>([]);
+  const [pendingReports, setPendingReports] = useState<WorkReport[]>([]);
+  const [attentionTasks, setAttentionTasks] = useState<Task[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const dueTz = displayTimeZone({
@@ -96,7 +131,15 @@ export function ClientProjects() {
   );
 
   const activeProjects = useMemo(
-    () => projects.filter(isProjectInProgress).slice(0, 12),
+    () =>
+      projects
+        .filter(isProjectInProgress)
+        .slice()
+        .sort((a, b) => {
+          const byCreated = String(a.created_at || "").localeCompare(String(b.created_at || ""));
+          return byCreated || a.id - b.id;
+        })
+        .slice(0, 3),
     [projects]
   );
 
@@ -117,9 +160,42 @@ export function ClientProjects() {
   }, [openTasks]);
 
   const visibleRecentDone = useMemo(
-    () => recentDone.filter((t) => !isDismissed("task", t.id, t.updated_at)),
+    () => recentDone.filter((t) => !isDismissed("task", t.id, t.updated_at)).slice(0, 3),
     [recentDone, isDismissed]
   );
+
+  const attentionItems = useMemo(() => {
+    const items: AttentionItem[] = [];
+
+    for (const report of pendingReports) {
+      items.push({
+        key: `report-${report.id}`,
+        tone: "review",
+        chip: "На согласовании",
+        title: reportTitle(report),
+        requestedAt: report.sent_at || report.updated_at,
+        href: reportDetailPath(portalId, false, report.id),
+        openLabel: "Открыть отчёт",
+      });
+    }
+
+    for (const task of attentionTasks) {
+      const awaiting = Boolean(task.awaiting_client);
+      items.push({
+        key: `task-${task.id}`,
+        tone: awaiting ? "reply" : "confirm",
+        chip: awaiting ? "Ожидает ответа" : "На подтверждении",
+        title: task.title,
+        requestedAt: awaiting
+          ? task.awaiting_client_at || task.updated_at
+          : task.completed_at || task.updated_at,
+        href: `/tasks/${task.id}`,
+        openLabel: "Открыть задачу",
+      });
+    }
+
+    return items.slice(0, ATTENTION_CAP);
+  }, [pendingReports, attentionTasks, portalId]);
   const loadGenRef = useRef(0);
 
   useEffect(() => {
@@ -217,8 +293,19 @@ export function ClientProjects() {
         (report) => report.portal_id === portalId
       ) || [];
     setOpenTasks(scopedOpen);
+    setWorkingTasks(
+      (cachedOverview?.workingTasks || scopedOpen).filter(
+        (task) => task.portal_id === portalId && task.is_working
+      )
+    );
     setRecentDone(scopedDone);
     setDisputedReports(scopedDisputes);
+    setPendingReports(
+      (cachedOverview?.pendingReports || []).filter((report) => report.portal_id === portalId)
+    );
+    setAttentionTasks(
+      (cachedOverview?.attentionTasks || []).filter((task) => task.portal_id === portalId)
+    );
     setOverviewLoading(cachedOverview === null);
     setError(null);
     if (!portalId) {
@@ -237,15 +324,20 @@ export function ClientProjects() {
     const requestedPortalId = portalId;
     const gen = ++loadGenRef.current;
     try {
-      const [openData, doneData, hoursData, disputedData, projectsData] = await Promise.all([
+      const [openData, doneData, hoursData, disputedData, reviewData, attentionData, projectsData, workingData] =
+        await Promise.all([
         api<Task[] | Paginated<Task>>(
-          `/api/tasks/?portal=${requestedPortalId}&open=1`,
+          withPage(`/api/tasks/?portal=${requestedPortalId}&open=1`, 1, PICKER_PAGE_SIZE),
           { signal },
           token
         ),
         !isAgency
           ? api<Task[] | Paginated<Task>>(
-              `/api/tasks/?portal=${requestedPortalId}&status=done&ordering=-updated_at`,
+              withPage(
+                `/api/tasks/?portal=${requestedPortalId}&status=done&ordering=-updated_at`,
+                1,
+                PICKER_PAGE_SIZE
+              ),
               { signal },
               token
             )
@@ -270,8 +362,37 @@ export function ClientProjects() {
               token
             )
           : Promise.resolve([] as WorkReport[]),
+        !isAgency
+          ? api<WorkReport[] | Paginated<WorkReport>>(
+              reportsApiQuery(requestedPortalId, "review"),
+              { signal },
+              token
+            ).catch((e) => {
+              if (isAbortError(e)) throw e;
+              return [] as WorkReport[];
+            })
+          : Promise.resolve([] as WorkReport[]),
+        !isAgency
+          ? api<Task[] | Paginated<Task>>(
+              withPage(
+                `/api/tasks/?portal=${requestedPortalId}&attention=1`,
+                1,
+                PICKER_PAGE_SIZE
+              ),
+              { signal },
+              token
+            ).catch((e) => {
+              if (isAbortError(e)) throw e;
+              return [] as Task[];
+            })
+          : Promise.resolve([] as Task[]),
         api<Project[] | Paginated<Project>>(
-          `/api/projects/?portal=${requestedPortalId}`,
+          withPage(`/api/projects/?portal=${requestedPortalId}`, 1, PICKER_PAGE_SIZE),
+          { signal },
+          token
+        ),
+        api<Task[] | Paginated<Task>>(
+          withPage(`/api/tasks/?portal=${requestedPortalId}&working=1`, 1, PICKER_PAGE_SIZE),
           { signal },
           token
         ),
@@ -282,6 +403,10 @@ export function ClientProjects() {
         (task) => task.portal_id === requestedPortalId
       );
       setOpenTasks(scopedOpen);
+      const scopedWorking = unwrapList(workingData).filter(
+        (task) => task.portal_id === requestedPortalId && Boolean(task.is_working)
+      );
+      setWorkingTasks(scopedWorking);
       const projectList = unwrapList(projectsData).filter(
         (project) => project.portal === requestedPortalId
       );
@@ -297,10 +422,21 @@ export function ClientProjects() {
             .slice(0, 6);
         setRecentDone(scopedDone);
         setDisputedReports([]);
+        const scopedReview = unwrapList(reviewData as WorkReport[] | Paginated<WorkReport>).filter(
+          (report) => report.portal_id === requestedPortalId
+        );
+        const scopedAttention = unwrapList(attentionData as Task[] | Paginated<Task>).filter(
+          (task) => task.portal_id === requestedPortalId
+        );
+        setPendingReports(scopedReview);
+        setAttentionTasks(scopedAttention);
         writePortalCache<OverviewSnapshot>(CACHE_OVERVIEW, requestedPortalId, {
           openTasks: scopedOpen,
           recentDone: scopedDone,
           disputedReports: [],
+          pendingReports: scopedReview,
+          attentionTasks: scopedAttention,
+          workingTasks: scopedWorking,
         });
         const mine = hoursData as DealBinding | null;
         const scopedMine =
@@ -327,10 +463,13 @@ export function ClientProjects() {
         ).filter((report) => report.portal_id === requestedPortalId);
         setRecentDone([]);
         setDisputedReports(scopedDisputes);
+        setPendingReports([]);
+        setAttentionTasks([]);
         writePortalCache<OverviewSnapshot>(CACHE_OVERVIEW, requestedPortalId, {
           openTasks: scopedOpen,
           recentDone: [],
           disputedReports: scopedDisputes,
+          workingTasks: scopedWorking,
         });
         const fromBinding = binding?.client_portal;
         if (fromBinding) {
@@ -407,11 +546,12 @@ export function ClientProjects() {
           <h1 className="page-title">{isAgency ? titleName : "Рабочее пространство"}</h1>
           <p className="page-sub">
             {isAgency
-              ? "Часы, обращения по отчётам, активные проекты и горящие сроки"
-              : "Часы, проекты в работе и недавно завершённое"}
+              ? "Часы, кто работает сейчас, обращения по отчётам и горящие сроки"
+              : "Часы, задачи в работе прямо сейчас и важные обновления"}
           </p>
         </div>
-        <Link to={projectsListPath} className="btn btn-primary" data-tour="tour-new-project">
+        <Link to={projectsListPath} className="btn btn-primary btn-with-icon" data-tour="tour-new-project">
+          <GridGlyph />
           Все проекты
         </Link>
       </div>
@@ -419,19 +559,35 @@ export function ClientProjects() {
       {error && <div className="error-banner">{error}</div>}
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
-      {dealHours ? (
-        <div className="client-hours-panel" data-tour="tour-deal-hours">
-          <DealHoursCard binding={dealHours} audience={isAgency ? "agency" : "client"} />
+      <div className="overview-hours-split" data-tour="tour-deal-hours">
+        <div className="overview-hours-col">
+          {hasDealHoursPackage(dealHours) && dealHours ? (
+            <DealHoursCard binding={dealHours} audience={isAgency ? "agency" : "client"} />
+          ) : (
+            <section className="deal-hours-card is-client-pack is-empty-pack" aria-label="Пакет часов">
+              <div className="deal-hours-card-head">
+                <h2 className="section-title">Пакет часов</h2>
+              </div>
+              <p className="muted">
+                {overviewLoading
+                  ? "Загружаем пакет…"
+                  : "Пакет часов по этому кабинету пока не подключён."}
+              </p>
+            </section>
+          )}
         </div>
-      ) : null}
+        <NowWorkingCard tasks={workingTasks} loading={overviewLoading} />
+      </div>
 
       {!isAgency ? (
-        <div className="workspace-focus" data-tour="tour-waiting-for-you">
-          <div className="workspace-split-focus">
-            <section className="workspace-focus-block">
-              <div className="linked-head">
+        <div className="workspace-focus overview-layout" data-tour="tour-waiting-for-you">
+          <div className="overview-split">
+            <section className="overview-card overview-projects-card">
+              <div className="overview-card-head">
                 <h2 className="section-title">Проекты в работе</h2>
-                <p className="muted">Модули, которые ещё не закрыты на 100%</p>
+                <Link to={projectsListPath} className="overview-text-link">
+                  Все проекты
+                </Link>
               </div>
               {overviewLoading && activeProjects.length === 0 ? (
                 <div className="empty-linked workspace-empty data-loading-state">
@@ -443,26 +599,42 @@ export function ClientProjects() {
                   <p className="muted">Сейчас нет проектов в работе.</p>
                 </div>
               ) : (
-                <div className="workspace-attention-list">
+                <div className="overview-project-list">
                   {activeProjects.map((p) => {
                     const { done, total, pct } = projectProgress(p);
+                    const due = p.due_date || earliestProjectDue(p.id, openTasks);
+                    const dueLabel = due ? formatRuDateTime(due, dueTz) : "";
+                    const tracked = p.total_tracked_seconds || 0;
+                    const blurb =
+                      (p.description || "").trim() ||
+                      (p.has_active_work ? "Сейчас в работе у команды" : "Открытые задачи в модуле");
                     return (
                       <Link
                         key={`project-${p.id}`}
                         to={`/projects/${p.id}`}
-                        className="workspace-attention-card is-project"
+                        className="overview-project-row"
                       >
-                        <div className="workspace-attention-top">
-                          <span className="workspace-chip tone-project">{pct}%</span>
-                          {p.has_active_work ? (
-                            <span className="task-working-pill">Работают сейчас</span>
-                          ) : null}
+                        <div className="overview-project-copy">
+                          <strong>{p.name}</strong>
+                          <p>{blurb}</p>
+                        </div>
+                        <div className="overview-project-progress">
+                          <span className="overview-project-pct">{pct}%</span>
+                          <span className="overview-mini-track" aria-hidden>
+                            <span style={{ width: `${pct}%` }} />
+                          </span>
                           <span className="muted">
-                            {done}/{total} задач
+                            {done}/{total} задач выполнено
+                            {tracked > 0 ? ` · ${formatDuration(tracked)}` : ""}
                           </span>
                         </div>
-                        <strong>{p.name}</strong>
-                        <span className="muted">Открыть проект</span>
+                        <div className="overview-project-meta">
+                          {dueLabel ? (
+                            <span className="muted">Дедлайн {dueLabel}</span>
+                          ) : (
+                            <span className="muted">Без дедлайна</span>
+                          )}
+                        </div>
                       </Link>
                     );
                   })}
@@ -470,10 +642,48 @@ export function ClientProjects() {
               )}
             </section>
 
-            <section className="workspace-focus-block">
-              <div className="linked-head">
+            <section className="overview-card overview-attention-card">
+              <div className="overview-card-head">
+                <h2 className="section-title">Требует вашего внимания</h2>
+              </div>
+              {overviewLoading && attentionItems.length === 0 ? (
+                <div className="empty-linked workspace-empty data-loading-state">
+                  <span className="data-loading-spinner" aria-hidden />
+                  <p className="muted">Загружаем задачи…</p>
+                </div>
+              ) : attentionItems.length === 0 ? (
+                <div className="empty-linked workspace-empty">
+                  <p className="muted">Сейчас ничего не ждёт вашего ответа.</p>
+                </div>
+              ) : (
+                <div className="overview-attention-list">
+                  {attentionItems.map((item) => {
+                    const requested = item.requestedAt
+                      ? formatDayShort(item.requestedAt, dueTz)
+                      : "";
+                    const body = (
+                      <>
+                        <span className={`overview-chip tone-${item.tone}`}>{item.chip}</span>
+                        <strong>{item.title}</strong>
+                        <span className="overview-attention-foot">
+                          {requested ? <span className="muted">Запрошено {requested}</span> : <span />}
+                          <span className="overview-text-link">{item.openLabel}</span>
+                        </span>
+                      </>
+                    );
+                    return (
+                      <Link key={item.key} to={item.href} className="overview-attention-row">
+                        {body}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            <section className="overview-card overview-done-card">
+              <div className="overview-card-head">
                 <h2 className="section-title">Недавно завершено</h2>
-                <p className="muted">Можно посмотреть итог в задаче</p>
               </div>
               {overviewLoading && visibleRecentDone.length === 0 ? (
                 <div className="empty-linked workspace-empty data-loading-state">
@@ -485,22 +695,27 @@ export function ClientProjects() {
                   <p className="muted">За последние дни завершённых задач нет.</p>
                 </div>
               ) : (
-                <div className="workspace-attention-list">
+                <div className="overview-done-list">
                   {visibleRecentDone.map((t) => (
                     <Link
                       key={`done-${t.id}`}
                       to={`/tasks/${t.id}`}
-                      className="workspace-attention-card is-done"
+                      className="overview-done-row"
                       onClick={() => dismiss("task", t.id, t.updated_at)}
                     >
-                      <div className="workspace-attention-top">
-                        <span className="workspace-chip tone-done">Завершена</span>
-                        <span className="muted">{t.project_name}</span>
-                      </div>
+                      <span className="overview-done-check" aria-hidden>
+                        <CheckCircleGlyph />
+                      </span>
                       <strong>{t.title}</strong>
-                      <span className="muted">Открыть задачу</span>
+                      <span className="workspace-chip tone-done">Завершена</span>
+                      <span className="muted">
+                        {formatDayShort(t.completed_at || t.updated_at, dueTz)}
+                      </span>
                     </Link>
                   ))}
+                  <Link to={projectsListPath} className="overview-text-link overview-done-more">
+                    Смотреть все завершённые
+                  </Link>
                 </div>
               )}
             </section>
@@ -576,7 +791,7 @@ export function ClientProjects() {
                             <div className="workspace-attention-top">
                               <span className="workspace-chip tone-project">{pct}%</span>
                               {p.has_active_work ? (
-                                <span className="task-working-pill">Работают сейчас</span>
+                                <span className="task-working-pill">Сейчас в работе</span>
                               ) : null}
                               <span className="muted">
                                 {done}/{total} задач

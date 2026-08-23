@@ -409,6 +409,7 @@ class PortalViewSet(viewsets.ModelViewSet):
     serializer_class = PortalSerializer
     permission_classes = [IsPortalAuthenticated]
     http_method_names = ["get", "patch", "head", "options"]
+    pagination_class = None
 
     def get_queryset(self):
         user = self.request.user
@@ -465,6 +466,7 @@ class PortalLinkViewSet(viewsets.ModelViewSet):
     serializer_class = PortalLinkSerializer
     permission_classes = [IsPortalAuthenticated, IsAgencyPortal]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+    pagination_class = None
 
     def get_queryset(self):
         return PortalLink.objects.filter(agency_portal=self.request.user.portal).select_related(
@@ -504,6 +506,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
     permission_classes = [IsPortalAuthenticated, IsAgencyPortal]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
     filterset_fields = ["client_portal", "is_active"]
+    pagination_class = None
 
     def get_queryset(self):
         user = self.request.user

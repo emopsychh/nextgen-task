@@ -9,8 +9,9 @@ import {
   toISODate,
 } from "../lib/dates";
 import {
-  AGENCY_DISPLAY_TZ,
   getZonedParts,
+  timeZoneShortName,
+  viewerTimeZone,
   wallToUtcIso,
 } from "../lib/timezone";
 
@@ -80,7 +81,7 @@ export function DueDatePicker({
   onChange,
   status = "todo",
   variant = "button",
-  timeZone = AGENCY_DISPLAY_TZ,
+  timeZone = viewerTimeZone(),
 }: Props) {
   const todayParts = getZonedParts(new Date(), timeZone);
   const todayIso = `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
@@ -173,7 +174,7 @@ export function DueDatePicker({
     };
   }, [open, view]);
 
-  const meta = dueMeta(value || null, status);
+  const meta = dueMeta(value || null, status, timeZone);
 
   const presets = useMemo(() => {
     const now = startDay(new Date());
@@ -286,11 +287,12 @@ export function DueDatePicker({
   }
 
   const timeLabel = `${hour}:${minute}`;
+  const zoneLabel = timeZoneShortName(timeZone);
   const triggerLabel = value
-    ? `${formatDotDate(value, timeZone)} ${timeLabel}`
+    ? `${formatDotDate(value, timeZone)} ${timeLabel} ${zoneLabel}`
     : "Выбрать срок";
   const inlineLabel = value
-    ? `${formatDotDate(value, timeZone)} ${timeLabel}${meta.label ? ` · ${meta.label}` : ""}`
+    ? `${formatDotDate(value, timeZone)} ${timeLabel} ${zoneLabel}${meta.label ? ` · ${meta.label}` : ""}`
     : "Указать срок";
 
   const valueDate = value

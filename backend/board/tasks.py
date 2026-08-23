@@ -1352,9 +1352,6 @@ def post_time_entry_to_deal(self, entry_id: int):
         return {"ok": False, "reason": "no_agency_link"}
 
     agency = link.agency_portal
-    if not agency.access_token:
-        return {"ok": False, "reason": "no_agency_token"}
-
     binding = get_active_binding(agency_portal=agency, client_portal=client_portal)
     if not binding:
         try:
@@ -1363,6 +1360,8 @@ def post_time_entry_to_deal(self, entry_id: int):
                 client_portal=client_portal,
             )
         except BitrixAPIError as exc:
+            if settings.CELERY_TASK_ALWAYS_EAGER or getattr(self.request, "called_directly", False):
+                return {"ok": False, "error": str(exc)}
             try:
                 raise self.retry(exc=exc)
             except self.MaxRetriesExceededError:
@@ -1374,12 +1373,22 @@ def post_time_entry_to_deal(self, entry_id: int):
     # Claim before Bitrix writes so retries cannot double-spend.
     claimed_at = timezone.now()
     claimed = TimeEntry.objects.filter(pk=entry.id, billed_to_deal_at__isnull=True).update(
-        billed_to_deal_at=claimed_at
+        billed_to_deal_at=claimed_at,
+        billed_deal_binding=binding,
     )
     if not claimed:
         return {"ok": True, "skipped": "already_billed"}
 
     seconds = int(entry.duration_seconds)
+    if settings.DEV_AUTH_BYPASS or not agency.access_token:
+        from decimal import Decimal
+
+        if binding.remaining_hours is not None:
+            spent = (Decimal(seconds) / Decimal(3600)).quantize(Decimal("0.01"))
+            binding.remaining_hours = max(Decimal("0.00"), binding.remaining_hours - spent)
+            binding.save(update_fields=["remaining_hours", "updated_at"])
+        return {"ok": True, "local": True, "deal_id": binding.deal_id}
+
     duration_label = format_duration_ru(seconds)
     comment = f"Задача «{task.title}»: учтено {duration_label}"
     deal_updated = False
@@ -1429,8 +1438,11 @@ def post_time_entry_to_deal(self, entry_id: int):
         # Allow retry only if the deal was not modified yet.
         if not deal_updated:
             TimeEntry.objects.filter(pk=entry.id, billed_to_deal_at=claimed_at).update(
-                billed_to_deal_at=None
+                billed_to_deal_at=None,
+                billed_deal_binding=None,
             )
+            if settings.CELERY_TASK_ALWAYS_EAGER or getattr(self.request, "called_directly", False):
+                return {"ok": False, "error": str(exc)}
             try:
                 raise self.retry(exc=exc)
             except self.MaxRetriesExceededError:
@@ -1440,12 +1452,16 @@ def post_time_entry_to_deal(self, entry_id: int):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
-def move_deal_stage_task(self, portal_id: int, stage_key: str):
+def move_deal_stage_task(
+    self, portal_id: int, stage_key: str, binding_id: int | None = None
+):
     """Background: move accompaniment deal stage after report send/accept."""
     from portals.deal_stage_move import move_client_deal_stage
 
     try:
-        return move_client_deal_stage(int(portal_id), str(stage_key))
+        return move_client_deal_stage(
+            int(portal_id), str(stage_key), binding_id=binding_id
+        )
     except Exception as exc:
         logger = __import__("logging").getLogger(__name__)
         logger.exception(
@@ -1610,9 +1626,9 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
             agency = _agency_portal_for_client(task.project.portal)
             bitrix_id = str(task.agency_bitrix_task_id or "")
             if not agency or not agency.access_token:
-                raise BitrixAPIError("Нет связанной задачи на портале агентства")
+                return {"ok": True, "skipped": "no_agency_token"}
             if not bitrix_id:
-                raise BitrixAPIError("Нет agency_bitrix_task_id — задача ещё не в Bitrix")
+                return {"ok": True, "skipped": "no_bitrix_task"}
 
             client = BitrixClient(agency)
             oauth_uid = _bitrix_user_id(client.get_current_user()) or None
@@ -1740,6 +1756,8 @@ def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
         return {"ok": False, "reason": "missing"}
     except BitrixAPIError as exc:
         logger.warning("sync_timer_to_bitrix entry=%s: %s", entry_id, exc)
+        if settings.CELERY_TASK_ALWAYS_EAGER or getattr(self.request, "called_directly", False):
+            return {"ok": False, "error": str(exc)}
         try:
             raise self.retry(exc=exc)
         except self.MaxRetriesExceededError:

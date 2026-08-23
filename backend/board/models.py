@@ -4,7 +4,7 @@ from uuid import uuid4
 from django.db import models
 from django.utils import timezone
 
-from portals.models import BitrixUser, Portal
+from portals.models import BitrixUser, Portal, PortalDealBinding
 
 
 def attachment_upload_to(instance, filename: str) -> str:
@@ -69,7 +69,8 @@ class Task(models.Model):
         blank=True,
         related_name="created_tasks",
     )
-    # Live presence signal («Работаю прямо сейчас») — independent of status.
+    # «Сейчас в работе» = статус «выполняется». Несколько задач могут быть
+    # начаты одновременно; пауза/завершение снимает метку только с этой задачи.
     working_by = models.ForeignKey(
         BitrixUser,
         on_delete=models.SET_NULL,
@@ -78,8 +79,13 @@ class Task(models.Model):
         related_name="working_tasks",
     )
     working_started_at = models.DateTimeField(null=True, blank=True)
+    # Agency asked the client to reply in chat; cleared when the client writes.
+    awaiting_client_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    # Client opened a completed task to see the outcome.
+    outcome_seen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -93,6 +99,31 @@ class Task(models.Model):
 
     def __str__(self):
         return self.title
+
+    def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields")
+        fields = set(update_fields) if update_fields is not None else None
+        if self.status == self.Status.DONE:
+            if not self.completed_at:
+                self.completed_at = timezone.now()
+                if fields is not None:
+                    fields.add("completed_at")
+            if (fields is None or "status" in fields) and self.awaiting_client_at is not None:
+                self.awaiting_client_at = None
+                if fields is not None:
+                    fields.add("awaiting_client_at")
+        elif fields is None or "status" in fields:
+            if self.completed_at is not None:
+                self.completed_at = None
+                if fields is not None:
+                    fields.add("completed_at")
+            if self.outcome_seen_at is not None:
+                self.outcome_seen_at = None
+                if fields is not None:
+                    fields.add("outcome_seen_at")
+        if fields is not None:
+            kwargs["update_fields"] = list(fields)
+        super().save(*args, **kwargs)
 
     @property
     def portal(self):
@@ -170,6 +201,14 @@ class TimeEntry(models.Model):
         blank=True,
         help_text="When this session was deducted from the CRM deal remaining hours",
     )
+    billed_deal_binding = models.ForeignKey(
+        PortalDealBinding,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="billed_time_entries",
+        help_text="CRM deal binding against which this entry was billed",
+    )
     # Bitrix task.elapseditem id on the agency copy (closed record)
     bitrix_elapsed_id = models.CharField(max_length=64, blank=True)
     # Same for the client portal Bitrix copy (idempotent dual-post)
@@ -208,6 +247,13 @@ class WorkReport(models.Model):
         related_name="work_reports",
         null=True,
         blank=True,
+    )
+    deal_binding = models.OneToOneField(
+        PortalDealBinding,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="work_report",
     )
     projects = models.ManyToManyField(Project, related_name="work_reports_m2m", blank=True)
     # Legacy single-project link — kept briefly for migration; prefer `projects`.
@@ -299,12 +345,23 @@ class WorkReportLine(models.Model):
     report = models.ForeignKey(WorkReport, on_delete=models.CASCADE, related_name="lines")
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="work_report_lines")
     work_done = models.TextField(blank=True)
+    is_reserved = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["id"]
-        unique_together = [("report", "task")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["report", "task"],
+                name="uniq_work_report_line_task",
+            ),
+            models.UniqueConstraint(
+                fields=["task"],
+                condition=models.Q(is_reserved=True),
+                name="uniq_reserved_report_task",
+            ),
+        ]
 
     def __str__(self):
         return f"WorkReportLine report={self.report_id} task={self.task_id}"
