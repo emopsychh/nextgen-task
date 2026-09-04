@@ -3,13 +3,24 @@ import { Navigate, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
+  unwrapList,
   type BacklogItem,
   type BacklogPriority,
   type BacklogStatus,
+  type Project,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { FlashToast } from "../../components/FlashToast";
+import { useFlashToast } from "../../hooks/useFlashToast";
+import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
+import { formatDateTime } from "../../lib/format";
+import { PICKER_PAGE_SIZE, withPage } from "../../lib/pagination";
 import { getPortalLabel } from "../../lib/portalLabelCache";
+import {
+  CACHE_PROJECTS,
+  readPortalCache,
+} from "../../lib/portalSessionCache";
 
 const COLUMN_LIMIT = 15;
 
@@ -110,6 +121,10 @@ function priorityLabel(priority: BacklogPriority): string {
   return PRIORITY_OPTIONS.find((p) => p.id === priority)?.label || "Обычный";
 }
 
+function isClientRequest(item: BacklogItem): boolean {
+  return item.source === "client";
+}
+
 export function ClientBacklog() {
   const { portalId: routePortalId } = useParams();
   const { token, portal } = useAuth();
@@ -144,6 +159,11 @@ export function ClientBacklog() {
   const [expandedCols, setExpandedCols] = useState<Partial<Record<BacklogStatus, boolean>>>(
     {}
   );
+  const [convertItem, setConvertItem] = useState<BacklogItem | null>(null);
+  const [convertProjectId, setConvertProjectId] = useState<number | "">("");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [converting, setConverting] = useState(false);
+  const toast = useFlashToast();
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -193,12 +213,30 @@ export function ClientBacklog() {
     return () => ac.abort();
   }, [token, portalId, isAgency, load]);
 
+  usePortalLiveSync({
+    token,
+    portalId,
+    enabled: Boolean(token && portalId && isAgency),
+    onEvent: () => {
+      void load().catch(() => undefined);
+    },
+  });
+
   const visibleStages = FUNNEL_STAGES;
 
+  const clientRequests = useMemo(
+    () => items.filter((item) => isClientRequest(item) && item.status !== "converted"),
+    [items]
+  );
+  const agencyItems = useMemo(
+    () => items.filter((item) => !isClientRequest(item)),
+    [items]
+  );
+
   const visibleItems = useMemo(() => {
-    if (!tagFilter) return items;
-    return items.filter((item) => itemHasTag(item, tagFilter));
-  }, [items, tagFilter]);
+    if (!tagFilter) return agencyItems;
+    return agencyItems.filter((item) => itemHasTag(item, tagFilter));
+  }, [agencyItems, tagFilter]);
 
   const columns = useMemo(() => {
     const map = Object.fromEntries(
@@ -323,9 +361,9 @@ export function ClientBacklog() {
     }
   }
 
-  async function persistOrder(ordered: BacklogItem[]) {
+  async function persistOrder(orderedAgency: BacklogItem[]) {
     if (!token || !portalId) return;
-    setItems(ordered);
+    setItems(sortItems([...clientRequests, ...orderedAgency]));
     try {
       const data = await api<BacklogItem[]>(
         "/api/backlog-items/reorder/",
@@ -333,7 +371,7 @@ export function ClientBacklog() {
           method: "POST",
           body: JSON.stringify({
             portal: portalId,
-            ordered_ids: ordered.map((i) => i.id),
+            ordered_ids: orderedAgency.map((i) => i.id),
           }),
         },
         token
@@ -347,14 +385,14 @@ export function ClientBacklog() {
 
   async function dropOnStage(stage: BacklogStatus, beforeId?: number) {
     if (dragId == null) return;
-    const moving = items.find((i) => i.id === dragId);
+    const moving = agencyItems.find((i) => i.id === dragId);
     if (!moving) {
       setDragId(null);
       setDragOverStage(null);
       return;
     }
 
-    const others = items.filter((i) => i.id !== dragId);
+    const others = agencyItems.filter((i) => i.id !== dragId);
     const targetCol = others.filter((i) => i.status === stage);
     const rest = others.filter((i) => i.status !== stage);
     let insertAt = targetCol.length;
@@ -368,14 +406,13 @@ export function ClientBacklog() {
       ...it,
       sort_order: index,
     }));
-    // Keep funnel order stable: reorder by stage then sort_order within.
     const byStage: BacklogItem[] = [];
     for (const s of FUNNEL_STAGES) {
       byStage.push(...next.filter((i) => i.status === s.id));
     }
     const ordered = byStage.map((it, index) => ({ ...it, sort_order: index }));
 
-    setItems(ordered);
+    setItems(sortItems([...clientRequests, ...ordered]));
     setDragId(null);
     setDragOverStage(null);
 
@@ -417,16 +454,61 @@ export function ClientBacklog() {
     }
   }
 
+  function openConvert(item: BacklogItem) {
+    if (!portalId) return;
+    setConvertItem(item);
+    setConvertProjectId("");
+    const cached = readPortalCache<Project[]>(CACHE_PROJECTS, portalId) || [];
+    setProjects(cached.filter((project) => project.portal === portalId));
+    void api<Project[] | { results: Project[] }>(
+      withPage(`/api/projects/?portal=${portalId}`, 1, PICKER_PAGE_SIZE),
+      {},
+      token
+    )
+      .then((data) => {
+        setProjects(unwrapList(data).filter((project) => project.portal === portalId));
+      })
+      .catch(() => undefined);
+  }
+
+  async function confirmConvert() {
+    if (!token || !convertItem || !convertProjectId || converting) return;
+    setConverting(true);
+    setError(null);
+    try {
+      await api(
+        `/api/backlog-items/${convertItem.id}/convert-task/`,
+        {
+          method: "POST",
+          body: JSON.stringify({ project: convertProjectId }),
+        },
+        token
+      );
+      setItems((prev) => prev.filter((it) => it.id !== convertItem.id));
+      if (selectedId === convertItem.id) closeItem();
+      setConvertItem(null);
+      setConvertProjectId("");
+      toast.show("Задача появилась в выбранном проекте", "Добавлено в работу");
+      window.dispatchEvent(new Event("projects-updated"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Не удалось добавить в работу");
+    } finally {
+      setConverting(false);
+    }
+  }
+
   return (
     <div className="tasks-page backlog-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{pageTitle}</h1>
-          <p className="page-sub">Воронка идей — тяните карточки по этапам</p>
+          <p className="page-sub">
+            Заявки клиента — на согласование. Свои идеи тяните по этапам воронки.
+          </p>
         </div>
         <div className="backlog-header-actions">
-          {!loading && items.length > 0 ? (
-            <span className="backlog-count muted">{items.length}</span>
+          {!loading && agencyItems.length > 0 ? (
+            <span className="backlog-count muted">{agencyItems.length}</span>
           ) : null}
           <button
             type="button"
@@ -439,6 +521,66 @@ export function ClientBacklog() {
       </div>
 
       {error ? <div className="error-banner">{error}</div> : null}
+      <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
+
+      <section className="request-inbox">
+        <div className="overview-card-head">
+          <div>
+            <h2 className="section-title">Заявки клиента</h2>
+            <p className="muted">
+              Не в проектах, пока не нажмёте «Добавить в работу» и не выберете модуль.
+            </p>
+          </div>
+          {clientRequests.length > 0 ? (
+            <span className="backlog-count muted">{clientRequests.length}</span>
+          ) : null}
+        </div>
+        {loading && clientRequests.length === 0 && items.length === 0 ? (
+          <div className="empty-linked workspace-empty data-loading-state">
+            <span className="data-loading-spinner" aria-hidden />
+            <p className="muted">Загружаем заявки…</p>
+          </div>
+        ) : clientRequests.length === 0 ? (
+          <div className="empty-linked workspace-empty">
+            <p className="muted">Клиент пока ничего не отправил на согласование.</p>
+          </div>
+        ) : (
+          <ul className="request-list">
+            {clientRequests.map((item) => (
+              <li key={item.id} className="request-card">
+                <button
+                  type="button"
+                  className="request-card-copy request-card-open"
+                  onClick={() => openItem(item)}
+                >
+                  <strong>{item.title}</strong>
+                  {item.notes ? <p>{item.notes}</p> : null}
+                  <span className="muted">
+                    {item.created_by_name ? `${item.created_by_name} · ` : ""}
+                    {formatDateTime(item.created_at)}
+                  </span>
+                </button>
+                <div className="request-card-actions">
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => openConvert(item)}
+                  >
+                    Добавить в работу
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost backlog-btn-danger"
+                    onClick={() => setPendingDelete({ id: item.id, title: item.title })}
+                  >
+                    Отклонить
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {showCreate ? (
         <form
@@ -705,25 +847,29 @@ export function ClientBacklog() {
             <div className="backlog-modal-head">
               <div>
                 <p className="backlog-modal-stage muted">
-                  {FUNNEL_STAGES.find((s) => s.id === columnStatus(selected.status))
-                    ?.label || selected.status}
+                  {isClientRequest(selected)
+                    ? "Заявка клиента"
+                    : FUNNEL_STAGES.find((s) => s.id === columnStatus(selected.status))
+                        ?.label || selected.status}
                   {savingId === selected.id ? " · сохраняем…" : ""}
                 </p>
                 <h3 id="backlog-item-title" className="modal-title">
-                  Идея в бэклоге
+                  {isClientRequest(selected) ? "На согласование" : "Идея в бэклоге"}
                 </h3>
               </div>
-              <button
-                type="button"
-                className={`backlog-pin${selected.is_pinned ? " is-on" : ""}`}
-                title={selected.is_pinned ? "Открепить" : "Закрепить"}
-                disabled={savingId === selected.id}
-                onClick={() =>
-                  void patchItem(selected.id, { is_pinned: !selected.is_pinned })
-                }
-              >
-                {selected.is_pinned ? "★" : "☆"}
-              </button>
+              {isClientRequest(selected) ? null : (
+                <button
+                  type="button"
+                  className={`backlog-pin${selected.is_pinned ? " is-on" : ""}`}
+                  title={selected.is_pinned ? "Открепить" : "Закрепить"}
+                  disabled={savingId === selected.id}
+                  onClick={() =>
+                    void patchItem(selected.id, { is_pinned: !selected.is_pinned })
+                  }
+                >
+                  {selected.is_pinned ? "★" : "☆"}
+                </button>
+              )}
             </div>
 
             <div className="backlog-modal-scroll">
@@ -747,6 +893,7 @@ export function ClientBacklog() {
                     placeholder="Контекст, ссылки, детали…"
                   />
                 </div>
+                {isClientRequest(selected) ? null : (
                 <div className="field">
                   <label>Этап</label>
                   <div className="task-filters">
@@ -765,6 +912,9 @@ export function ClientBacklog() {
                     ))}
                   </div>
                 </div>
+                )}
+                {isClientRequest(selected) ? null : (
+                <>
                 <div className="field">
                   <label>Приоритет</label>
                   <div className="task-filters">
@@ -810,10 +960,23 @@ export function ClientBacklog() {
                     Подсказка по тегу — при наведении
                   </p>
                 </div>
+                </>
+                )}
               </div>
             </div>
 
             <div className="backlog-modal-actions">
+              {isClientRequest(selected) ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => openConvert(selected)}
+                >
+                  Добавить в работу
+                </button>
+              ) : (
+                <span />
+              )}
               <div className="backlog-modal-actions-secondary">
                 <button
                   type="button"
@@ -823,7 +986,7 @@ export function ClientBacklog() {
                     setPendingDelete({ id: selected.id, title: selected.title })
                   }
                 >
-                  Удалить
+                  {isClientRequest(selected) ? "Отклонить" : "Удалить"}
                 </button>
                 <button
                   type="button"
@@ -842,9 +1005,13 @@ export function ClientBacklog() {
         open={Boolean(pendingDelete)}
         danger
         title={
-          pendingDelete ? `Удалить «${pendingDelete.title}»?` : "Удалить заметку?"
+          pendingDelete ? `Удалить «${pendingDelete.title}»?` : "Удалить?"
         }
-        description="Заметка будет удалена без возможности восстановить."
+        description={
+          pendingDelete && clientRequests.some((item) => item.id === pendingDelete.id)
+            ? "Заявка клиента будет отклонена и удалена."
+            : "Заметка будет удалена без возможности восстановить."
+        }
         confirmLabel={deleting ? "Удаляем…" : "Удалить"}
         cancelLabel="Оставить"
         onCancel={() => {
@@ -852,6 +1019,43 @@ export function ClientBacklog() {
         }}
         onConfirm={() => void confirmDelete()}
       />
+
+      <ConfirmDialog
+        open={Boolean(convertItem)}
+        title="Добавить в работу"
+        description="Задача появится в выбранном проекте. Клиент увидит её там и больше не сможет удалить заявку."
+        confirmLabel={converting ? "Добавляем…" : "Добавить"}
+        cancelLabel="Отмена"
+        onCancel={() => {
+          if (!converting) {
+            setConvertItem(null);
+            setConvertProjectId("");
+          }
+        }}
+        onConfirm={() => void confirmConvert()}
+      >
+        <div className="field" style={{ textAlign: "left", margin: "12px 0 4px" }}>
+          <label>Проект</label>
+          {projects.length === 0 ? (
+            <p className="muted">Сначала создайте проект в кабинете этого клиента.</p>
+          ) : (
+            <select
+              value={convertProjectId === "" ? "" : String(convertProjectId)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setConvertProjectId(value ? Number(value) : "");
+              }}
+            >
+              <option value="">Выберите проект</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </ConfirmDialog>
     </div>
   );
 }

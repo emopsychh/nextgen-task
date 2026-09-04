@@ -364,14 +364,20 @@ export function ProjectTasks() {
           </p>
         </div>
         <div className="report-header-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setShowCreate((v) => !v)}
-            data-tour="tour-new-task"
-          >
-            {showCreate ? "Закрыть" : "Новая задача"}
-          </button>
+          {isAgency ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setShowCreate((v) => !v)}
+              data-tour="tour-new-task"
+            >
+              {showCreate ? "Закрыть" : "Новая задача"}
+            </button>
+          ) : (
+            <Link to="/requests" className="btn btn-primary">
+              На согласование
+            </Link>
+          )}
         </div>
       </div>
 
@@ -379,7 +385,7 @@ export function ProjectTasks() {
 
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
-      {showCreate && (
+      {showCreate && isAgency && (
         <form className="connect-panel create-task-panel stack" onSubmit={createTask}>
           <div>
             <h2 className="section-title">Новая задача</h2>
@@ -488,7 +494,9 @@ export function ProjectTasks() {
           <div className="empty-linked task-empty">
             <p className="muted">
               {counts.all === 0
-                ? "Создайте первую задачу — кнопка «Новая задача» сверху."
+                ? isAgency
+                  ? "Создайте первую задачу — кнопка «Новая задача» сверху."
+                  : "Задачи появятся здесь, когда агентство примет заявку в работу."
                 : debouncedQuery.trim()
                   ? "Ничего не найдено по запросу."
                   : "В этом статусе задач нет."}

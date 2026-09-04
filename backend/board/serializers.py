@@ -1087,6 +1087,10 @@ class SupportTicketSerializer(serializers.ModelSerializer):
 class BacklogItemSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     assignee_name = serializers.SerializerMethodField()
+    converted_project_name = serializers.SerializerMethodField()
+    converted_task_title = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
+    can_edit = serializers.SerializerMethodField()
     tags = serializers.ListField(
         child=serializers.CharField(max_length=40, trim_whitespace=True),
         required=False,
@@ -1100,6 +1104,7 @@ class BacklogItemSerializer(serializers.ModelSerializer):
             "portal",
             "title",
             "notes",
+            "source",
             "status",
             "priority",
             "sort_order",
@@ -1108,7 +1113,11 @@ class BacklogItemSerializer(serializers.ModelSerializer):
             "assignee",
             "assignee_name",
             "converted_project",
+            "converted_project_name",
             "converted_task",
+            "converted_task_title",
+            "can_delete",
+            "can_edit",
             "created_by",
             "created_by_name",
             "created_at",
@@ -1116,15 +1125,21 @@ class BacklogItemSerializer(serializers.ModelSerializer):
         )
         read_only_fields = (
             "id",
+            "source",
             "sort_order",
             "converted_project",
+            "converted_project_name",
             "converted_task",
+            "converted_task_title",
+            "can_delete",
+            "can_edit",
             "created_by",
             "created_by_name",
             "assignee_name",
             "created_at",
             "updated_at",
         )
+        extra_kwargs = {"portal": {"required": False}}
 
     def get_created_by_name(self, obj):
         if obj.created_by_id:
@@ -1135,6 +1150,31 @@ class BacklogItemSerializer(serializers.ModelSerializer):
         if obj.assignee_id:
             return obj.assignee.display_name
         return ""
+
+    def get_converted_project_name(self, obj):
+        if obj.converted_project_id:
+            return obj.converted_project.name
+        return ""
+
+    def get_converted_task_title(self, obj):
+        if obj.converted_task_id:
+            return obj.converted_task.title
+        return ""
+
+    def get_can_delete(self, obj):
+        return self._client_can_change_request(obj)
+
+    def get_can_edit(self, obj):
+        return self._client_can_change_request(obj)
+
+    def _client_can_change_request(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        if not user or not getattr(user, "is_authenticated", False):
+            return False
+        if getattr(user, "is_agency", False):
+            return True
+        return obj.source == BacklogItem.Source.CLIENT and not obj.is_accepted()
 
     def validate_tags(self, value):
         cleaned = []

@@ -10,6 +10,7 @@ import { AgencyDashboard } from "./pages/agency/AgencyDashboard";
 import { AgencyHome } from "./pages/agency/AgencyHome";
 import { ClientBacklog } from "./pages/agency/ClientBacklog";
 import { ClientProjects } from "./pages/client/ClientProjects";
+import { ClientTaskRequests } from "./pages/client/ClientTaskRequests";
 import { ProjectReports } from "./pages/shared/ProjectReports";
 import { ProjectsList } from "./pages/shared/ProjectsList";
 import { ReportDetail } from "./pages/shared/ReportDetail";
@@ -104,6 +105,10 @@ export default function App() {
           }
         />
         <Route path="projects" element={isAgency ? <Navigate to="/" replace /> : <ProjectsList />} />
+        <Route
+          path="requests"
+          element={isAgency ? <Navigate to="/" replace /> : <ClientTaskRequests />}
+        />
         <Route
           path="portals/:portalId/reports"
           element={<RouteDataBoundary><ProjectReports /></RouteDataBoundary>}

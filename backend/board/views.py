@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from portals.models import Portal, PortalLink
-from portals.permissions import IsAgencyPortal, IsPortalAuthenticated, can_access_client_portal
+from portals.permissions import IsPortalAuthenticated, can_access_client_portal
 
 from .events import append_task_change_events
 from .models import (
@@ -607,11 +607,10 @@ class TaskViewSet(viewsets.ModelViewSet):
         project = serializer.validated_data["project"]
         if not can_access_client_portal(self.request.user, project.portal):
             raise PermissionDenied("No access to this project")
-        # Client may only create inside their own portal — blocks a stale agency
-        # JWT left in localStorage from creating tasks as «Александр» on the
-        # client Bitrix iframe.
-        if self.request.user.is_client and project.portal_id != self.request.user.portal_id:
-            raise PermissionDenied("No access to this project")
+        if self.request.user.is_client:
+            raise PermissionDenied(
+                "Клиент может только отправить задачу на согласование"
+            )
         extras = {
             "created_by": self.request.user.bitrix_user,
             "sync_status": Task.SyncStatus.PENDING,
@@ -1728,16 +1727,24 @@ class SupportTicketViewSet(viewsets.ModelViewSet):
 
 
 class BacklogItemViewSet(viewsets.ModelViewSet):
-    """Agency-only internal backlog notes for a linked client portal."""
+    """Agency backlog notes, plus client task requests awaiting approval."""
 
-    permission_classes = [IsPortalAuthenticated, IsAgencyPortal]
+    permission_classes = [IsPortalAuthenticated]
     serializer_class = BacklogItemSerializer
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
-        return BacklogItem.objects.select_related(
+        ids = accessible_portal_ids(self.request.user)
+        qs = BacklogItem.objects.filter(portal_id__in=ids).select_related(
             "portal", "created_by", "assignee", "converted_project", "converted_task"
-        ).all()
+        )
+        if not getattr(self.request.user, "is_agency", False):
+            qs = qs.filter(source=BacklogItem.Source.CLIENT)
+        return qs
+
+    def _require_agency(self):
+        if not getattr(self.request.user, "is_agency", False):
+            raise PermissionDenied("Только агентство")
 
     def _portal_from_request(self, portal_id):
         try:
@@ -1751,6 +1758,11 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
     def _ensure_item_access(self, item: BacklogItem):
         if not can_access_client_portal(self.request.user, item.portal):
             raise PermissionDenied("No access to this portal")
+        if (
+            not getattr(self.request.user, "is_agency", False)
+            and item.source != BacklogItem.Source.CLIENT
+        ):
+            raise PermissionDenied("No access to this item")
 
     def _resolve_assignee(self, assignee_id, agency_portal: Portal):
         if assignee_id in (None, "", 0, "0"):
@@ -1767,10 +1779,18 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
         return user
 
     def _serialize(self, item: BacklogItem):
-        return BacklogItemSerializer(item).data
+        return self.get_serializer(item).data
+
+    def _publish_backlog(self, portal_id: int, item_id: int | None = None):
+        payload = {"kind": "backlog_update"}
+        if item_id is not None:
+            payload["item_id"] = item_id
+        publish_portal_event(portal_id, payload)
 
     def list(self, request, *args, **kwargs):
         portal_id = request.query_params.get("portal")
+        if not portal_id and not request.user.is_agency:
+            portal_id = request.user.portal_id
         if not portal_id:
             return Response({"detail": "Query parameter portal is required"}, status=400)
         portal = self._portal_from_request(portal_id)
@@ -1784,6 +1804,9 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
             )
         elif status in {c.value for c in BacklogItem.Status}:
             qs = qs.filter(status=status)
+        source = (request.query_params.get("source") or "").strip()
+        if source in {c.value for c in BacklogItem.Source} and request.user.is_agency:
+            qs = qs.filter(source=source)
         tag = (request.query_params.get("tag") or "").strip().lower()
         if tag:
             qs = qs.filter(tags__contains=[tag])
@@ -1796,15 +1819,23 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
                 qs = qs.none()
         elif assignee and assignee not in ("", "all"):
             qs = qs.filter(assignee_id=assignee)
-        return Response(BacklogItemSerializer(qs, many=True).data)
+        return Response(self.get_serializer(qs, many=True).data)
 
     def create(self, request, *args, **kwargs):
-        ser = BacklogItemSerializer(data=request.data)
+        ser = self.get_serializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        portal = self._portal_from_request(ser.validated_data["portal"].pk)
+        is_agency = bool(getattr(request.user, "is_agency", False))
+        portal_obj = ser.validated_data.get("portal")
+        if is_agency:
+            if portal_obj is None:
+                return Response({"portal": ["Обязательное поле."]}, status=400)
+            portal = self._portal_from_request(portal_obj.pk)
+        else:
+            portal = request.user.portal
+            if portal_obj is not None and portal_obj.pk != portal.id:
+                raise PermissionDenied("No access to this portal")
         if portal is None:
             return Response({"detail": "Portal not found"}, status=404)
-        agency = request.user.portal
         max_order = (
             BacklogItem.objects.filter(portal=portal)
             .order_by("-sort_order")
@@ -1812,23 +1843,33 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
             .first()
         )
         assignee = None
-        if "assignee" in ser.validated_data:
+        if is_agency and "assignee" in ser.validated_data:
             assignee = self._resolve_assignee(
                 ser.validated_data["assignee"].pk if ser.validated_data["assignee"] else None,
-                agency,
+                request.user.portal,
             )
         item = BacklogItem.objects.create(
             portal=portal,
             title=ser.validated_data["title"].strip(),
             notes=(ser.validated_data.get("notes") or "").strip(),
-            status=ser.validated_data.get("status") or BacklogItem.Status.IDEA,
-            priority=ser.validated_data.get("priority", BacklogItem.Priority.NORMAL),
-            is_pinned=bool(ser.validated_data.get("is_pinned", False)),
-            tags=ser.validated_data.get("tags") or [],
+            source=BacklogItem.Source.AGENCY if is_agency else BacklogItem.Source.CLIENT,
+            status=(
+                ser.validated_data.get("status") or BacklogItem.Status.IDEA
+                if is_agency
+                else BacklogItem.Status.IDEA
+            ),
+            priority=(
+                ser.validated_data.get("priority", BacklogItem.Priority.NORMAL)
+                if is_agency
+                else BacklogItem.Priority.NORMAL
+            ),
+            is_pinned=bool(ser.validated_data.get("is_pinned", False)) if is_agency else False,
+            tags=(ser.validated_data.get("tags") or []) if is_agency else [],
             assignee=assignee,
             sort_order=(max_order + 1) if max_order is not None else 0,
             created_by=getattr(request.user, "bitrix_user", None),
         )
+        self._publish_backlog(item.portal_id, item.id)
         return Response(self._serialize(item), status=201)
 
     def retrieve(self, request, *args, **kwargs):
@@ -1839,47 +1880,80 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         item = self.get_object()
         self._ensure_item_access(item)
-        ser = BacklogItemSerializer(item, data=request.data, partial=True)
+        is_agency = bool(getattr(request.user, "is_agency", False))
+        if not is_agency:
+            if item.source != BacklogItem.Source.CLIENT or item.is_accepted():
+                raise PermissionDenied("Заявку уже приняли в работу, изменить нельзя")
+        ser = self.get_serializer(item, data=request.data, partial=True)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
         update_fields = ["updated_at"]
         if "title" in data:
-            item.title = data["title"].strip()
+            title = data["title"].strip()
+            if not title:
+                raise ValidationError({"title": "Название не может быть пустым"})
+            item.title = title
             update_fields.append("title")
         if "notes" in data:
             item.notes = (data["notes"] or "").strip()
             update_fields.append("notes")
-        if "status" in data:
-            item.status = data["status"]
-            update_fields.append("status")
-        if "priority" in data:
-            item.priority = data["priority"]
-            update_fields.append("priority")
-        if "is_pinned" in data:
-            item.is_pinned = bool(data["is_pinned"])
-            update_fields.append("is_pinned")
-        if "tags" in data:
-            item.tags = data["tags"]
-            update_fields.append("tags")
-        if "assignee" in data:
-            item.assignee = self._resolve_assignee(
-                data["assignee"].pk if data["assignee"] else None,
-                request.user.portal,
-            )
-            update_fields.append("assignee")
+        if is_agency:
+            if "status" in data:
+                item.status = data["status"]
+                update_fields.append("status")
+            if "priority" in data:
+                item.priority = data["priority"]
+                update_fields.append("priority")
+            if "is_pinned" in data:
+                item.is_pinned = bool(data["is_pinned"])
+                update_fields.append("is_pinned")
+            if "tags" in data:
+                item.tags = data["tags"]
+                update_fields.append("tags")
+            if "assignee" in data:
+                item.assignee = self._resolve_assignee(
+                    data["assignee"].pk if data["assignee"] else None,
+                    request.user.portal,
+                )
+                update_fields.append("assignee")
         item.save(update_fields=update_fields)
         item = self.get_queryset().get(pk=item.pk)
+        self._publish_backlog(item.portal_id, item.id)
         return Response(self._serialize(item))
 
     def destroy(self, request, *args, **kwargs):
         item = self.get_object()
         self._ensure_item_access(item)
+        if not getattr(request.user, "is_agency", False):
+            if item.source != BacklogItem.Source.CLIENT or item.is_accepted():
+                raise PermissionDenied("Заявку уже приняли в работу, удалить нельзя")
+        portal_id = item.portal_id
+        item_id = item.id
         item.delete()
+        self._publish_backlog(portal_id, item_id)
         return Response(status=204)
+
+    @action(detail=False, methods=["get"])
+    def counts(self, request):
+        portal_id = request.query_params.get("portal")
+        if not portal_id and not request.user.is_agency:
+            portal_id = request.user.portal_id
+        if not portal_id:
+            return Response({"detail": "Query parameter portal is required"}, status=400)
+        portal = self._portal_from_request(portal_id)
+        if portal is None:
+            return Response({"detail": "Portal not found"}, status=404)
+        qs = (
+            self.get_queryset()
+            .filter(portal=portal, source=BacklogItem.Source.CLIENT)
+            .exclude(status=BacklogItem.Status.CONVERTED)
+        )
+        return Response({"pending": qs.count()})
 
     @action(detail=False, methods=["get"])
     def assignees(self, request):
         """Agency portal users available as backlog assignees."""
+        self._require_agency()
         from portals.models import BitrixUser
 
         users = BitrixUser.objects.filter(portal=request.user.portal).order_by(
@@ -1894,6 +1968,7 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"])
     def reorder(self, request):
+        self._require_agency()
         portal_id = request.data.get("portal")
         ordered_ids = request.data.get("ordered_ids") or []
         portal = self._portal_from_request(portal_id)
@@ -1905,7 +1980,13 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
             ids = [int(x) for x in ordered_ids]
         except (TypeError, ValueError):
             return Response({"detail": "ordered_ids invalid"}, status=400)
-        items = list(BacklogItem.objects.filter(portal=portal, id__in=ids))
+        items = list(
+            BacklogItem.objects.filter(
+                portal=portal,
+                id__in=ids,
+                source=BacklogItem.Source.AGENCY,
+            )
+        )
         if len(items) != len(set(ids)):
             return Response({"detail": "Some items not found"}, status=400)
         by_id = {it.id: it for it in items}
@@ -1915,12 +1996,18 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
                 it.sort_order = index
                 it.save(update_fields=["sort_order", "updated_at"])
         qs = self.get_queryset().filter(portal=portal)
-        return Response(BacklogItemSerializer(qs, many=True).data)
+        return Response(self.get_serializer(qs, many=True).data)
 
     @action(detail=True, methods=["post"], url_path="convert-project")
     def convert_project(self, request, pk=None):
+        self._require_agency()
         item = self.get_object()
         self._ensure_item_access(item)
+        if item.source == BacklogItem.Source.CLIENT:
+            return Response(
+                {"detail": "Заявку клиента нужно добавить в существующий проект"},
+                status=400,
+            )
         if item.status == BacklogItem.Status.CONVERTED and item.converted_project_id:
             return Response(
                 {
@@ -1944,10 +2031,12 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
         item.status = BacklogItem.Status.CONVERTED
         item.save(update_fields=["converted_project", "status", "updated_at"])
         item = self.get_queryset().get(pk=item.pk)
+        self._publish_backlog(item.portal_id, item.id)
         return Response({**self._serialize(item), "project_id": project.id}, status=201)
 
     @action(detail=True, methods=["post"], url_path="convert-task")
     def convert_task(self, request, pk=None):
+        self._require_agency()
         item = self.get_object()
         self._ensure_item_access(item)
         project_id = request.data.get("project")
@@ -1965,7 +2054,7 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
             project=project,
             title=item.title[:500],
             description=item.notes or "",
-            created_by=getattr(request.user, "bitrix_user", None),
+            created_by=item.created_by or getattr(request.user, "bitrix_user", None),
             sync_status=Task.SyncStatus.PENDING,
             status=Task.Status.TODO,
             is_important=item.priority == BacklogItem.Priority.HIGH,
@@ -1982,6 +2071,7 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
             update_fields=["converted_task", "converted_project", "status", "updated_at"]
         )
         item = self.get_queryset().get(pk=item.pk)
+        self._publish_backlog(item.portal_id, item.id)
         return Response(
             {**self._serialize(item), "task_id": task.id, "project_id": project.id},
             status=201,

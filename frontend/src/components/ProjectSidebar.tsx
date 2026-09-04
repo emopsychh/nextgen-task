@@ -37,6 +37,7 @@ export function ProjectSidebarNav() {
   const [clientLabel, setClientLabel] = useState("");
   const [reportsAttention, setReportsAttention] = useState(0);
   const [openTickets, setOpenTickets] = useState(0);
+  const [pendingRequests, setPendingRequests] = useState(0);
   const lastPortalRef = useRef<number | null>(null);
 
   const contextPortalId = useMemo(() => {
@@ -51,6 +52,7 @@ export function ProjectSidebarNav() {
   const projectsUnseen = unseenCount(projects);
   const reportsCountCache = `sidebar-reports:${isAgency ? "agency" : "client"}`;
   const ticketsCountCache = "sidebar-tickets:client";
+  const requestsCountCache = `sidebar-requests:${isAgency ? "agency" : "client"}`;
 
   useEffect(() => {
     if (contextPortalId) lastPortalRef.current = contextPortalId;
@@ -76,6 +78,7 @@ export function ProjectSidebarNav() {
     if (!contextPortalId) {
       setReportsAttention(0);
       setOpenTickets(0);
+      setPendingRequests(0);
       return;
     }
     setReportsAttention(
@@ -86,7 +89,10 @@ export function ProjectSidebarNav() {
         ? readPortalCache<number>(ticketsCountCache, contextPortalId) || 0
         : 0
     );
-  }, [contextPortalId, isAgency, reportsCountCache]);
+    setPendingRequests(
+      readPortalCache<number>(requestsCountCache, contextPortalId) || 0
+    );
+  }, [contextPortalId, isAgency, reportsCountCache, requestsCountCache]);
 
   useEffect(() => {
     const onLabel = (event: Event) => {
@@ -105,6 +111,7 @@ export function ProjectSidebarNav() {
       setProjects([]);
       setClientLabel("");
       setReportsAttention(0);
+      setPendingRequests(0);
     }
   }, [isAgency, routePortalId, routeProjectId, onTicketsRoute]);
 
@@ -256,6 +263,41 @@ export function ProjectSidebarNav() {
     };
   }, [token, contextPortalId, isAgency, location.pathname, onTicketsRoute]);
 
+  useEffect(() => {
+    if (!token || !contextPortalId || (isAgency && onTicketsRoute)) {
+      if (!contextPortalId || (isAgency && onTicketsRoute)) setPendingRequests(0);
+      return;
+    }
+    const portalId = contextPortalId;
+    let cancelled = false;
+
+    async function loadRequests() {
+      try {
+        const data = await api<{ pending?: number }>(
+          `/api/backlog-items/counts/?portal=${portalId}`,
+          {},
+          token!
+        );
+        if (cancelled) return;
+        const count = data.pending || 0;
+        setPendingRequests(count);
+        writePortalCache(requestsCountCache, portalId, count);
+      } catch {
+        // Keep the last known count.
+      }
+    }
+
+    void loadRequests();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void loadRequests();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [token, contextPortalId, isAgency, location.pathname, onTicketsRoute, requestsCountCache]);
+
   usePortalLiveSync({
     token,
     portalId: contextPortalId,
@@ -268,6 +310,7 @@ export function ProjectSidebarNav() {
       const cursorBump = !kind && typeof payload?.v === "number";
       const refreshReports = cursorBump || kind.startsWith("report_");
       const refreshTickets = cursorBump || kind.startsWith("ticket_");
+      const refreshRequests = cursorBump || kind.startsWith("backlog_");
       const refreshProjects =
         cursorBump ||
         kind.startsWith("project_") ||
@@ -275,7 +318,7 @@ export function ProjectSidebarNav() {
         kind === "ontaskadd" ||
         kind === "ontaskupdate" ||
         kind === "ontaskdelete";
-      if (!refreshReports && !refreshTickets && !refreshProjects) return;
+      if (!refreshReports && !refreshTickets && !refreshProjects && !refreshRequests) return;
       void (async () => {
         try {
           if (refreshProjects && contextPortalId && !(isAgency && onTicketsRoute)) {
@@ -316,6 +359,16 @@ export function ProjectSidebarNav() {
             const count = data.awaiting_client || 0;
             setOpenTickets(count);
             writePortalCache(ticketsCountCache, contextPortalId, count);
+          }
+          if (refreshRequests && contextPortalId && !(isAgency && onTicketsRoute)) {
+            const data = await api<{ pending?: number }>(
+              `/api/backlog-items/counts/?portal=${contextPortalId}`,
+              {},
+              token
+            );
+            const count = data.pending || 0;
+            setPendingRequests(count);
+            writePortalCache(requestsCountCache, contextPortalId, count);
           }
         } catch {
           // keep previous
@@ -422,6 +475,29 @@ export function ProjectSidebarNav() {
           </span>
         ) : null}
       </NavLink>
+      {!isAgency ? (
+        <NavLink
+          to="/requests"
+          className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
+        >
+          <span className="feed-nav-icon" aria-hidden>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </span>
+          <span className="feed-nav-label">На согласование</span>
+          {pendingRequests > 0 ? (
+            <span className="feed-nav-count" aria-label={`${pendingRequests} заявок`}>
+              {pendingRequests > 99 ? "99+" : pendingRequests}
+            </span>
+          ) : null}
+        </NavLink>
+      ) : null}
       <NavLink
         to={isAgency ? `/portals/${contextPortalId}/reports` : "/reports"}
         className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
@@ -460,6 +536,11 @@ export function ProjectSidebarNav() {
             </svg>
           </span>
           <span className="feed-nav-label">Бэклог</span>
+          {pendingRequests > 0 ? (
+            <span className="feed-nav-count" aria-label={`${pendingRequests} заявок клиента`}>
+              {pendingRequests > 99 ? "99+" : pendingRequests}
+            </span>
+          ) : null}
         </NavLink>
       ) : null}
       {ticketsLink}

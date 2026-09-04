@@ -127,12 +127,13 @@ class BacklogItemAdmin(admin.ModelAdmin):
         "id",
         "portal",
         "title",
+        "source",
         "status",
         "priority",
         "is_pinned",
         "assignee",
         "updated_at",
     )
-    list_filter = ("portal", "status", "priority", "is_pinned")
+    list_filter = ("portal", "source", "status", "priority", "is_pinned")
     search_fields = ("title", "notes")
     readonly_fields = ("created_at", "updated_at", "converted_project", "converted_task")

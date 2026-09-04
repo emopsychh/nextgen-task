@@ -390,7 +390,11 @@ class WorkReportLineAttachment(models.Model):
 
 
 class BacklogItem(models.Model):
-    """Agency-only internal notes for a client portal (not synced to Bitrix / clients)."""
+    """Internal agency notes or a client task request awaiting approval.
+
+    Client-sourced items are not project tasks and are not synced to Bitrix
+    until the agency converts them with «Добавить в работу».
+    """
 
     class Status(models.TextChoices):
         IDEA = "idea", "Идея"
@@ -398,6 +402,10 @@ class BacklogItem(models.Model):
         DEFERRED = "deferred", "Отложено"
         DONE = "done", "Сделано"
         CONVERTED = "converted", "В проект/задачу"
+
+    class Source(models.TextChoices):
+        AGENCY = "agency", "Агентство"
+        CLIENT = "client", "Клиент"
 
     class Priority(models.IntegerChoices):
         LOW = 0, "Низкий"
@@ -407,6 +415,12 @@ class BacklogItem(models.Model):
     portal = models.ForeignKey(Portal, on_delete=models.CASCADE, related_name="backlog_items")
     title = models.CharField(max_length=500)
     notes = models.TextField(blank=True)
+    source = models.CharField(
+        max_length=16,
+        choices=Source.choices,
+        default=Source.AGENCY,
+        db_index=True,
+    )
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.IDEA, db_index=True)
     priority = models.PositiveSmallIntegerField(choices=Priority.choices, default=Priority.NORMAL)
     sort_order = models.IntegerField(default=0, db_index=True)
@@ -445,6 +459,13 @@ class BacklogItem(models.Model):
 
     class Meta:
         ordering = ["-is_pinned", "sort_order", "-priority", "-updated_at", "-id"]
+
+    def is_accepted(self) -> bool:
+        return (
+            self.status == self.Status.CONVERTED
+            or bool(self.converted_task_id)
+            or bool(self.converted_project_id)
+        )
 
     def __str__(self):
         return f"BacklogItem#{self.pk} {self.title[:40]}"

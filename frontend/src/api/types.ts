@@ -333,6 +333,7 @@ export type BacklogItem = {
   portal: number;
   title: string;
   notes: string;
+  source: "agency" | "client";
   status: BacklogStatus;
   priority: BacklogPriority;
   sort_order: number;
@@ -341,7 +342,11 @@ export type BacklogItem = {
   assignee: number | null;
   assignee_name: string;
   converted_project: number | null;
+  converted_project_name: string;
   converted_task: number | null;
+  converted_task_title: string;
+  can_delete: boolean;
+  can_edit: boolean;
   created_by: number | null;
   created_by_name: string;
   created_at: string;

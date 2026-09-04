@@ -32,16 +32,110 @@ class BacklogItemApiTests(TestCase):
         self.agency_client.credentials(HTTP_AUTHORIZATION=f"Bearer {agency_tokens['access']}")
         self.client_client.credentials(HTTP_AUTHORIZATION=f"Bearer {client_tokens['access']}")
 
-    def test_client_forbidden(self):
-        r = self.client_client.get(f"/api/backlog-items/?portal={self.client_a.id}")
-        self.assertEqual(r.status_code, 403)
-
-        r = self.client_client.post(
+    def test_client_cannot_see_agency_backlog(self):
+        self.agency_client.post(
             "/api/backlog-items/",
-            {"portal": self.client_a.id, "title": "X", "notes": ""},
+            {"portal": self.client_a.id, "title": "Внутренняя идея"},
+            format="json",
+        )
+        r = self.client_client.get(f"/api/backlog-items/?portal={self.client_a.id}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data, [])
+
+    @patch("board.views.enqueue_bitrix_sync")
+    def test_client_request_lifecycle(self, _task_sync):
+        create = self.client_client.post(
+            "/api/backlog-items/",
+            {"portal": self.client_a.id, "title": "Нужен лендинг", "notes": "к пятнице"},
+            format="json",
+        )
+        self.assertEqual(create.status_code, 201, create.content)
+        item_id = create.data["id"]
+        self.assertEqual(create.data["source"], "client")
+        self.assertEqual(create.data["status"], "idea")
+        self.assertTrue(create.data["can_delete"])
+        self.assertTrue(create.data["can_edit"])
+        self.assertFalse(Task.objects.filter(title="Нужен лендинг").exists())
+
+        listed = self.client_client.get(f"/api/backlog-items/?portal={self.client_a.id}")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(len(listed.data), 1)
+
+        agency_seen = self.agency_client.get(
+            f"/api/backlog-items/?portal={self.client_a.id}&source=client"
+        )
+        self.assertEqual(agency_seen.status_code, 200)
+        self.assertEqual(len(agency_seen.data), 1)
+
+        patched = self.client_client.patch(
+            f"/api/backlog-items/{item_id}/",
+            {"title": "Другое название", "notes": "уже не к пятнице", "status": "in_progress"},
+            format="json",
+        )
+        self.assertEqual(patched.status_code, 200, patched.content)
+        self.assertEqual(patched.data["title"], "Другое название")
+        self.assertEqual(patched.data["notes"], "уже не к пятнице")
+        self.assertEqual(patched.data["status"], "idea")
+
+        project = make_project(self.client_a, name="Сайт")
+        as_project = self.agency_client.post(
+            f"/api/backlog-items/{item_id}/convert-project/",
+            {},
+            format="json",
+        )
+        self.assertEqual(as_project.status_code, 400)
+
+        client_convert = self.client_client.post(
+            f"/api/backlog-items/{item_id}/convert-task/",
+            {"project": project.id},
+            format="json",
+        )
+        self.assertEqual(client_convert.status_code, 403)
+
+        to_task = self.agency_client.post(
+            f"/api/backlog-items/{item_id}/convert-task/",
+            {"project": project.id},
+            format="json",
+        )
+        self.assertEqual(to_task.status_code, 201, to_task.content)
+        self.assertEqual(to_task.data["status"], "converted")
+        task = Task.objects.get(pk=to_task.data["task_id"])
+        self.assertEqual(task.project_id, project.id)
+        self.assertEqual(task.title, "Другое название")
+        self.assertEqual(task.created_by_id, self.client_user.id)
+
+        denied_edit = self.client_client.patch(
+            f"/api/backlog-items/{item_id}/",
+            {"title": "После принятия"},
+            format="json",
+        )
+        self.assertEqual(denied_edit.status_code, 403)
+
+        denied_delete = self.client_client.delete(f"/api/backlog-items/{item_id}/")
+        self.assertEqual(denied_delete.status_code, 403)
+        self.assertTrue(BacklogItem.objects.filter(pk=item_id).exists())
+
+    def test_client_can_delete_pending_request(self):
+        create = self.client_client.post(
+            "/api/backlog-items/",
+            {"title": "Временная заявка"},
+            format="json",
+        )
+        self.assertEqual(create.status_code, 201, create.content)
+        item_id = create.data["id"]
+        deleted = self.client_client.delete(f"/api/backlog-items/{item_id}/")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertFalse(BacklogItem.objects.filter(pk=item_id).exists())
+
+    def test_client_cannot_create_project_task(self):
+        project = make_project(self.client_a, name="Сайт")
+        r = self.client_client.post(
+            "/api/tasks/",
+            {"project": project.id, "title": "Сразу в проект"},
             format="json",
         )
         self.assertEqual(r.status_code, 403)
+        self.assertFalse(Task.objects.filter(title="Сразу в проект").exists())
 
     def test_agency_crud_scoped_to_linked_portal(self):
         create = self.agency_client.post(
