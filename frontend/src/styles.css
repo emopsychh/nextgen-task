@@ -284,15 +284,21 @@ a {
 
 .sidebar.is-collapsed .feed-nav-label,
 .sidebar.is-collapsed .sidebar-account-copy {
+  position: absolute;
+  width: 0;
+  height: 0;
   max-width: 0;
+  margin: 0;
+  padding: 0;
   opacity: 0;
+  overflow: hidden;
   pointer-events: none;
 }
 
 .sidebar.is-collapsed .feed-nav-count {
   position: absolute;
-  top: 10px;
-  left: 34px;
+  top: 8px;
+  left: 30px;
   max-width: none;
   opacity: 1;
   min-width: 15px;
@@ -319,6 +325,35 @@ a {
 .sidebar .nav-item {
   position: relative;
   transition: background 0.15s ease;
+}
+
+/* Collapsed: square highlight around the icon, same padding as expanded */
+.sidebar.is-collapsed .feed-nav-item,
+.sidebar.is-collapsed .nav-item {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0;
+  width: 56px;
+  height: 56px;
+  min-height: 56px;
+  padding: 16px;
+  margin-bottom: 10px;
+  border-radius: 14px;
+  box-sizing: border-box;
+}
+
+.sidebar.is-collapsed .sidebar-account-link {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0;
+  width: 56px;
+  height: 56px;
+  min-height: 56px;
+  padding: 16px;
+  border-radius: 14px;
+  box-sizing: border-box;
 }
 
 .sidebar-account-link {
