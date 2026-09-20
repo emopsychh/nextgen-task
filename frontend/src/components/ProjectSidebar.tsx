@@ -376,9 +376,9 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
 
   return (
     <div className={`project-sidebar${collapsed ? " is-collapsed" : ""}`} data-tour="tour-sidebar">
-      {!collapsed ? (
+      {!collapsed && isAgency ? (
         <div className="sidebar-section-label">
-          {isAgency ? clientLabel || "Кабинет клиента" : "Навигация"}
+          {clientLabel || "Кабинет клиента"}
         </div>
       ) : null}
       <NavLink

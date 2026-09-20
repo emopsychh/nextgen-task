@@ -190,9 +190,11 @@ a {
 }
 
 .sidebar .brand-block {
-  margin-bottom: 18px;
+  margin-bottom: 28px;
   min-width: 0;
   width: 100%;
+  min-height: 52px;
+  align-items: center;
   transition: margin 0.28s ease, gap 0.28s ease;
 }
 
@@ -509,7 +511,8 @@ a {
   .sidebar.is-collapsed .brand-block {
     justify-content: flex-start;
     gap: 12px;
-    margin-bottom: 18px;
+    margin-bottom: 28px;
+    min-height: 52px;
   }
 
   .sidebar.is-collapsed .brand-mark {
@@ -535,11 +538,11 @@ a {
   .sidebar.is-collapsed .sidebar-account-link {
     width: auto;
     height: auto;
-    min-height: 44px;
+    min-height: 52px;
     justify-content: flex-start;
-    gap: 10px;
-    padding: 10px 12px;
-    margin: 0 0 14px;
+    gap: 14px;
+    padding: 16px;
+    margin: 0 0 10px;
   }
 
   .sidebar.is-collapsed .feed-nav-count {
@@ -727,10 +730,13 @@ a {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: 14px;
+  gap: 14px;
+  padding: 16px 16px;
+  border-radius: 16px;
   color: var(--ink-muted);
+  font-weight: 700;
+  font-size: 1.12rem;
+  letter-spacing: -0.02em;
   transition: 0.15s ease;
 }
 
@@ -745,7 +751,7 @@ a {
 }
 
 .main {
-  padding: 28px 32px 48px;
+  padding: 22px 32px 48px;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
@@ -1025,9 +1031,10 @@ a {
 
 .page-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
+  min-height: 52px;
   margin-bottom: 24px;
 }
 
@@ -1036,11 +1043,12 @@ a {
   font-size: clamp(1.6rem, 2vw, 2rem);
   font-weight: 700;
   letter-spacing: -0.04em;
-  margin: 0 0 6px;
+  margin: 0;
+  line-height: 1.15;
 }
 
 .page-sub {
-  margin: 0;
+  margin: 6px 0 0;
   color: var(--ink-muted);
 }
 
@@ -1987,13 +1995,14 @@ a {
 .feed-nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  margin-bottom: 14px;
-  border-radius: 14px;
+  gap: 14px;
+  padding: 16px 16px;
+  margin-bottom: 10px;
+  border-radius: 16px;
   color: var(--ink-muted);
-  font-weight: 600;
-  font-size: 0.9rem;
+  font-weight: 700;
+  font-size: 1.12rem;
+  letter-spacing: -0.02em;
   transition: 0.15s ease;
 }
 
@@ -2034,7 +2043,17 @@ a {
 
 .feed-nav-icon {
   display: inline-flex;
-  opacity: 0.75;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+.feed-nav-icon svg {
+  width: 22px;
+  height: 22px;
 }
 
 .project-nav-heading {
