@@ -37,7 +37,7 @@ function AppLayout() {
   const { portal, error } = useAuth();
   const location = useLocation();
   const isAgency = portal?.role === "agency";
-  // Task detail: hide the Обзор/projects sidebar — back via «К задачам».
+  // Task detail: hide the Обзор/projects sidebar — back via SmartBack.
   const taskFocus = /^\/tasks\/[^/]+\/?$/.test(location.pathname);
 
   return (

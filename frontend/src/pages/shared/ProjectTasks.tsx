@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
@@ -12,6 +12,7 @@ import {
 import { useAuth } from "../../auth/AuthContext";
 import { DueDatePicker } from "../../components/DueDatePicker";
 import { FlashToast } from "../../components/FlashToast";
+import { SmartBackButton } from "../../components/SmartBackButton";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { useSeenProjects } from "../../hooks/useSeenProjects";
@@ -22,6 +23,7 @@ import {
   writePortalCache,
   writeBoardTasksCache,
 } from "../../lib/portalSessionCache";
+import { canGoBackInApp, linkStateFrom } from "../../lib/smartBack";
 import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import { BoardAvatar } from "../../components/BoardAvatar";
 import { FlameIcon } from "../../components/icons";
@@ -39,6 +41,8 @@ function dueHint(due: ReturnType<typeof dueMeta>): string {
 
 export function ProjectTasks() {
   const { projectId } = useParams();
+  const location = useLocation();
+  const fromState = linkStateFrom(location);
   const { token, portal } = useAuth();
   const isAgency = portal?.role === "agency";
   const dueTz = displayTimeZone({
@@ -345,10 +349,21 @@ export function ProjectTasks() {
     { id: "done", label: STATUS_LABEL.done, count: counts.done },
   ];
 
+  const fromPath = (location.state as { from?: string } | null)?.from;
+  const showBack =
+    canGoBackInApp() || Boolean(fromPath && fromPath !== location.pathname + location.search);
+  const projectsFallback =
+    project?.portal && isAgency ? `/clients/${project.portal}/projects` : "/projects";
+
   return (
     <div className="tasks-page">
       <div className="page-header">
         <div>
+          {showBack ? (
+            <SmartBackButton fallback={projectsFallback} className="task-back" title="Назад">
+              <span className="task-back-label">Назад</span>
+            </SmartBackButton>
+          ) : null}
           <h1 className="page-title">{project?.name || "Задачи"}</h1>
           <p className="page-sub">
             {counts.all
@@ -519,6 +534,7 @@ export function ProjectTasks() {
                 <Link
                   key={t.id}
                   to={`/tasks/${t.id}`}
+                  state={fromState}
                   className={`board-row task-card${t.status === "done" ? " is-done" : ""}${t.is_important ? " is-important" : ""}${enteringId === t.id ? " is-entering" : ""}`}
                 >
                   <div className="board-row-main">

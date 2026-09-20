@@ -140,6 +140,7 @@ function writeZoom(zoom: number) {
 type Props = {
   projects: Project[];
   timeZone: string;
+  linkState?: { from: string };
 };
 
 function isNameColumn(target: EventTarget | null): boolean {
@@ -147,7 +148,7 @@ function isNameColumn(target: EventTarget | null): boolean {
   return Boolean(target.closest(".projects-gantt-name, .projects-gantt-corner, .projects-gantt-resizer"));
 }
 
-export function ProjectsGantt({ projects }: Props) {
+export function ProjectsGantt({ projects, linkState }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
   const [chartW, setChartW] = useState(0);
   const [nameW, setNameW] = useState(readNameWidth);
@@ -399,6 +400,7 @@ export function ProjectsGantt({ projects }: Props) {
               <div key={bar.project.id} className="projects-gantt-row">
                 <Link
                   to={`/projects/${bar.project.id}`}
+                  state={linkState}
                   className="projects-gantt-name"
                   style={{ width: nameW }}
                   title={bar.project.name}
@@ -425,6 +427,7 @@ export function ProjectsGantt({ projects }: Props) {
                   <span className="projects-gantt-today" style={{ left: todayLeft }} aria-hidden />
                   <Link
                     to={`/projects/${bar.project.id}`}
+                    state={linkState}
                     className={`projects-gantt-bar is-${bar.tone}${bar.openEnded ? " is-open" : ""}`}
                     style={{ left, width, height: BAR_H }}
                     title={title}

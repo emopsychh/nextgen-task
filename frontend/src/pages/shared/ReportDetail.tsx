@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import {
   api,
   apiBlob,
@@ -10,6 +10,7 @@ import {
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { FileGlyph } from "../../components/icons";
+import { SmartBackButton } from "../../components/SmartBackButton";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import {
@@ -17,6 +18,7 @@ import {
   formatDuration,
   formatPackageHours,
 } from "../../lib/format";
+import { linkStateFrom } from "../../lib/smartBack";
 import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
 import { STATUS_LABEL } from "../../lib/status";
 import {
@@ -99,6 +101,8 @@ function MetricIcon({ kind }: { kind: "deal" | "pack" | "used" | "left" }) {
 
 export function ReportDetail() {
   const { portalId: routePortalId, reportId: routeReportId } = useParams();
+  const location = useLocation();
+  const fromState = linkStateFrom(location);
   const { token, portal } = useAuth();
   const isAgency = portal?.role === "agency";
   const toast = useFlashToast();
@@ -262,9 +266,9 @@ export function ReportDetail() {
     return (
       <div className="tasks-page report-detail-page">
         <p className="muted">Отчёт не найден.</p>
-        <Link to={listPath} className="task-back">
-          <span className="task-back-label">К отчётам</span>
-        </Link>
+        <SmartBackButton fallback={listPath} className="task-back">
+          <span className="task-back-label">Назад</span>
+        </SmartBackButton>
       </div>
     );
   }
@@ -275,9 +279,9 @@ export function ReportDetail() {
         {error ? (
           <div className="stack" style={{ gap: 12 }}>
             <div className="error-banner">{error}</div>
-            <Link to={listPath} className="task-back">
-              <span className="task-back-label">К отчётам</span>
-            </Link>
+            <SmartBackButton fallback={listPath} className="task-back">
+              <span className="task-back-label">Назад</span>
+            </SmartBackButton>
           </div>
         ) : (
           <p className="muted">Загрузка отчёта…</p>
@@ -296,7 +300,7 @@ export function ReportDetail() {
 
   return (
     <div className="tasks-page report-detail-page">
-      <Link to={listPath} className="task-back" title="К отчётам">
+      <SmartBackButton fallback={listPath} className="task-back" title="Назад">
         <span className="task-back-icon" aria-hidden>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
             <path
@@ -308,8 +312,8 @@ export function ReportDetail() {
             />
           </svg>
         </span>
-        <span className="task-back-label">К отчётам</span>
-      </Link>
+        <span className="task-back-label">Назад</span>
+      </SmartBackButton>
 
       {error && <div className="error-banner">{error}</div>}
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
@@ -504,8 +508,12 @@ export function ReportDetail() {
                         >
                           <header className="report-task-item-head">
                             <div className="report-task-item-title">
-                              <Link to={`/tasks/${task.id}`}>{task.title}</Link>
-                              <Link to={`/projects/${task.projectId}`}>{task.projectName}</Link>
+                              <Link to={`/tasks/${task.id}`} state={fromState}>
+                                {task.title}
+                              </Link>
+                              <Link to={`/projects/${task.projectId}`} state={fromState}>
+                                {task.projectName}
+                              </Link>
                             </div>
                             <div className="report-task-item-meta">
                               <span className={`report-dot-status is-${status.tone}`}>

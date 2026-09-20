@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
@@ -27,6 +27,7 @@ import { useWorkspaceDismissals } from "../../hooks/useWorkspaceDismissals";
 import { formatRuDateTime, isValidDate, parseDue, startOfDay } from "../../lib/dates";
 import { formatDayShort, formatDueFull, formatDuration } from "../../lib/format";
 import { PICKER_PAGE_SIZE, withPage } from "../../lib/pagination";
+import { linkStateFrom } from "../../lib/smartBack";
 import { displayTimeZone } from "../../lib/timezone";
 import {
   getPortalLabel,
@@ -107,6 +108,8 @@ function hotPriority(task: Task): number {
 export function ClientProjects() {
   const { token, portal } = useAuth();
   const params = useParams();
+  const location = useLocation();
+  const fromState = linkStateFrom(location);
   const portalId = Number(params.portalId || portal?.id);
   const isAgency = portal?.role === "agency";
   const toast = useFlashToast();
@@ -593,6 +596,7 @@ export function ClientProjects() {
                       <Link
                         key={`project-${p.id}`}
                         to={`/projects/${p.id}`}
+                        state={fromState}
                         className="overview-project-row"
                       >
                         <div className="overview-project-copy">
@@ -653,7 +657,12 @@ export function ClientProjects() {
                       </>
                     );
                     return (
-                      <Link key={item.key} to={item.href} className="overview-attention-row">
+                      <Link
+                        key={item.key}
+                        to={item.href}
+                        state={fromState}
+                        className="overview-attention-row"
+                      >
                         {body}
                       </Link>
                     );
@@ -681,6 +690,7 @@ export function ClientProjects() {
                     <Link
                       key={`done-${t.id}`}
                       to={`/tasks/${t.id}`}
+                      state={fromState}
                       className="overview-done-row"
                       onClick={() => dismiss("task", t.id, t.updated_at)}
                     >
@@ -736,6 +746,7 @@ export function ClientProjects() {
                       <Link
                         key={`dispute-${r.id}`}
                         to={reportDetailPath(portalId, true, r.id)}
+                        state={fromState}
                         className="workspace-attention-card is-dispute"
                       >
                         <div className="workspace-attention-top">
@@ -767,6 +778,7 @@ export function ClientProjects() {
                           <Link
                             key={p.id}
                             to={`/projects/${p.id}`}
+                            state={fromState}
                             className="workspace-attention-card is-project"
                           >
                             <div className="workspace-attention-top">
@@ -815,6 +827,7 @@ export function ClientProjects() {
                           <Link
                             key={t.id}
                             to={`/tasks/${t.id}`}
+                            state={fromState}
                             className={`workspace-attention-card${
                               overdue ? " is-overdue" : soon ? " is-soon" : ""
                             }`}

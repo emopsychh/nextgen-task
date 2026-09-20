@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
@@ -22,6 +22,7 @@ import {
   readPortalCache,
   writePortalCache,
 } from "../../lib/portalSessionCache";
+import { linkStateFrom } from "../../lib/smartBack";
 import {
   TICKET_BUCKETS,
   type TicketBucket,
@@ -34,6 +35,8 @@ import {
 
 export function SupportTickets() {
   const { portalId: routePortalId, ticketId: routeTicketId } = useParams();
+  const location = useLocation();
+  const fromState = linkStateFrom(location);
   const { token, portal, user } = useAuth();
   const isAgency = portal?.role === "agency";
   const navigate = useNavigate();
@@ -541,6 +544,7 @@ export function SupportTickets() {
                       {t.task ? (
                         <Link
                           to={`/tasks/${t.task}`}
+                          state={fromState}
                           className="tickets-list-task"
                           onClick={(e) => e.stopPropagation()}
                           title={t.task_title || undefined}
@@ -618,13 +622,13 @@ export function SupportTickets() {
                   {(detail.project || detail.task) && (
                     <p className="tickets-detail-links">
                       {detail.project ? (
-                        <Link to={`/projects/${detail.project}`}>
+                        <Link to={`/projects/${detail.project}`} state={fromState}>
                           Проект: {detail.project_name || `#${detail.project}`}
                         </Link>
                       ) : null}
                       {detail.project && detail.task ? " · " : null}
                       {detail.task ? (
-                        <Link to={`/tasks/${detail.task}`}>
+                        <Link to={`/tasks/${detail.task}`} state={fromState}>
                           Задача: {detail.task_title || `#${detail.task}`}
                         </Link>
                       ) : null}

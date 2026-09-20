@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
@@ -11,6 +11,7 @@ import {
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
+import { SmartBackButton } from "../../components/SmartBackButton";
 import { TaskCompleteModal } from "../../components/TaskCompleteModal";
 import { TaskComposer } from "../../components/task/TaskComposer";
 import { TaskSummaryCard } from "../../components/task/TaskSummaryCard";
@@ -715,9 +716,9 @@ export function TaskDetail() {
         {error ? (
           <div className="stack" style={{ gap: 12 }}>
             <div className="error-banner">{error}</div>
-            <Link to="/" className="task-back" title="Назад">
+            <SmartBackButton fallback="/" className="task-back" title="Назад">
               <span className="task-back-label">Вернуться назад</span>
-            </Link>
+            </SmartBackButton>
           </div>
         ) : (
           <div className="muted">Загрузка задачи…</div>
@@ -735,12 +736,17 @@ export function TaskDetail() {
   const overdue = isTaskOverdue(task.due_date, task.status);
   const canSend = Boolean(comment.trim() || pendingFiles.length) && !sendBusy;
   const creator = task.created_by_name || "Команда";
+  const backFallback = `/projects/${task.project}`;
 
   return (
     <div className="task-detail-page chat-mode">
       <div className="chat-topbar">
         <div className="chat-topbar-left">
-          <Link to={`/projects/${task.project}`} className="task-back" title="К задачам">
+          <SmartBackButton
+            fallback={backFallback}
+            className="task-back"
+            title="Назад"
+          >
             <span className="task-back-icon" aria-hidden>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                 <path
@@ -752,8 +758,8 @@ export function TaskDetail() {
                 />
               </svg>
             </span>
-            <span className="task-back-label">К задачам</span>
-          </Link>
+            <span className="task-back-label">Назад</span>
+          </SmartBackButton>
           <div className="chat-topbar-title">
             <strong>{task.title}</strong>
             <span className="muted">{task.project_name}</span>

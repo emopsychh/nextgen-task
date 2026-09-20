@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, Navigate } from "react-router-dom";
+import { Link, Navigate, useLocation } from "react-router-dom";
 import { api, isAbortError, type BacklogItem } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
@@ -7,6 +7,7 @@ import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime } from "../../lib/format";
+import { linkStateFrom } from "../../lib/smartBack";
 
 type PendingDelete = { id: number; title: string };
 type DraftEdit = { id: number; title: string; notes: string };
@@ -17,6 +18,8 @@ function isPending(item: BacklogItem): boolean {
 
 export function ClientTaskRequests() {
   const { token, portal } = useAuth();
+  const location = useLocation();
+  const fromState = linkStateFrom(location);
   const isAgency = portal?.role === "agency";
   const toast = useFlashToast();
   const portalId = portal?.id ?? null;
@@ -328,7 +331,11 @@ export function ClientTaskRequests() {
                   </p>
                 </div>
                 {item.converted_task ? (
-                  <Link to={`/tasks/${item.converted_task}`} className="btn btn-ghost">
+                  <Link
+                    to={`/tasks/${item.converted_task}`}
+                    state={fromState}
+                    className="btn btn-ghost"
+                  >
                     Открыть задачу
                   </Link>
                 ) : null}

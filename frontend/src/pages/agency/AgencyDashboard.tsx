@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   api,
   isAbortError,
@@ -13,6 +13,7 @@ import { isValidDate, parseDue, startOfDay } from "../../lib/dates";
 import { formatDueFull } from "../../lib/format";
 import { PICKER_PAGE_SIZE, withPage } from "../../lib/pagination";
 import { PaginationBar } from "../../components/PaginationBar";
+import { linkStateFrom } from "../../lib/smartBack";
 import { isTaskOverdue, STATUS_LABEL } from "../../lib/status";
 import { viewerTimeZone } from "../../lib/timezone";
 
@@ -61,9 +62,11 @@ async function fetchPage<T>(
 function TaskCard({
   task,
   clientName,
+  fromState,
 }: {
   task: Task;
   clientName: string;
+  fromState: ReturnType<typeof linkStateFrom>;
 }) {
   const overdue = isTaskOverdue(task.due_date, task.status);
   const soon = isDueSoon(task.due_date, task.status);
@@ -72,6 +75,7 @@ function TaskCard({
   return (
     <Link
       to={`/tasks/${task.id}`}
+      state={fromState}
       className={`workspace-attention-card${
         overdue ? " is-overdue" : soon ? " is-soon" : ""
       }`}
@@ -107,13 +111,20 @@ function PagedTasks({
   tasks: Task[];
   projects: Project[];
 }) {
+  const location = useLocation();
+  const fromState = linkStateFrom(location);
   const [page, setPage] = useState(1);
   const slice = tasks.slice((page - 1) * DASH_PAGE_SIZE, page * DASH_PAGE_SIZE);
   return (
     <>
       <div className="workspace-attention-list dashboard-attention-grid">
         {slice.map((t) => (
-          <TaskCard key={t.id} task={t} clientName={portalLabel(t, projects)} />
+          <TaskCard
+            key={t.id}
+            task={t}
+            clientName={portalLabel(t, projects)}
+            fromState={fromState}
+          />
         ))}
       </div>
       <PaginationBar

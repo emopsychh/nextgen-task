@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
@@ -30,6 +30,7 @@ import {
   writePortalCache,
 } from "../../lib/portalSessionCache";
 import { isProjectComplete, projectProgress } from "../../lib/projectProgress";
+import { linkStateFrom } from "../../lib/smartBack";
 
 type ProjectsView = "list" | "gantt";
 
@@ -76,6 +77,8 @@ function GanttViewIcon() {
 
 export function ProjectsList() {
   const { portalId: routePortalId } = useParams();
+  const location = useLocation();
+  const fromState = linkStateFrom(location);
   const { token, portal } = useAuth();
   const isAgency = portal?.role === "agency";
   const dueTz = displayTimeZone({
@@ -428,7 +431,7 @@ export function ProjectsList() {
           </p>
         </div>
       ) : view === "gantt" ? (
-        <ProjectsGantt projects={visibleProjects} timeZone={dueTz} />
+        <ProjectsGantt projects={visibleProjects} timeZone={dueTz} linkState={fromState} />
       ) : (
         <BoardDoneSplit
           items={visibleProjects}
@@ -445,6 +448,7 @@ export function ProjectsList() {
               <li key={p.id} className="board-list-item">
                 <Link
                   to={`/projects/${p.id}`}
+                  state={fromState}
                   className={`board-row${enteringId === p.id ? " is-entering" : ""}${unseen ? " is-new" : ""}${complete ? " is-done" : ""}`}
                 >
                   <div className="board-row-main">

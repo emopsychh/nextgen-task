@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import type { Task } from "../api/types";
 import { formatTimerClock } from "../lib/format";
+import { linkStateFrom } from "../lib/smartBack";
 import { BoardAvatar } from "./BoardAvatar";
 
 type Props = {
@@ -30,15 +31,22 @@ function WorkingTaskRow({
   task,
   now,
   onOpen,
+  fromState,
 }: {
   task: Task;
   now: number;
   onOpen?: () => void;
+  fromState: ReturnType<typeof linkStateFrom>;
 }) {
   const person = task.working_by_name || "";
   const elapsed = elapsedLabel(task.working_started_at, now);
   return (
-    <Link to={`/tasks/${task.id}`} className="now-working-row" onClick={onOpen}>
+    <Link
+      to={`/tasks/${task.id}`}
+      state={fromState}
+      className="now-working-row"
+      onClick={onOpen}
+    >
       <div className="now-working-copy">
         <strong>{task.title}</strong>
         <span className="muted">{task.project_name || "Проект"}</span>
@@ -61,6 +69,8 @@ function WorkingTaskRow({
 }
 
 export function NowWorkingCard({ tasks, loading }: Props) {
+  const location = useLocation();
+  const fromState = linkStateFrom(location);
   const [allOpen, setAllOpen] = useState(false);
   const now = useNow(tasks.length > 0);
   const count = tasks.length;
@@ -106,7 +116,7 @@ export function NowWorkingCard({ tasks, loading }: Props) {
       ) : preview ? (
         <ul className="now-working-list">
           <li>
-            <WorkingTaskRow task={preview} now={now} />
+            <WorkingTaskRow task={preview} now={now} fromState={fromState} />
           </li>
         </ul>
       ) : null}
@@ -144,7 +154,12 @@ export function NowWorkingCard({ tasks, loading }: Props) {
             <ul className="now-working-list now-working-modal-list">
               {tasks.map((t) => (
                 <li key={t.id}>
-                  <WorkingTaskRow task={t} now={now} onOpen={() => setAllOpen(false)} />
+                  <WorkingTaskRow
+                    task={t}
+                    now={now}
+                    fromState={fromState}
+                    onOpen={() => setAllOpen(false)}
+                  />
                 </li>
               ))}
             </ul>
