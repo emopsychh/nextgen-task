@@ -11,6 +11,11 @@ class Portal(models.Model):
     domain = models.CharField(max_length=255)
     role = models.CharField(max_length=16, choices=Role.choices, default=Role.UNKNOWN)
     name = models.CharField(max_length=255, blank=True)
+    organization = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text='Юридическое название организации, например АНО "ЧИКАГА"',
+    )
     # IANA timezone for due dates / Bitrix DEADLINE wall clock (client portals).
     # Agency UI displays deadlines in Europe/Moscow regardless.
     timezone = models.CharField(max_length=64, default="Europe/Moscow", blank=True)

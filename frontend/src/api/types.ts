@@ -6,6 +6,7 @@ export type Portal = {
   domain: string;
   role: PortalRole;
   name: string;
+  organization?: string;
   timezone?: string;
   is_active: boolean;
 };

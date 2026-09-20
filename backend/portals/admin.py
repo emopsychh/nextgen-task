@@ -7,10 +7,21 @@ from .models import AgencyUserPreference, BitrixUser, Portal, PortalDealBinding,
 
 @admin.register(Portal)
 class PortalAdmin(admin.ModelAdmin):
-    list_display = ("name", "domain", "member_id", "role", "is_active", "updated_at")
+    list_display = ("name", "organization", "domain", "member_id", "role", "is_active", "updated_at")
     list_filter = ("role", "is_active")
-    search_fields = ("name", "domain", "member_id")
+    search_fields = ("name", "organization", "domain", "member_id")
     readonly_fields = ("created_at", "updated_at")
+    fields = (
+        "member_id",
+        "domain",
+        "role",
+        "name",
+        "organization",
+        "timezone",
+        "is_active",
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(PortalLink)

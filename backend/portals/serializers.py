@@ -17,6 +17,7 @@ class PortalSerializer(serializers.ModelSerializer):
             "domain",
             "role",
             "name",
+            "organization",
             "timezone",
             "is_active",
             "created_at",

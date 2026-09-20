@@ -93,6 +93,12 @@ export function AccountPage() {
               <dt>Кабинет</dt>
               <dd>{portalTitle}</dd>
             </div>
+            {portal?.organization?.trim() ? (
+              <div>
+                <dt>Организация</dt>
+                <dd>{portal.organization.trim()}</dd>
+              </div>
+            ) : null}
             <div>
               <dt>Роль</dt>
               <dd>{roleLabel(portal?.role)}</dd>
