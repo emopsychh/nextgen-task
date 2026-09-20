@@ -52,26 +52,16 @@ function writeSidebarCollapsed(portalId: number, userId: number, value: boolean)
   }
 }
 
-function SidebarCollapseIcon({ collapsed }: { collapsed: boolean }) {
+function SidebarRailChevron({ collapsed }: { collapsed: boolean }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-      {collapsed ? (
-        <path
-          d="M9 6l6 6-6 6"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      ) : (
-        <path
-          d="M15 6l-6 6 6 6"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      )}
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d={collapsed ? "M10 6l6 6-6 6" : "M14 6l-6 6 6 6"}
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -111,24 +101,24 @@ function AppLayout() {
       {isAgency ? <ClientRail /> : null}
       {!taskFocus ? (
         <aside className={`sidebar${collapsed ? " is-collapsed" : ""}`}>
-          <div className="sidebar-top">
-            <Brand
-              compact={collapsed}
-              subtitle={collapsed ? undefined : isAgency ? "Кабинет агентства" : "Кабинет клиента"}
-            />
-            <button
-              type="button"
-              className="sidebar-collapse-btn"
-              onClick={toggleCollapsed}
-              title={collapsed ? "Развернуть меню" : "Свернуть меню"}
-              aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
-              aria-expanded={!collapsed}
-            >
-              <SidebarCollapseIcon collapsed={collapsed} />
-            </button>
-          </div>
+          <Brand
+            compact={collapsed}
+            subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"}
+          />
           <ProjectSidebarNav collapsed={collapsed} />
-          <SidebarAccount collapsed={collapsed} />
+          <div className="sidebar-footer">
+            <SidebarAccount collapsed={collapsed} />
+          </div>
+          <button
+            type="button"
+            className="sidebar-rail-toggle"
+            onClick={toggleCollapsed}
+            title={collapsed ? "Развернуть меню" : "Свернуть меню"}
+            aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
+            aria-expanded={!collapsed}
+          >
+            <SidebarRailChevron collapsed={collapsed} />
+          </button>
         </aside>
       ) : null}
       <main className="main">

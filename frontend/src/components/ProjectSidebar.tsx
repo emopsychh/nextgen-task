@@ -328,7 +328,7 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
         <NavLink
           to="/"
           end
-          title="Обзор"
+          data-tip="Обзор"
           className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
         >
           <span className="feed-nav-icon" aria-hidden>
@@ -339,7 +339,7 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
         {isAgency ? (
           <NavLink
             to="/dashboard"
-            title="Дашборд"
+            data-tip="Дашборд"
             className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
           >
             <span className="feed-nav-icon" aria-hidden>
@@ -384,7 +384,7 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
       <NavLink
         to={feedTo}
         end
-        title="Обзор"
+        data-tip="Обзор"
         className={({ isActive }) => `feed-nav-item${isActive || onFeed ? " active" : ""}`}
       >
         <span className="feed-nav-icon" aria-hidden>
@@ -395,7 +395,7 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
       <NavLink
         to={projectsTo}
         end
-        title="Проекты"
+        data-tip="Проекты"
         className={({ isActive }) =>
           `feed-nav-item${isActive || onProjectsList ? " active" : ""}`
         }
@@ -420,7 +420,7 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
       {!isAgency ? (
         <NavLink
           to="/requests"
-          title="На согласование"
+          data-tip="На согласование"
           className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
         >
           <span className="feed-nav-icon" aria-hidden>
@@ -443,7 +443,7 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
       ) : null}
       <NavLink
         to={isAgency ? `/portals/${contextPortalId}/reports` : "/reports"}
-        title="Отчёты"
+        data-tip="Отчёты"
         className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
       >
         <span className="feed-nav-icon" aria-hidden>
@@ -467,7 +467,7 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
       {isAgency ? (
         <NavLink
           to={`/portals/${contextPortalId}/backlog`}
-          title="Бэклог"
+          data-tip="Бэклог"
           className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
         >
           <span className="feed-nav-icon" aria-hidden>

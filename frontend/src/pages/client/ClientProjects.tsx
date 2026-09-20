@@ -528,11 +528,6 @@ export function ClientProjects() {
       <div className="page-header">
         <div>
           <h1 className="page-title">{isAgency ? titleName : "Рабочее пространство"}</h1>
-          <p className="page-sub">
-            {isAgency
-              ? "Часы, кто работает сейчас, обращения по отчётам и горящие сроки"
-              : "Часы, задачи в работе прямо сейчас и важные обновления"}
-          </p>
         </div>
         <Link to={projectsListPath} className="btn btn-primary btn-with-icon" data-tour="tour-new-project">
           <GridGlyph />
