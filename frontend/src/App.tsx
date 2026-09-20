@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { Brand } from "./components/Brand";
@@ -32,23 +32,103 @@ function RouteDataBoundary({ children }: { children: ReactNode }) {
   return <Fragment key={key}>{children}</Fragment>;
 }
 
+function sidebarCollapseKey(portalId: number, userId: number): string {
+  return `nextgen_sidebar_collapsed_${portalId}_${userId}`;
+}
+
+function readSidebarCollapsed(portalId: number, userId: number): boolean {
+  try {
+    return localStorage.getItem(sidebarCollapseKey(portalId, userId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeSidebarCollapsed(portalId: number, userId: number, value: boolean): void {
+  try {
+    localStorage.setItem(sidebarCollapseKey(portalId, userId), value ? "1" : "0");
+  } catch {
+    // ignore
+  }
+}
+
+function SidebarCollapseIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      {collapsed ? (
+        <path
+          d="M9 6l6 6-6 6"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : (
+        <path
+          d="M15 6l-6 6 6 6"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
+  );
+}
+
 function AppLayout() {
-  const { portal, error } = useAuth();
+  const { portal, user, error } = useAuth();
   const location = useLocation();
   const isAgency = portal?.role === "agency";
+  const portalId = portal?.id || 0;
+  const userId = user?.id || 0;
   // Task detail: hide the Обзор/projects sidebar — back via SmartBack.
   const taskFocus = /^\/tasks\/[^/]+\/?$/.test(location.pathname);
+  const [collapsed, setCollapsed] = useState(() =>
+    portalId && userId ? readSidebarCollapsed(portalId, userId) : false
+  );
+
+  useEffect(() => {
+    if (portalId && userId) {
+      setCollapsed(readSidebarCollapsed(portalId, userId));
+    }
+  }, [portalId, userId]);
+
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      if (portalId && userId) writeSidebarCollapsed(portalId, userId, next);
+      return next;
+    });
+  }, [portalId, userId]);
 
   return (
     <div
-      className={`app-shell${isAgency ? " with-client-rail" : ""}${taskFocus ? " task-focus" : ""}`}
+      className={`app-shell${isAgency ? " with-client-rail" : ""}${
+        taskFocus ? " task-focus" : ""
+      }${collapsed && !taskFocus ? " sidebar-collapsed" : ""}`}
     >
       {isAgency ? <ClientRail /> : null}
       {!taskFocus ? (
-        <aside className="sidebar">
-          <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
-          <ProjectSidebarNav />
-          <SidebarAccount />
+        <aside className={`sidebar${collapsed ? " is-collapsed" : ""}`}>
+          <div className="sidebar-top">
+            <Brand
+              compact={collapsed}
+              subtitle={collapsed ? undefined : isAgency ? "Кабинет агентства" : "Кабинет клиента"}
+            />
+            <button
+              type="button"
+              className="sidebar-collapse-btn"
+              onClick={toggleCollapsed}
+              title={collapsed ? "Развернуть меню" : "Свернуть меню"}
+              aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
+              aria-expanded={!collapsed}
+            >
+              <SidebarCollapseIcon collapsed={collapsed} />
+            </button>
+          </div>
+          <ProjectSidebarNav collapsed={collapsed} />
+          <SidebarAccount collapsed={collapsed} />
         </aside>
       ) : null}
       <main className="main">

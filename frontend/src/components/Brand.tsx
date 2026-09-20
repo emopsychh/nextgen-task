@@ -9,10 +9,12 @@ export function Brand({ compact = false, subtitle }: BrandProps) {
       <div className="brand-mark" aria-hidden>
             <img src="/logo.png?v=2" alt="" className="brand-logo" />
       </div>
-      <div className="brand-text">
-        <div className="brand">Nextgen manager</div>
-        {subtitle ? <div className="brand-sub">{subtitle}</div> : null}
-      </div>
+      {!compact ? (
+        <div className="brand-text">
+          <div className="brand">Nextgen manager</div>
+          {subtitle ? <div className="brand-sub">{subtitle}</div> : null}
+        </div>
+      ) : null}
     </div>
   );
 }

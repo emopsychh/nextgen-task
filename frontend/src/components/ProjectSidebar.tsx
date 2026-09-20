@@ -22,7 +22,11 @@ import {
 } from "../lib/portalSessionCache";
 import { HouseGlyph } from "./icons";
 
-export function ProjectSidebarNav() {
+type Props = {
+  collapsed?: boolean;
+};
+
+export function ProjectSidebarNav({ collapsed = false }: Props) {
   const { token, portal } = useAuth();
   const params = useParams();
   const location = useLocation();
@@ -320,19 +324,36 @@ export function ProjectSidebarNav() {
 
   if (!showClientNav) {
     return (
-      <nav className="nav-list" data-tour="tour-sidebar">
-        <NavLink to="/" end className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
-          Обзор
+      <nav className={`nav-list${collapsed ? " is-collapsed" : ""}`} data-tour="tour-sidebar">
+        <NavLink
+          to="/"
+          end
+          title="Обзор"
+          className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
+        >
+          <span className="feed-nav-icon" aria-hidden>
+            <HouseGlyph />
+          </span>
+          <span className="feed-nav-label">Обзор</span>
         </NavLink>
         {isAgency ? (
           <NavLink
             to="/dashboard"
+            title="Дашборд"
             className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
           >
-            Дашборд
+            <span className="feed-nav-icon" aria-hidden>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <rect x="3" y="3" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                <rect x="13" y="3" width="8" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                <rect x="13" y="10" width="8" height="11" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                <rect x="3" y="13" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            </span>
+            <span className="feed-nav-label">Дашборд</span>
           </NavLink>
         ) : null}
-        {isAgency ? (
+        {isAgency && !collapsed ? (
           <p className="sidebar-hint muted">
             {location.pathname.startsWith("/dashboard")
               ? "Горящие задачи со всех клиентов в одном месте."
@@ -354,23 +375,27 @@ export function ProjectSidebarNav() {
     location.pathname === `/portals/${contextPortalId}/projects`;
 
   return (
-    <div className="project-sidebar" data-tour="tour-sidebar">
-      <div className="sidebar-section-label">
-        {isAgency ? clientLabel || "Кабинет клиента" : "Навигация"}
-      </div>
+    <div className={`project-sidebar${collapsed ? " is-collapsed" : ""}`} data-tour="tour-sidebar">
+      {!collapsed ? (
+        <div className="sidebar-section-label">
+          {isAgency ? clientLabel || "Кабинет клиента" : "Навигация"}
+        </div>
+      ) : null}
       <NavLink
         to={feedTo}
         end
+        title="Обзор"
         className={({ isActive }) => `feed-nav-item${isActive || onFeed ? " active" : ""}`}
       >
         <span className="feed-nav-icon" aria-hidden>
           <HouseGlyph />
         </span>
-        Обзор
+        <span className="feed-nav-label">Обзор</span>
       </NavLink>
       <NavLink
         to={projectsTo}
         end
+        title="Проекты"
         className={({ isActive }) =>
           `feed-nav-item${isActive || onProjectsList ? " active" : ""}`
         }
@@ -395,6 +420,7 @@ export function ProjectSidebarNav() {
       {!isAgency ? (
         <NavLink
           to="/requests"
+          title="На согласование"
           className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
         >
           <span className="feed-nav-icon" aria-hidden>
@@ -417,6 +443,7 @@ export function ProjectSidebarNav() {
       ) : null}
       <NavLink
         to={isAgency ? `/portals/${contextPortalId}/reports` : "/reports"}
+        title="Отчёты"
         className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
       >
         <span className="feed-nav-icon" aria-hidden>
@@ -440,6 +467,7 @@ export function ProjectSidebarNav() {
       {isAgency ? (
         <NavLink
           to={`/portals/${contextPortalId}/backlog`}
+          title="Бэклог"
           className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
         >
           <span className="feed-nav-icon" aria-hidden>

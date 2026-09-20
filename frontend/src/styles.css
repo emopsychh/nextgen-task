@@ -104,6 +104,14 @@ a {
   grid-template-columns: 72px 272px 1fr;
 }
 
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 72px 1fr;
+}
+
+.app-shell.with-client-rail.sidebar-collapsed {
+  grid-template-columns: 72px 72px 1fr;
+}
+
 /* Task detail: full-width workspace (agency keeps client rail). */
 .app-shell.task-focus {
   grid-template-columns: 1fr;
@@ -167,7 +175,87 @@ a {
   backdrop-filter: blur(10px);
   min-height: 0;
   overflow-y: auto;
+  transition: padding 0.18s ease;
 }
+
+.sidebar-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sidebar-top .brand-block {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.sidebar-collapse-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: 6px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.sidebar-collapse-btn:hover {
+  color: var(--ink);
+  border-color: #c5cdc8;
+}
+
+.sidebar.is-collapsed {
+  padding: 16px 10px;
+  align-items: stretch;
+}
+
+.sidebar.is-collapsed .sidebar-top {
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.sidebar.is-collapsed .sidebar-collapse-btn {
+  margin-top: 0;
+}
+
+.sidebar.is-collapsed .brand-text,
+.sidebar.is-collapsed .sidebar-section-label,
+.sidebar.is-collapsed .sidebar-hint,
+.sidebar.is-collapsed .feed-nav-label,
+.sidebar.is-collapsed .feed-nav-count {
+  display: none;
+}
+
+.sidebar.is-collapsed .feed-nav-item,
+.sidebar.is-collapsed .nav-item {
+  justify-content: center;
+  gap: 0;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.sidebar.is-collapsed .sidebar-account-link {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+
+.sidebar.is-collapsed .sidebar-account-link-label,
+.sidebar.is-collapsed .sidebar-account-link-hint {
+  display: none;
+}
+
 
 .sidebar-logout {
   margin-top: 0;
@@ -203,9 +291,11 @@ a {
 }
 
 .sidebar-account-link {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  row-gap: 2px;
+  align-items: center;
   padding: 8px 10px;
   margin: 0 -6px;
   border-radius: 10px;
@@ -222,12 +312,18 @@ a {
   background: rgba(18, 20, 22, 0.07);
 }
 
+.sidebar-account-link .feed-nav-icon {
+  grid-row: 1 / span 2;
+}
+
 .sidebar-account-link-label {
+  grid-column: 2;
   font-size: 0.9rem;
   font-weight: 650;
 }
 
 .sidebar-account-link-hint {
+  grid-column: 2;
   font-size: 0.78rem;
 }
 
