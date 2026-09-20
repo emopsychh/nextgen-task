@@ -16,7 +16,6 @@ import { ProjectReports } from "./pages/shared/ProjectReports";
 import { ProjectsList } from "./pages/shared/ProjectsList";
 import { ReportDetail } from "./pages/shared/ReportDetail";
 import { ProjectTasks } from "./pages/shared/ProjectTasks";
-import { SupportTickets } from "./pages/shared/SupportTickets";
 import { TaskDetail } from "./pages/shared/TaskDetail";
 
 function RouteDataBoundary({ children }: { children: ReactNode }) {
@@ -25,7 +24,6 @@ function RouteDataBoundary({ children }: { children: ReactNode }) {
     params.portalId,
     params.projectId,
     params.reportId,
-    params.ticketId,
     params.taskId,
   ]
     .map((value) => value || "")
@@ -123,23 +121,10 @@ export default function App() {
           path="portals/:portalId/reports/:reportId"
           element={<RouteDataBoundary><ReportDetail /></RouteDataBoundary>}
         />
-        <Route
-          path="portals/:portalId/tickets"
-          element={<RouteDataBoundary><SupportTickets /></RouteDataBoundary>}
-        />
-        <Route
-          path="portals/:portalId/tickets/:ticketId"
-          element={<RouteDataBoundary><SupportTickets /></RouteDataBoundary>}
-        />
         <Route path="reports" element={<ProjectReports />} />
         <Route
           path="reports/:reportId"
           element={<RouteDataBoundary><ReportDetail /></RouteDataBoundary>}
-        />
-        <Route path="tickets" element={<SupportTickets />} />
-        <Route
-          path="tickets/:ticketId"
-          element={<RouteDataBoundary><SupportTickets /></RouteDataBoundary>}
         />
         <Route
           path="projects/:projectId"

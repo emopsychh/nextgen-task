@@ -20,7 +20,7 @@ import {
   readPortalCache,
   writePortalCache,
 } from "../lib/portalSessionCache";
-import { HeadsetGlyph, HouseGlyph } from "./icons";
+import { HouseGlyph } from "./icons";
 
 export function ProjectSidebarNav() {
   const { token, portal } = useAuth();
@@ -30,13 +30,11 @@ export function ProjectSidebarNav() {
 
   const routePortalId = params.portalId ? Number(params.portalId) : null;
   const routeProjectId = params.projectId ? Number(params.projectId) : null;
-  const onTicketsRoute = location.pathname.startsWith("/tickets");
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
   const [clientLabel, setClientLabel] = useState("");
   const [reportsAttention, setReportsAttention] = useState(0);
-  const [openTickets, setOpenTickets] = useState(0);
   const [pendingRequests, setPendingRequests] = useState(0);
   const lastPortalRef = useRef<number | null>(null);
 
@@ -51,7 +49,6 @@ export function ProjectSidebarNav() {
   const { seedIfEmpty, unseenCount } = useSeenProjects(contextPortalId);
   const projectsUnseen = unseenCount(projects);
   const reportsCountCache = `sidebar-reports:${isAgency ? "agency" : "client"}`;
-  const ticketsCountCache = "sidebar-tickets:client";
   const requestsCountCache = `sidebar-requests:${isAgency ? "agency" : "client"}`;
 
   useEffect(() => {
@@ -77,22 +74,16 @@ export function ProjectSidebarNav() {
   useEffect(() => {
     if (!contextPortalId) {
       setReportsAttention(0);
-      setOpenTickets(0);
       setPendingRequests(0);
       return;
     }
     setReportsAttention(
       readPortalCache<number>(reportsCountCache, contextPortalId) || 0
     );
-    setOpenTickets(
-      !isAgency
-        ? readPortalCache<number>(ticketsCountCache, contextPortalId) || 0
-        : 0
-    );
     setPendingRequests(
       readPortalCache<number>(requestsCountCache, contextPortalId) || 0
     );
-  }, [contextPortalId, isAgency, reportsCountCache, requestsCountCache]);
+  }, [contextPortalId, reportsCountCache, requestsCountCache]);
 
   useEffect(() => {
     const onLabel = (event: Event) => {
@@ -105,7 +96,7 @@ export function ProjectSidebarNav() {
   }, [contextPortalId]);
 
   useEffect(() => {
-    if (isAgency && !routePortalId && !routeProjectId && !onTicketsRoute) {
+    if (isAgency && !routePortalId && !routeProjectId) {
       lastPortalRef.current = null;
       setResolvedPortalId(null);
       setProjects([]);
@@ -113,9 +104,9 @@ export function ProjectSidebarNav() {
       setReportsAttention(0);
       setPendingRequests(0);
     }
-  }, [isAgency, routePortalId, routeProjectId, onTicketsRoute]);
+  }, [isAgency, routePortalId, routeProjectId]);
 
-  const showClientNav = Boolean(contextPortalId) && !(isAgency && onTicketsRoute);
+  const showClientNav = Boolean(contextPortalId);
 
   useEffect(() => {
     if (!token || !routeProjectId || routePortalId) return;
@@ -138,7 +129,6 @@ export function ProjectSidebarNav() {
 
   useEffect(() => {
     if (!token || !contextPortalId) return;
-    if (isAgency && onTicketsRoute) return;
 
     // This sidebar survives route changes. Clear the previous tenant before
     // hydrating the cache for the newly selected portal.
@@ -182,49 +172,11 @@ export function ProjectSidebarNav() {
       cancelled = true;
       window.removeEventListener("projects-updated", onUpdate);
     };
-  }, [token, contextPortalId, isAgency, onTicketsRoute, seedIfEmpty]);
-
-  // Open tickets badge — client only (agency badge lives in ClientRail)
-  useEffect(() => {
-    if (!token || isAgency || !contextPortalId) {
-      if (isAgency) setOpenTickets(0);
-      else if (!contextPortalId) setOpenTickets(0);
-      return;
-    }
-    const portalId = contextPortalId;
-    let cancelled = false;
-
-    async function loadTickets() {
-      try {
-        const data = await api<{ awaiting_client?: number }>(
-          `/api/tickets/counts/?portal=${portalId}`,
-          {},
-          token!
-        );
-        if (!cancelled) {
-          const count = data.awaiting_client || 0;
-          setOpenTickets(count);
-          writePortalCache(ticketsCountCache, portalId, count);
-        }
-      } catch {
-        // Keep the last known count.
-      }
-    }
-
-    void loadTickets();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void loadTickets();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [token, contextPortalId, isAgency, location.pathname]);
+  }, [token, contextPortalId, seedIfEmpty]);
 
   useEffect(() => {
-    if (!token || !contextPortalId || (isAgency && onTicketsRoute)) {
-      if (!contextPortalId || (isAgency && onTicketsRoute)) setReportsAttention(0);
+    if (!token || !contextPortalId) {
+      if (!contextPortalId) setReportsAttention(0);
       return;
     }
     const portalId = contextPortalId;
@@ -261,11 +213,11 @@ export function ProjectSidebarNav() {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [token, contextPortalId, isAgency, location.pathname, onTicketsRoute]);
+  }, [token, contextPortalId, isAgency, location.pathname, reportsCountCache]);
 
   useEffect(() => {
-    if (!token || !contextPortalId || (isAgency && onTicketsRoute)) {
-      if (!contextPortalId || (isAgency && onTicketsRoute)) setPendingRequests(0);
+    if (!token || !contextPortalId) {
+      if (!contextPortalId) setPendingRequests(0);
       return;
     }
     const portalId = contextPortalId;
@@ -296,7 +248,7 @@ export function ProjectSidebarNav() {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [token, contextPortalId, isAgency, location.pathname, onTicketsRoute, requestsCountCache]);
+  }, [token, contextPortalId, location.pathname, requestsCountCache]);
 
   usePortalLiveSync({
     token,
@@ -309,7 +261,6 @@ export function ProjectSidebarNav() {
       // In that fallback mode refresh all small sidebar datasets.
       const cursorBump = !kind && typeof payload?.v === "number";
       const refreshReports = cursorBump || kind.startsWith("report_");
-      const refreshTickets = cursorBump || kind.startsWith("ticket_");
       const refreshRequests = cursorBump || kind.startsWith("backlog_");
       const refreshProjects =
         cursorBump ||
@@ -318,10 +269,10 @@ export function ProjectSidebarNav() {
         kind === "ontaskadd" ||
         kind === "ontaskupdate" ||
         kind === "ontaskdelete";
-      if (!refreshReports && !refreshTickets && !refreshProjects && !refreshRequests) return;
+      if (!refreshReports && !refreshProjects && !refreshRequests) return;
       void (async () => {
         try {
-          if (refreshProjects && contextPortalId && !(isAgency && onTicketsRoute)) {
+          if (refreshProjects && contextPortalId) {
             const data = await api<Project[] | { results: Project[] }>(
               withPage(`/api/projects/?portal=${contextPortalId}`, 1, PICKER_PAGE_SIZE),
               {},
@@ -334,7 +285,7 @@ export function ProjectSidebarNav() {
             seedIfEmpty(list.map((p) => p.id));
             writePortalCache(CACHE_PROJECTS, contextPortalId, list);
           }
-          if (refreshReports && contextPortalId && !(isAgency && onTicketsRoute)) {
+          if (refreshReports && contextPortalId) {
             const data = await api<{
               draft?: number;
               disputed?: number;
@@ -350,17 +301,7 @@ export function ProjectSidebarNav() {
               writePortalCache(reportsCountCache, contextPortalId, count);
             }
           }
-          if (refreshTickets && !isAgency && contextPortalId) {
-            const data = await api<{ awaiting_client?: number }>(
-              `/api/tickets/counts/?portal=${contextPortalId}`,
-              {},
-              token
-            );
-            const count = data.awaiting_client || 0;
-            setOpenTickets(count);
-            writePortalCache(ticketsCountCache, contextPortalId, count);
-          }
-          if (refreshRequests && contextPortalId && !(isAgency && onTicketsRoute)) {
+          if (refreshRequests && contextPortalId) {
             const data = await api<{ pending?: number }>(
               `/api/backlog-items/counts/?portal=${contextPortalId}`,
               {},
@@ -377,27 +318,6 @@ export function ProjectSidebarNav() {
     },
   });
 
-  const ticketsLink = !isAgency ? (
-    <NavLink
-      to="/tickets"
-      className={({ isActive }) =>
-        `${showClientNav ? "feed-nav-item" : "nav-item"}${isActive || onTicketsRoute ? " active" : ""}`
-      }
-    >
-      {showClientNav ? (
-        <span className="feed-nav-icon" aria-hidden>
-          <HeadsetGlyph />
-        </span>
-      ) : null}
-      <span className={showClientNav ? "feed-nav-label" : undefined}>Поддержка</span>
-      {openTickets > 0 ? (
-        <span className="feed-nav-count" aria-label={`${openTickets} открытых тикетов`}>
-          {openTickets > 99 ? "99+" : openTickets}
-        </span>
-      ) : null}
-    </NavLink>
-  ) : null;
-
   if (!showClientNav) {
     return (
       <nav className="nav-list" data-tour="tour-sidebar">
@@ -412,14 +332,11 @@ export function ProjectSidebarNav() {
             Дашборд
           </NavLink>
         ) : null}
-        {ticketsLink}
         {isAgency ? (
           <p className="sidebar-hint muted">
-            {onTicketsRoute
-              ? "Общая лента тикетов по всем клиентам."
-              : location.pathname.startsWith("/dashboard")
-                ? "Горящие задачи со всех клиентов в одном месте."
-                : "Выберите клиента слева, чтобы открыть проекты и отчёты."}
+            {location.pathname.startsWith("/dashboard")
+              ? "Горящие задачи со всех клиентов в одном месте."
+              : "Выберите клиента слева, чтобы открыть проекты и отчёты."}
           </p>
         ) : null}
       </nav>
@@ -543,7 +460,6 @@ export function ProjectSidebarNav() {
           ) : null}
         </NavLink>
       ) : null}
-      {ticketsLink}
     </div>
   );
 }

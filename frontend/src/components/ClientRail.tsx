@@ -14,7 +14,6 @@ import { readPortalCache, writePortalCache } from "../lib/portalSessionCache";
 import { hueFromId, initialsFromLabel } from "../lib/portalUi";
 
 const CACHE_AGENCY_LINKS = "agency-links";
-const CACHE_AGENCY_TICKET_COUNT = "agency-ticket-count";
 
 type LinkRow = {
   id: number;
@@ -69,25 +68,6 @@ function LogoutIcon() {
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function TicketsIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M4 7a2 2 0 0 1 2-2h8l4 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M14 5v4h4M8 13h8M8 17h5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
       />
     </svg>
   );
@@ -148,22 +128,14 @@ export function ClientRail() {
   const agencyId = portal?.id || 0;
   const userId = user?.id || 0;
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
-  const [openTickets, setOpenTickets] = useState(
-    () =>
-      readPortalCache<number>(
-        CACHE_AGENCY_TICKET_COUNT,
-        portal?.id || 0
-      ) || 0
-  );
   const routePortalId = useMemo(() => {
     const match = location.pathname.match(/^\/portals\/(\d+)/);
     return match ? Number(match[1]) : null;
   }, [location.pathname]);
   const activeId = routePortalId ?? resolvedPortalId;
   const addActive = location.pathname === "/";
-  const ticketsActive = location.pathname.startsWith("/tickets");
   const dashboardActive = location.pathname.startsWith("/dashboard");
-  const clientNavActive = !ticketsActive && !dashboardActive;
+  const clientNavActive = !dashboardActive;
   const [links, setLinks] = useState<LinkRow[]>(
     () =>
       readPortalCache<LinkRow[]>(CACHE_AGENCY_LINKS, portal?.id || 0) || []
@@ -180,12 +152,6 @@ export function ClientRail() {
   useEffect(() => {
     setLinks(
       readPortalCache<LinkRow[]>(CACHE_AGENCY_LINKS, portal?.id || 0) || []
-    );
-    setOpenTickets(
-      readPortalCache<number>(
-        CACHE_AGENCY_TICKET_COUNT,
-        portal?.id || 0
-      ) || 0
     );
     if (agencyId && userId) {
       setCollapsed(readCollapsed(agencyId, userId));
@@ -297,43 +263,6 @@ export function ClientRail() {
       cancelled = true;
     };
   }, [token, userId]);
-
-  useEffect(() => {
-    if (!token) {
-      setOpenTickets(0);
-      return;
-    }
-    let cancelled = false;
-
-    async function loadTickets() {
-      try {
-        const data = await api<{ awaiting_agency?: number }>(
-          "/api/tickets/counts/",
-          {},
-          token!
-        );
-        if (!cancelled) {
-          const count = data.awaiting_agency || 0;
-          setOpenTickets(count);
-          if (portal?.id) {
-            writePortalCache(CACHE_AGENCY_TICKET_COUNT, portal.id, count);
-          }
-        }
-      } catch {
-        // Keep the last known count.
-      }
-    }
-
-    void loadTickets();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void loadTickets();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [token, location.pathname, portal?.id]);
 
   useEffect(() => {
     if (!menu) return;
@@ -540,20 +469,6 @@ export function ClientRail() {
           <span className="client-avatar-face">
             <DashboardIcon />
           </span>
-        </NavLink>
-        <NavLink
-          to="/tickets"
-          className={`client-avatar tickets${ticketsActive ? " active" : ""}`}
-          title="Тикеты"
-        >
-          <span className="client-avatar-face">
-            <TicketsIcon />
-          </span>
-          {openTickets > 0 ? (
-            <span className="client-rail-badge" aria-label={`${openTickets} открытых тикетов`}>
-              {openTickets > 99 ? "99+" : openTickets}
-            </span>
-          ) : null}
         </NavLink>
       </div>
 
