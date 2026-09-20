@@ -550,6 +550,8 @@ class PortalViewSet(viewsets.ModelViewSet):
         allowed = {}
         if "name" in request.data:
             allowed["name"] = str(request.data.get("name") or "").strip()[:255]
+        if "organization" in request.data:
+            allowed["organization"] = str(request.data.get("organization") or "").strip()[:255]
         if "timezone" in request.data:
             from board.due_dates import resolve_zone
 
