@@ -43,7 +43,7 @@ export function LoginPage({ bootError }: { bootError?: string | null }) {
       <div className="login-card stack">
         <Brand />
         <p className="muted" style={{ marginTop: -4 }}>
-          Сотрудники агентства — логин и пароль. Клиенты открывают приложение из меню
+          Войдите логином и паролем. Клиенты также могут открыть приложение из меню
           Битрикс24.
         </p>
 

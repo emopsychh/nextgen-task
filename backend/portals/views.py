@@ -288,7 +288,7 @@ class BitrixAuthView(APIView):
 
 
 class PasswordAuthView(APIView):
-    """Agency staff login with username/password issued in Django admin."""
+    """Username/password login for agency staff and client portal users."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -315,9 +315,9 @@ class PasswordAuthView(APIView):
             or not bitrix_user.portal.is_active
         ):
             return Response({"detail": "Неверный логин или пароль"}, status=401)
-        if bitrix_user.portal.role != Portal.Role.AGENCY:
+        if bitrix_user.portal.role not in (Portal.Role.AGENCY, Portal.Role.CLIENT):
             return Response(
-                {"detail": "Парольный вход только для сотрудников агентства"},
+                {"detail": "Парольный вход недоступен для этого портала"},
                 status=403,
             )
 

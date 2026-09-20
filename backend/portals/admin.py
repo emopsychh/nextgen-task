@@ -112,9 +112,12 @@ class BitrixUserAdminForm(forms.ModelForm):
                 raise forms.ValidationError("Пароли не совпадают")
         username = (cleaned.get("username") or "").strip()
         portal = cleaned.get("portal")
-        if username and portal and portal.role != Portal.Role.AGENCY:
+        if username and portal and portal.role not in (
+            Portal.Role.AGENCY,
+            Portal.Role.CLIENT,
+        ):
             raise forms.ValidationError(
-                "Логин/пароль можно задавать только пользователям агентского портала"
+                "Логин/пароль можно задавать только пользователям agency/client портала"
             )
         return cleaned
 
@@ -150,7 +153,8 @@ class BitrixUserAdmin(admin.ModelAdmin):
                     "password2",
                 ),
                 "description": (
-                    "Для сотрудников агентства укажите username и пароль. "
+                    "Укажите username и пароль для входа через веб "
+                    "(сотрудники агентства и клиенты). "
                     "bitrix_id можно оставить как local-<username>."
                 ),
             },

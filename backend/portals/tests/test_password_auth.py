@@ -50,7 +50,7 @@ class PasswordAuthTests(TestCase):
         )
         self.assertEqual(resp.status_code, 401)
 
-    def test_client_user_rejected(self):
+    def test_client_password_login(self):
         client_user = BitrixUser.objects.create(
             portal=self.client_portal,
             bitrix_id="local-bob",
@@ -64,4 +64,6 @@ class PasswordAuthTests(TestCase):
             {"username": "bob", "password": "secret-pass"},
             format="json",
         )
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["portal"]["role"], "client")
+        self.assertEqual(resp.data["user"]["id"], client_user.id)
