@@ -30,6 +30,9 @@ class PortalDealBindingAdmin(admin.ModelAdmin):
     list_display = (
         "deal_id",
         "deal_title",
+        "hourly_rate_rub",
+        "package_rub",
+        "balance_rub",
         "paid_hours",
         "remaining_hours",
         "client_portal",
@@ -52,14 +55,23 @@ class PortalDealBindingAdmin(admin.ModelAdmin):
                     "is_active",
                 ),
                 "description": (
-                    "Сделки и пакет часов заполняются здесь вручную "
-                    "(синхронизация с CRM Bitrix отключена)."
+                    "Пакет задаётся в рублях: стоимость часа и баланс. "
+                    "Часы считаются автоматически (баланс ÷ ставка)."
                 ),
             },
         ),
         (
-            "Часы",
-            {"fields": ("paid_hours", "remaining_hours", "hours_overage_applied")},
+            "Баланс (₽)",
+            {
+                "fields": (
+                    "hourly_rate_rub",
+                    "package_rub",
+                    "balance_rub",
+                    "paid_hours",
+                    "remaining_hours",
+                    "hours_overage_applied",
+                ),
+            },
         ),
         (
             "Служебные поля стадии",
@@ -69,6 +81,20 @@ class PortalDealBindingAdmin(admin.ModelAdmin):
             },
         ),
     )
+
+    def save_model(self, request, obj, form, change):
+        from portals.deal_money import hours_from_money
+
+        rate = obj.hourly_rate_rub
+        if rate is not None and rate > 0:
+            if obj.package_rub is not None:
+                obj.paid_hours = hours_from_money(obj.package_rub, rate)
+            if obj.balance_rub is not None:
+                obj.remaining_hours = hours_from_money(obj.balance_rub, rate)
+            elif obj.package_rub is not None and obj.balance_rub is None:
+                obj.balance_rub = obj.package_rub
+                obj.remaining_hours = hours_from_money(obj.balance_rub, rate)
+        super().save_model(request, obj, form, change)
 
 
 class BitrixUserAdminForm(forms.ModelForm):

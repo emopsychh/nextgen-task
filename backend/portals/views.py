@@ -647,6 +647,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             # Manual package — no CRM deal required.
             deal_id = f"manual-{client_portal.id}"
 
+        from portals.deal_money import apply_money_fields, as_money
         from portals.deal_resolve import (
             cache_company_and_group_on_link,
             company_portal_link_field,
@@ -654,25 +655,23 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             deal_company_matches_client,
         )
 
-        def _hours(value):
-            if value in (None, ""):
-                return None
-            from decimal import Decimal, InvalidOperation
-
-            try:
-                return Decimal(str(value))
-            except (InvalidOperation, TypeError, ValueError):
-                return None
+        try:
+            package = apply_money_fields(
+                hourly_rate_rub=as_money(request.data.get("hourly_rate_rub")),
+                package_rub=as_money(request.data.get("package_rub")),
+                balance_rub=as_money(request.data.get("balance_rub")),
+                paid_hours=as_money(request.data.get("paid_hours")),
+                remaining_hours=as_money(request.data.get("remaining_hours")),
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=400)
 
         meta = {
             "deal_title": str(request.data.get("deal_title") or "").strip()
-            or (client_portal.name or client_portal.domain or "Пакет часов"),
+            or (client_portal.name or client_portal.domain or "Пакет сопровождения"),
             "category_id": str(request.data.get("category_id") or "").strip(),
-            "paid_hours": _hours(request.data.get("paid_hours")),
-            "remaining_hours": _hours(request.data.get("remaining_hours")),
+            **package,
         }
-        if meta["remaining_hours"] is None and meta["paid_hours"] is not None:
-            meta["remaining_hours"] = meta["paid_hours"]
 
         deal = None
         if settings.BITRIX_CRM_SYNC and request.user.portal.access_token:
@@ -691,7 +690,13 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                         },
                         status=400,
                     )
-                meta = sync_deal_hours_meta(bx, deal_id, deal)
+                hours_meta = sync_deal_hours_meta(bx, deal_id, deal)
+                meta["deal_title"] = hours_meta.get("deal_title") or meta["deal_title"]
+                meta["category_id"] = hours_meta.get("category_id") or meta["category_id"]
+                # CRM sync still hours-based; keep money if agency sent it.
+                if meta["hourly_rate_rub"] is None:
+                    meta["paid_hours"] = hours_meta.get("paid_hours")
+                    meta["remaining_hours"] = hours_meta.get("remaining_hours")
             except BitrixAPIError as exc:
                 return _crm_error_response(exc)
 
@@ -722,29 +727,33 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             is_active=True,
         ).update(is_active=False)
 
+        money_defaults = {
+            "deal_title": meta["deal_title"] or "",
+            "category_id": meta["category_id"] or "",
+            "hourly_rate_rub": meta["hourly_rate_rub"],
+            "package_rub": meta["package_rub"],
+            "balance_rub": meta["balance_rub"],
+            "paid_hours": meta["paid_hours"],
+            "remaining_hours": meta["remaining_hours"],
+            "is_active": True,
+        }
         binding, _ = PortalDealBinding.objects.update_or_create(
             agency_portal=request.user.portal,
             client_portal=client_portal,
             deal_id=deal_id,
-            defaults={
-                "deal_title": meta["deal_title"] or "",
-                "category_id": meta["category_id"] or "",
-                "paid_hours": meta["paid_hours"],
-                "remaining_hours": meta["remaining_hours"],
-                "is_active": True,
-            },
+            defaults=money_defaults,
         )
         if not binding.is_active:
-            binding.is_active = True
-            binding.deal_title = meta["deal_title"] or binding.deal_title
-            binding.category_id = meta["category_id"] or binding.category_id
-            binding.paid_hours = meta["paid_hours"]
-            binding.remaining_hours = meta["remaining_hours"]
+            for key, value in money_defaults.items():
+                setattr(binding, key, value)
             binding.save(
                 update_fields=[
                     "is_active",
                     "deal_title",
                     "category_id",
+                    "hourly_rate_rub",
+                    "package_rub",
+                    "balance_rub",
                     "paid_hours",
                     "remaining_hours",
                     "updated_at",
@@ -774,7 +783,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             if not binding:
                 return Response({"detail": "Не удалось обновить привязку"}, status=400)
 
-        from decimal import Decimal, InvalidOperation
+        from portals.deal_money import apply_money_fields, as_money
 
         update_fields: list[str] = []
         if "deal_title" in request.data:
@@ -785,18 +794,49 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             if new_id:
                 binding.deal_id = new_id
                 update_fields.append("deal_id")
-        for field in ("paid_hours", "remaining_hours"):
-            if field not in request.data:
-                continue
-            raw = request.data.get(field)
-            if raw in (None, ""):
-                setattr(binding, field, None)
-            else:
-                try:
-                    setattr(binding, field, Decimal(str(raw)))
-                except (InvalidOperation, TypeError, ValueError):
-                    return Response({"detail": f"Некорректное значение {field}"}, status=400)
-            update_fields.append(field)
+
+        money_keys = (
+            "hourly_rate_rub",
+            "package_rub",
+            "balance_rub",
+            "paid_hours",
+            "remaining_hours",
+        )
+        if any(key in request.data for key in money_keys):
+            try:
+                package = apply_money_fields(
+                    hourly_rate_rub=as_money(
+                        request.data["hourly_rate_rub"]
+                        if "hourly_rate_rub" in request.data
+                        else binding.hourly_rate_rub
+                    ),
+                    package_rub=as_money(
+                        request.data["package_rub"]
+                        if "package_rub" in request.data
+                        else binding.package_rub
+                    ),
+                    balance_rub=as_money(
+                        request.data["balance_rub"]
+                        if "balance_rub" in request.data
+                        else binding.balance_rub
+                    ),
+                    paid_hours=as_money(
+                        request.data["paid_hours"]
+                        if "paid_hours" in request.data
+                        else binding.paid_hours
+                    ),
+                    remaining_hours=as_money(
+                        request.data["remaining_hours"]
+                        if "remaining_hours" in request.data
+                        else binding.remaining_hours
+                    ),
+                )
+            except ValueError as exc:
+                return Response({"detail": str(exc)}, status=400)
+            for key, value in package.items():
+                setattr(binding, key, value)
+                update_fields.append(key)
+
         if is_active is not None:
             active = bool(is_active)
             if active:

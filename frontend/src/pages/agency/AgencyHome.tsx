@@ -59,8 +59,9 @@ export function AgencyHome() {
   const [renaming, setRenaming] = useState(false);
   const [hoursEditor, setHoursEditor] = useState<HoursEditor | null>(null);
   const [hoursTitle, setHoursTitle] = useState("");
-  const [hoursPaid, setHoursPaid] = useState("");
-  const [hoursRemaining, setHoursRemaining] = useState("");
+  const [hoursRate, setHoursRate] = useState("");
+  const [hoursPackageRub, setHoursPackageRub] = useState("");
+  const [hoursBalanceRub, setHoursBalanceRub] = useState("");
   const [hoursBusy, setHoursBusy] = useState(false);
   const [hoursError, setHoursError] = useState<string | null>(null);
 
@@ -236,15 +237,22 @@ export function AgencyHome() {
     setHoursError(null);
     setHoursEditor({ portal: client, binding });
     setHoursTitle(binding?.deal_title || client.name || client.domain || "");
-    setHoursPaid(
-      binding?.paid_hours != null && binding.paid_hours !== ""
-        ? String(binding.paid_hours)
+    setHoursRate(
+      binding?.hourly_rate_rub != null && binding.hourly_rate_rub !== ""
+        ? String(binding.hourly_rate_rub)
         : ""
     );
-    setHoursRemaining(
-      binding?.remaining_hours != null && binding.remaining_hours !== ""
-        ? String(binding.remaining_hours)
+    setHoursPackageRub(
+      binding?.package_rub != null && binding.package_rub !== ""
+        ? String(binding.package_rub)
         : ""
+    );
+    setHoursBalanceRub(
+      binding?.balance_rub != null && binding.balance_rub !== ""
+        ? String(binding.balance_rub)
+        : binding?.package_rub != null && binding.package_rub !== ""
+          ? String(binding.package_rub)
+          : ""
     );
   }
 
@@ -254,29 +262,47 @@ export function AgencyHome() {
     setHoursError(null);
   }
 
+  const hoursPreview = (() => {
+    const rate = Number(String(hoursRate).replace(",", "."));
+    const packageRub = Number(String(hoursPackageRub).replace(",", "."));
+    const balanceRub = Number(
+      String(hoursBalanceRub || hoursPackageRub).replace(",", ".")
+    );
+    if (!(rate > 0) || !Number.isFinite(packageRub) || !Number.isFinite(balanceRub)) {
+      return null;
+    }
+    return {
+      paid: Math.round((packageRub / rate) * 100) / 100,
+      remaining: Math.round((balanceRub / rate) * 100) / 100,
+    };
+  })();
+
   async function saveHoursPackage() {
     if (!token || !hoursEditor) return;
-    const paid = hoursPaid.trim();
-    const remaining = hoursRemaining.trim() || paid;
-    if (!paid) {
-      setHoursError("Укажите оплаченные часы");
+    const rate = hoursRate.trim();
+    const packageRub = hoursPackageRub.trim();
+    const balanceRub = hoursBalanceRub.trim() || packageRub;
+    if (!rate || !packageRub) {
+      setHoursError("Укажите стоимость часа и баланс пакета в рублях");
       return;
     }
     setHoursBusy(true);
     setHoursError(null);
     try {
-      const title = hoursTitle.trim() || hoursEditor.portal.name || "Пакет часов";
+      const title = hoursTitle.trim() || hoursEditor.portal.name || "Пакет сопровождения";
+      const body = {
+        deal_title: title,
+        hourly_rate_rub: rate,
+        package_rub: packageRub,
+        balance_rub: balanceRub,
+        is_active: true,
+      };
       if (hoursEditor.binding) {
         await api(
           `/api/deal-bindings/${hoursEditor.binding.id}/`,
           {
             method: "PATCH",
-            body: JSON.stringify({
-              deal_title: title,
-              paid_hours: paid,
-              remaining_hours: remaining,
-              is_active: true,
-            }),
+            body: JSON.stringify(body),
           },
           token
         );
@@ -287,15 +313,13 @@ export function AgencyHome() {
             method: "POST",
             body: JSON.stringify({
               client_portal_id: hoursEditor.portal.id,
-              deal_title: title,
-              paid_hours: paid,
-              remaining_hours: remaining,
+              ...body,
             }),
           },
           token
         );
       }
-      toast.show("Пакет часов сохранён", hoursEditor.portal.name || "Клиент");
+      toast.show("Баланс сохранён", hoursEditor.portal.name || "Клиент");
       setHoursEditor(null);
       await load();
     } catch (err) {
@@ -310,7 +334,7 @@ export function AgencyHome() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Клиенты</h1>
-          <p className="page-sub">Порталы клиентов и пакеты часов</p>
+          <p className="page-sub">Порталы клиентов и баланс сопровождения</p>
         </div>
         <div className="stat-pill">
           <span className="stat-pill-value">
@@ -512,7 +536,7 @@ export function AgencyHome() {
                     {hasDeal && binding ? (
                       <div className="deal-bind-status">
                         <div className="deal-bind-status-text">
-                          <span className="deal-bind-kicker">Пакет часов</span>
+                          <span className="deal-bind-kicker">Баланс</span>
                           <strong className="deal-bind-deal-name">
                             {binding.deal_title || `Пакет #${binding.deal_id}`}
                           </strong>
@@ -523,20 +547,20 @@ export function AgencyHome() {
                           className="btn btn-ghost deal-bind-change"
                           onClick={() => openHoursEditor(p, binding)}
                         >
-                          Изменить часы
+                          Изменить баланс
                         </button>
                       </div>
                     ) : (
                       <>
                         <p className="deal-bind-hint muted">
-                          Без пакета часов списание с таймеров не работает
+                          Без баланса и ставки часа списание с таймеров не работает
                         </p>
                         <button
                           type="button"
                           className="btn btn-accent"
                           onClick={() => openHoursEditor(p, null)}
                         >
-                          Задать пакет часов
+                          Задать баланс
                         </button>
                       </>
                     )}
@@ -567,11 +591,11 @@ export function AgencyHome() {
             className="modal-card stack"
             role="dialog"
             aria-modal="true"
-            aria-label="Пакет часов"
+            aria-label="Баланс клиента"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="section-title" style={{ margin: 0 }}>
-              Пакет часов — {hoursEditor.portal.name || hoursEditor.portal.domain}
+              Баланс — {hoursEditor.portal.name || hoursEditor.portal.domain}
             </h2>
             <label className="field">
               <span>Название</span>
@@ -582,25 +606,44 @@ export function AgencyHome() {
               />
             </label>
             <label className="field">
-              <span>Оплачено (часов)</span>
+              <span>Стоимость часа (₽)</span>
               <input
                 inputMode="decimal"
-                value={hoursPaid}
-                onChange={(e) => setHoursPaid(e.target.value)}
+                value={hoursRate}
+                onChange={(e) => setHoursRate(e.target.value)}
                 disabled={hoursBusy}
                 required
               />
             </label>
             <label className="field">
-              <span>Остаток (часов)</span>
+              <span>Пакет (₽)</span>
               <input
                 inputMode="decimal"
-                value={hoursRemaining}
-                onChange={(e) => setHoursRemaining(e.target.value)}
+                value={hoursPackageRub}
+                onChange={(e) => setHoursPackageRub(e.target.value)}
                 disabled={hoursBusy}
-                placeholder="как оплачено, если пусто"
+                required
               />
             </label>
+            <label className="field">
+              <span>Остаток баланса (₽)</span>
+              <input
+                inputMode="decimal"
+                value={hoursBalanceRub}
+                onChange={(e) => setHoursBalanceRub(e.target.value)}
+                disabled={hoursBusy}
+                placeholder="как пакет, если пусто"
+              />
+            </label>
+            {hoursPreview ? (
+              <p className="muted" style={{ margin: 0 }}>
+                Часов в пакете: {hoursPreview.paid} · остаток: {hoursPreview.remaining}
+              </p>
+            ) : (
+              <p className="muted" style={{ margin: 0 }}>
+                Часы посчитаются как баланс ÷ стоимость часа
+              </p>
+            )}
             {hoursError ? <div className="error-banner">{hoursError}</div> : null}
             <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
               <button

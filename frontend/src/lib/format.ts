@@ -122,6 +122,24 @@ export function formatPackageHoursShort(value: number | string | null | undefine
   return `${minutes} мин`;
 }
 
+/** e.g. «75 000 ₽» */
+export function formatRub(value: number | string | null | undefined): string {
+  if (value == null || value === "") return "—";
+  const n = typeof value === "number" ? value : Number(String(value).replace(",", "."));
+  if (!Number.isFinite(n)) return "—";
+  const formatted = new Intl.NumberFormat("ru-RU", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: n % 1 === 0 ? 0 : 2,
+  }).format(n);
+  return `${formatted} ₽`;
+}
+
+export function asMoney(value: number | string | null | undefined): number | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(String(value).replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
 /** e.g. «30 авг.» */
 export function formatDayShort(iso: string | null | undefined, timeZone = viewerTimeZone()): string {
   if (!iso) return "";

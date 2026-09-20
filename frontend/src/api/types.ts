@@ -369,6 +369,9 @@ export type DealBinding = {
   stage_id?: string;
   stage_semantic?: string;
   is_won?: boolean;
+  hourly_rate_rub?: string | number | null;
+  package_rub?: string | number | null;
+  balance_rub?: string | number | null;
   paid_hours: string | number | null;
   remaining_hours: string | number | null;
   hours_credit?: string | number | null;

@@ -162,6 +162,27 @@ class PortalDealBinding(models.Model):
     )
     paid_hours = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     remaining_hours = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    hourly_rate_rub = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Стоимость часа в рублях",
+    )
+    package_rub = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Размер пакета в рублях",
+    )
+    balance_rub = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Остаток баланса в рублях",
+    )
     hours_overage_applied = models.DecimalField(
         max_digits=10, decimal_places=2, default=0, blank=True
     )

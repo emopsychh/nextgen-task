@@ -1401,10 +1401,13 @@ def post_time_entry_to_deal(self, entry_id: int):
     if settings.DEV_AUTH_BYPASS or not agency.access_token or not _crm_sync_enabled():
         from decimal import Decimal
 
-        if binding.remaining_hours is not None:
-            spent = (Decimal(seconds) / Decimal(3600)).quantize(Decimal("0.01"))
-            binding.remaining_hours = max(Decimal("0.00"), binding.remaining_hours - spent)
-            binding.save(update_fields=["remaining_hours", "updated_at"])
+        from portals.deal_money import deduct_spend_from_binding
+
+        spent = (Decimal(seconds) / Decimal(3600)).quantize(Decimal("0.01"))
+        update_fields = deduct_spend_from_binding(binding, spent)
+        if update_fields:
+            update_fields.append("updated_at")
+            binding.save(update_fields=list(dict.fromkeys(update_fields)))
         return {"ok": True, "local": True, "deal_id": binding.deal_id}
 
     duration_label = format_duration_ru(seconds)
@@ -1434,9 +1437,17 @@ def post_time_entry_to_deal(self, entry_id: int):
                     paid = hours.paid
                     binding.paid_hours = paid
                     binding.remaining_hours = new_remaining
-                    binding.save(
-                        update_fields=["paid_hours", "remaining_hours", "updated_at"]
-                    )
+                    money_fields = ["paid_hours", "remaining_hours", "updated_at"]
+                    rate = binding.hourly_rate_rub
+                    if rate is not None and rate > 0:
+                        from portals.deal_money import money_from_hours
+
+                        if paid is not None:
+                            binding.package_rub = money_from_hours(paid, rate)
+                            money_fields.append("package_rub")
+                        binding.balance_rub = money_from_hours(new_remaining, rate)
+                        money_fields.append("balance_rub")
+                    binding.save(update_fields=list(dict.fromkeys(money_fields)))
                     comment += f". Остаток часов: {new_remaining}"
                     hours_result = {
                         "spent_hours": float(spent),

@@ -1,7 +1,9 @@
 import {
+  asMoney,
   asPackageHours,
   formatPackageHours,
   formatPackageHoursShort,
+  formatRub,
 } from "../lib/format";
 import type { DealBinding } from "../api/types";
 
@@ -15,12 +17,16 @@ export function hasDealHoursPackage(binding: DealBinding | null | undefined): bo
   if (!binding) return false;
   const paid = asPackageHours(binding.paid_hours);
   const remaining = asPackageHours(binding.remaining_hours);
+  const balance = asMoney(binding.balance_rub);
+  const packageRub = asMoney(binding.package_rub);
   const credit = asPackageHours(binding.hours_credit);
   const overage = asPackageHours(binding.hours_overage);
   const applied = asPackageHours(binding.hours_overage_applied);
   return (
     paid != null ||
     remaining != null ||
+    balance != null ||
+    packageRub != null ||
     (credit != null && credit > 0) ||
     (overage != null && overage > 0) ||
     (applied != null && applied > 0)
@@ -30,6 +36,9 @@ export function hasDealHoursPackage(binding: DealBinding | null | undefined): bo
 export function DealHoursCard({ binding, audience = "agency" }: Props) {
   const paid = asPackageHours(binding.paid_hours);
   const remaining = asPackageHours(binding.remaining_hours);
+  const rate = asMoney(binding.hourly_rate_rub);
+  const packageRub = asMoney(binding.package_rub);
+  const balance = asMoney(binding.balance_rub);
   const credit = asPackageHours(binding.hours_credit);
   const overage = asPackageHours(binding.hours_overage);
   const applied = asPackageHours(binding.hours_overage_applied);
@@ -37,8 +46,16 @@ export function DealHoursCard({ binding, audience = "agency" }: Props) {
   const hasCredit = credit != null && credit > 0;
   const hasOverage = overage != null && overage > 0;
   const hasApplied = applied != null && applied > 0;
+  const moneyMode = rate != null && rate > 0 && (balance != null || packageRub != null);
 
-  if (paid == null && remaining == null && !hasCredit && !hasOverage && !hasApplied) {
+  if (
+    paid == null &&
+    remaining == null &&
+    !moneyMode &&
+    !hasCredit &&
+    !hasOverage &&
+    !hasApplied
+  ) {
     return null;
   }
 
@@ -50,33 +67,65 @@ export function DealHoursCard({ binding, audience = "agency" }: Props) {
   const usedPct =
     packageSize != null && used != null
       ? Math.min(100, (used / packageSize) * 100)
-      : null;
-  const over = remaining != null && remaining <= 0 && !won;
+      : moneyMode && packageRub != null && packageRub > 0 && balance != null
+        ? Math.min(100, (Math.max(0, packageRub - Math.max(0, balance)) / packageRub) * 100)
+        : null;
+  const over =
+    (remaining != null && remaining <= 0 && !won) ||
+    (balance != null && balance <= 0 && !won);
   const forClient = audience === "client";
+
+  const remainPrimary = moneyMode
+    ? formatRub(balance)
+    : remaining != null
+      ? formatPackageHours(remaining)
+      : "—";
+  const packagePrimary = moneyMode
+    ? formatRub(packageRub)
+    : paid != null
+      ? formatPackageHours(paid)
+      : "—";
+  const usedPrimary = moneyMode
+    ? packageRub != null && balance != null
+      ? formatRub(Math.max(0, packageRub - Math.max(0, balance)))
+      : "—"
+    : used != null
+      ? formatPackageHoursShort(used)
+      : "—";
 
   if (forClient && !won) {
     return (
       <div
         className={`deal-hours-card is-client-pack${over ? " is-over" : ""}${hasCredit ? " has-credit" : ""}${hasOverage || hasApplied ? " has-overage" : ""}`}
-        aria-label="Ваш пакет часов"
+        aria-label={moneyMode ? "Ваш баланс" : "Ваш пакет часов"}
       >
         <div className="deal-hours-card-head">
-          <h2 className="section-title">Пакет часов</h2>
+          <h2 className="section-title">{moneyMode ? "Баланс" : "Пакет часов"}</h2>
         </div>
 
         <div className="deal-hours-pack-top">
-          <p className="deal-hours-pack-remain">
-            Осталось {remaining != null ? formatPackageHours(remaining) : "—"}
-          </p>
+          <p className="deal-hours-pack-remain">Осталось {remainPrimary}</p>
           <dl className="deal-hours-pack-meta">
             <div>
-              <dt>В пакете</dt>
-              <dd>{paid != null ? formatPackageHours(paid) : "—"}</dd>
+              <dt>{moneyMode ? "В пакете" : "В пакете"}</dt>
+              <dd>{packagePrimary}</dd>
             </div>
             <div>
               <dt>Использовано</dt>
-              <dd>{used != null ? formatPackageHoursShort(used) : "—"}</dd>
+              <dd>{usedPrimary}</dd>
             </div>
+            {moneyMode && remaining != null ? (
+              <div>
+                <dt>Часов</dt>
+                <dd>{formatPackageHoursShort(remaining)}</dd>
+              </div>
+            ) : null}
+            {moneyMode && rate != null ? (
+              <div>
+                <dt>₽/час</dt>
+                <dd>{formatRub(rate)}</dd>
+              </div>
+            ) : null}
           </dl>
         </div>
         {usedPct != null ? (
@@ -143,11 +192,27 @@ export function DealHoursCard({ binding, audience = "agency" }: Props) {
   return (
     <div
       className={`deal-hours-card${over ? " is-over" : ""}${won ? " is-won" : ""}${hasCredit ? " has-credit" : ""}${hasOverage || hasApplied ? " has-overage" : ""}`}
-      aria-label={forClient ? "Ваш пакет часов" : "Часы по сделке сопровождения"}
+      aria-label={
+        forClient
+          ? moneyMode
+            ? "Ваш баланс"
+            : "Ваш пакет часов"
+          : moneyMode
+            ? "Баланс сопровождения"
+            : "Часы по сделке сопровождения"
+      }
     >
       <div className="deal-hours-card-head">
         <span className="deal-hours-card-kicker">
-          {won ? "Сделка закрыта" : forClient ? "Пакет часов" : "Пакет сопровождения"}
+          {won
+            ? "Сделка закрыта"
+            : forClient
+              ? moneyMode
+                ? "Баланс"
+                : "Пакет часов"
+              : moneyMode
+                ? "Баланс сопровождения"
+                : "Пакет сопровождения"}
         </span>
         {!won && binding.deal_title ? (
           <span className="deal-hours-card-deal muted" title={binding.deal_title}>
@@ -162,15 +227,21 @@ export function DealHoursCard({ binding, audience = "agency" }: Props) {
         <div className="deal-hours-card-stats">
           <div className="deal-hours-stat">
             <span className="deal-hours-stat-label">Осталось</span>
-            <strong className="deal-hours-stat-value is-remain">
-              {remaining != null ? formatPackageHours(remaining) : "—"}
-            </strong>
+            <strong className="deal-hours-stat-value is-remain">{remainPrimary}</strong>
+            {moneyMode && remaining != null ? (
+              <span className="muted" style={{ fontSize: "0.85em" }}>
+                {formatPackageHoursShort(remaining)}
+              </span>
+            ) : null}
           </div>
           <div className="deal-hours-stat is-secondary">
             <span className="deal-hours-stat-label">В пакете</span>
-            <strong className="deal-hours-stat-value">
-              {paid != null ? formatPackageHours(paid) : "—"}
-            </strong>
+            <strong className="deal-hours-stat-value">{packagePrimary}</strong>
+            {moneyMode && rate != null ? (
+              <span className="muted" style={{ fontSize: "0.85em" }}>
+                {formatRub(rate)}/час
+              </span>
+            ) : null}
           </div>
         </div>
       )}
