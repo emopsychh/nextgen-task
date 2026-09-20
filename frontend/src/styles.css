@@ -170,9 +170,9 @@ a {
 }
 
 .sidebar-logout {
-  margin-top: auto;
+  margin-top: 0;
   align-self: flex-start;
-  padding: 8px 0;
+  padding: 4px 0;
   border: none;
   background: transparent;
   color: var(--ink-muted);
@@ -183,6 +183,23 @@ a {
 
 .sidebar-logout:hover {
   color: var(--ink);
+}
+
+.sidebar-account {
+  margin-top: auto;
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--line);
+}
+
+.sidebar-account-name {
+  font-size: 0.8rem;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand-block {

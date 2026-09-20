@@ -1,56 +1,54 @@
-# NextGen Task — Bitrix Client Task Manager
+# NextGen Task
 
-Мультитенантный task-менеджер для агентства и клиентов внутри **Битрикс24 Cloud**.
+Кабинет агентства и клиентов для ведения проектов, задач, часов и отчётов.
 
-- Агентство создаёт проекты и задачи в React-приложении на своём портале
-- Клиент видит те же задачи в приложении на своём портале, пишет комментарии и прикрепляет файлы
-- При создании/обновлении задача **односторонне** синхронизируется в нативные задачи Битрикс клиента
+- **Агентство** работает в веб-кабинете (логин/пароль)
+- **Клиенты** входят логином/паролем через веб и/или открывают приложение из Битрикс24
+- Источник правды — **Postgres**. Зеркало задач в агентский Битрикс и CRM-синк часов **выключены** по умолчанию
+- Пакет часов по клиенту задаётся в UI агентства (без CRM Bitrix)
 
 Стек: **React (Vite) + Django/DRF + Celery + PostgreSQL + Redis + Docker**
 
 ## Структура
 
 ```
-backend/     Django API, Celery sync
-frontend/    React SPA (agency + client modes)
-bitrix/      Подсказки по локальному приложению B24
-docker-compose.yml
+backend/     Django API, Celery
+frontend/    React SPA (agency + client)
+docker-compose.yml / docker-compose.prod.yml
+scripts/     ops (backup-db.sh)
 ```
 
 ## Быстрый старт (Docker)
 
-1. Скопируйте env:
-
 ```bash
 cp .env.example .env
-```
-
-2. Запустите:
-
-```bash
 docker compose up --build
 ```
 
-3. Откройте:
-   - Frontend: http://localhost:5173
-   - API: http://localhost:8000/api/
-   - Django admin: http://localhost:8000/admin/
+- Frontend: http://localhost:5173  
+- API / admin: http://localhost:8000  
 
-4. Dev-вход (без Битрикс): на экране логина выберите **агентство** или **клиент** (`DEV_AUTH_BYPASS=1`).
+Dev-вход без паролей: кнопки на LoginPage при `DEV_AUTH_BYPASS=1`.
 
-**Продакшен (VPS):** см. [DEPLOY.md](DEPLOY.md) — `docker-compose.prod.yml` + `.env.production.example`.
+**Продакшен:** см. [DEPLOY.md](DEPLOY.md).
 
-Типовой сценарий локально:
-1. Войти как **клиент** (создастся portal `dev-client`)
-2. Выйти → войти как **агентство**
-3. Привязать клиентский портал → создать проект → создать задачу
-4. Снова войти как клиент → увидеть задачу, оставить комментарий / файл
+## Вход
 
-Без токенов Битрикс sync получит статус `skipped` — это ожидаемо.
+| Кто | Как |
+|-----|-----|
+| Агентство | Логин/пароль (`/api/auth/login/`). Пользователей выдаёт админ (Django admin → Bitrix users) |
+| Клиент | То же через веб **или** OAuth из локального приложения Bitrix24 |
+| Смена пароля | В сайдбаре «Сменить пароль» (нужен текущий пароль) |
+
+Флаги в `.env` / `.env.production`:
+
+```
+BITRIX_AGENCY_TASK_SYNC=0   # не зеркалить задачи в агентский Bitrix
+BITRIX_CRM_SYNC=0           # не тянуть сделки/часы из CRM
+DEV_AUTH_BYPASS=0           # обязательно 0 в проде
+```
 
 ## Локально без Docker
-
-### Backend
 
 ```bash
 python -m venv .venv
@@ -63,17 +61,7 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-`CELERY_TASK_ALWAYS_EAGER=1` в корневом `.env` удобен для локального запуска без Redis. В Docker Compose для `web`/`worker` принудительно выставляется `0`.
-
-Для фонового воркера (когда есть Redis):
-
-```bash
-celery -A config worker -l info
-```
-
-И в `.env`: `CELERY_TASK_ALWAYS_EAGER=0`.
-
-### Frontend
+Frontend:
 
 ```bash
 cd frontend
@@ -81,74 +69,10 @@ npm install
 npm run dev
 ```
 
-Vite проксирует `/api` и `/media` на `http://localhost:8000`.
-
-## Установка в Битрикс24 Cloud
-
-Нужен публичный **HTTPS** URL бэкенда (`PUBLIC_APP_URL`) и фронтенда (`FRONTEND_URL`).
-
-1. Создайте **локальное приложение** на каждом портале (сначала агентство, затем 3–5 клиентов):
-   - Handler: `{PUBLIC_APP_URL}/api/bitrix/install/`
-   - Application URL: `{PUBLIC_APP_URL}/api/bitrix/entry/`
-   - Права: `task`, `user`; для **агентства** также **`crm`** (сделки «Сопровождение» + комментарии в таймлайн)
-2. Пропишите в `.env`:
-   - `BITRIX_CLIENT_ID`
-   - `BITRIX_CLIENT_SECRET`
-   - `BITRIX_APPLICATION_TOKEN`
-3. После установки откройте приложение из меню Битрикс.
-4. На агентском портале укажите в `.env` `AGENCY_DOMAINS` или `AGENCY_MEMBER_IDS` — роль **Агентство** назначится сама. Остальные порталы = **Клиент**.
-5. В кабинете агентства привяжите клиентские порталы — сделка сопровождения найдётся по полю «Ссылка на портал» в CRM.
-
-Подробности: [bitrix/README.md](bitrix/README.md)
-
-## API (основные)
-
-| Метод | Путь | Описание |
-|-------|------|----------|
-| POST | `/api/bitrix/install/` | Install handler B24 |
-| POST | `/api/bitrix/auth/` | Обмен Bitrix auth → JWT |
-| POST | `/api/auth/dev/` | Dev login |
-| GET | `/api/me/` | Текущий portal + user |
-| CRUD | `/api/portals/`, `/api/portal-links/` | Порталы и связи |
-| CRUD | `/api/deal-bindings/` | Привязка по ссылке на портал в сделке → сопровождение (agency) |
-| CRUD | `/api/projects/`, `/api/tasks/` | Проекты и задачи |
-| POST | `/api/tasks/{id}/timer/start/`, `…/timer/stop/` | Трекер времени (agency) |
-| CRUD | `/api/comments/`, `/api/attachments/` | Комментарии и файлы |
-
-Авторизация: `Authorization: Bearer <access>`.
-
-## Синхронизация с Bitrix Tasks
-
-- Источник правды — Django
-- Celery-задача `board.tasks.sync_task_to_bitrix` создаёт/обновляет задачу на **портале клиента**
-- Статусы: `todo→2`, `in_progress→3`, `done→5`
-- Ошибки пишутся в `Task.sync_status` / `sync_error`, в UI — badge
-- 2-way sync **не** входит в MVP
-
-## Время и сделки CRM
-
-- Агентство ведёт таймер на задаче; учёт хранится в `TimeEntry`
-- При **паузе** и **завершении** закрывается сессия таймера → Celery `post_time_entry_to_deal`:
-  - пишет в таймлайн сделки: `Задача «…»: учтено … . Остаток часов: N`
-  - уменьшает поле **оставшихся часов** на длительность этой сессии (поле **оплаченных** не меняется)
-  - повторно не списывает ту же сессию (`billed_to_deal_at`)
-- Компания ищется по полю «Ссылка на портал» (`BITRIX_COMPANY_PORTAL_LINK_FIELD`), затем выбираются её сделки из воронки `BITRIX_ACCOMPANIMENT_CATEGORY_ID`
-- Стадии сделки: отправка отчёта → «Согласование отчёта»; согласие клиента → «Подписание акта» (`BITRIX_DEAL_STAGE_*` или поиск по имени)
-- Проект компании (Bitrix workgroup) читается из `BITRIX_COMPANY_PROJECT_ID_FIELD` на компании сделки
-- Коды полей часов в `.env`: `BITRIX_DEAL_PAID_HOURS_FIELD`, `BITRIX_DEAL_REMAINING_HOURS_FIELD` (например `UF_CRM_…`)
-- Если остаток пуст, а оплачено задано — при поиске/refresh сделки остаток инициализируется из оплаченных
-- Постинг идёт от токена **агентского** портала (scope `crm`)
-
-## UI
-
-Светлый soft-минимализм (Manrope + Sora, акцент teal). Режимы SPA:
-- **Agency:** клиенты → проекты → задачи → комментарии, badge sync
-- **Client:** проекты → задачи → деталка, комментарии, файлы
-
-## Django admin
+## Бэкап БД (prod)
 
 ```bash
-python manage.py createsuperuser
+./scripts/backup-db.sh
 ```
 
-Удобно править роли порталов и смотреть sync вручную.
+Подробности и cron — в [DEPLOY.md](DEPLOY.md).

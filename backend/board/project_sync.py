@@ -309,6 +309,11 @@ def pull_projects_from_bitrix(client_portal) -> dict:
     Import top-level tasks from the company Bitrix workgroup as app Projects.
     Also imports their subtasks as app Tasks.
     """
+    from django.conf import settings
+
+    if not getattr(settings, "BITRIX_AGENCY_TASK_SYNC", False):
+        return {"ok": True, "skipped": "agency_sync_disabled", "projects": 0, "tasks": 0}
+
     from portals.deal_resolve import resolve_bitrix_group_id
     from portals.models import PortalLink
 

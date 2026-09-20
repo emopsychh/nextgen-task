@@ -67,3 +67,30 @@ class PasswordAuthTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data["portal"]["role"], "client")
         self.assertEqual(resp.data["user"]["id"], client_user.id)
+
+    def test_change_password(self):
+        login = self.api.post(
+            "/api/auth/login/",
+            {"username": "alice", "password": "secret-pass"},
+            format="json",
+        )
+        self.api.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+        bad = self.api.post(
+            "/api/auth/change-password/",
+            {"current_password": "wrong", "new_password": "new-secret1"},
+            format="json",
+        )
+        self.assertEqual(bad.status_code, 400)
+        ok = self.api.post(
+            "/api/auth/change-password/",
+            {"current_password": "secret-pass", "new_password": "new-secret1"},
+            format="json",
+        )
+        self.assertEqual(ok.status_code, 200)
+        self.api.credentials()
+        again = self.api.post(
+            "/api/auth/login/",
+            {"username": "alice", "password": "new-secret1"},
+            format="json",
+        )
+        self.assertEqual(again.status_code, 200)

@@ -5,6 +5,7 @@ import { Brand } from "./components/Brand";
 import { ClientRail } from "./components/ClientRail";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ProjectSidebarNav } from "./components/ProjectSidebar";
+import { SidebarAccount } from "./components/SidebarAccount";
 import { LoginPage } from "./pages/LoginPage";
 import { AgencyDashboard } from "./pages/agency/AgencyDashboard";
 import { AgencyHome } from "./pages/agency/AgencyHome";
@@ -48,6 +49,7 @@ function AppLayout() {
         <aside className="sidebar">
           <Brand subtitle={isAgency ? "Кабинет агентства" : "Кабинет клиента"} />
           <ProjectSidebarNav />
+          <SidebarAccount />
         </aside>
       ) : null}
       <main className="main">

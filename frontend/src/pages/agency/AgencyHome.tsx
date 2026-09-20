@@ -24,6 +24,11 @@ type PendingUnlink = {
   name: string;
 };
 
+type HoursEditor = {
+  portal: Portal;
+  binding: DealBinding | null;
+};
+
 function initials(portal: Portal): string {
   return initialsFromLabel(portal.name || portal.domain || "?");
 }
@@ -52,6 +57,12 @@ export function AgencyHome() {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [renaming, setRenaming] = useState(false);
+  const [hoursEditor, setHoursEditor] = useState<HoursEditor | null>(null);
+  const [hoursTitle, setHoursTitle] = useState("");
+  const [hoursPaid, setHoursPaid] = useState("");
+  const [hoursRemaining, setHoursRemaining] = useState("");
+  const [hoursBusy, setHoursBusy] = useState(false);
+  const [hoursError, setHoursError] = useState<string | null>(null);
 
   const available = useMemo(
     () => portals.filter((p) => !links.some((l) => l.client_portal.id === p.id)),
@@ -221,6 +232,79 @@ export function AgencyHome() {
     }
   }
 
+  function openHoursEditor(client: Portal, binding: DealBinding | null) {
+    setHoursError(null);
+    setHoursEditor({ portal: client, binding });
+    setHoursTitle(binding?.deal_title || client.name || client.domain || "");
+    setHoursPaid(
+      binding?.paid_hours != null && binding.paid_hours !== ""
+        ? String(binding.paid_hours)
+        : ""
+    );
+    setHoursRemaining(
+      binding?.remaining_hours != null && binding.remaining_hours !== ""
+        ? String(binding.remaining_hours)
+        : ""
+    );
+  }
+
+  function closeHoursEditor() {
+    if (hoursBusy) return;
+    setHoursEditor(null);
+    setHoursError(null);
+  }
+
+  async function saveHoursPackage() {
+    if (!token || !hoursEditor) return;
+    const paid = hoursPaid.trim();
+    const remaining = hoursRemaining.trim() || paid;
+    if (!paid) {
+      setHoursError("Укажите оплаченные часы");
+      return;
+    }
+    setHoursBusy(true);
+    setHoursError(null);
+    try {
+      const title = hoursTitle.trim() || hoursEditor.portal.name || "Пакет часов";
+      if (hoursEditor.binding) {
+        await api(
+          `/api/deal-bindings/${hoursEditor.binding.id}/`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              deal_title: title,
+              paid_hours: paid,
+              remaining_hours: remaining,
+              is_active: true,
+            }),
+          },
+          token
+        );
+      } else {
+        await api(
+          "/api/deal-bindings/",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              client_portal_id: hoursEditor.portal.id,
+              deal_title: title,
+              paid_hours: paid,
+              remaining_hours: remaining,
+            }),
+          },
+          token
+        );
+      }
+      toast.show("Пакет часов сохранён", hoursEditor.portal.name || "Клиент");
+      setHoursEditor(null);
+      await load();
+    } catch (err) {
+      setHoursError(err instanceof Error ? err.message : "Не удалось сохранить");
+    } finally {
+      setHoursBusy(false);
+    }
+  }
+
   return (
     <div className="clients-page">
       <div className="page-header">
@@ -258,7 +342,7 @@ export function AgencyHome() {
           <span className="how-num">3</span>
           <div>
             <strong>Задайте пакет часов</strong>
-            <p>В Django admin → Portal deal bindings</p>
+            <p>Кнопка на карточке клиента — без CRM Bitrix</p>
           </div>
         </div>
       </section>
@@ -430,18 +514,31 @@ export function AgencyHome() {
                         <div className="deal-bind-status-text">
                           <span className="deal-bind-kicker">Пакет часов</span>
                           <strong className="deal-bind-deal-name">
-                            {binding.deal_title || `Сделка #${binding.deal_id}`}
+                            {binding.deal_title || `Пакет #${binding.deal_id}`}
                           </strong>
-                          {binding.deal_id ? (
-                            <span className="deal-bind-deal-id">#{binding.deal_id}</span>
-                          ) : null}
                         </div>
                         <DealHoursCard binding={binding} audience="agency" />
+                        <button
+                          type="button"
+                          className="btn btn-ghost deal-bind-change"
+                          onClick={() => openHoursEditor(p, binding)}
+                        >
+                          Изменить часы
+                        </button>
                       </div>
                     ) : (
-                      <p className="deal-bind-hint muted">
-                        Пакет часов задаётся в админке Django (Portal deal bindings).
-                      </p>
+                      <>
+                        <p className="deal-bind-hint muted">
+                          Без пакета часов списание с таймеров не работает
+                        </p>
+                        <button
+                          type="button"
+                          className="btn btn-accent"
+                          onClick={() => openHoursEditor(p, null)}
+                        >
+                          Задать пакет часов
+                        </button>
+                      </>
                     )}
                   </div>
                 </article>
@@ -463,6 +560,69 @@ export function AgencyHome() {
         }}
         onConfirm={() => void confirmUnlink()}
       />
+
+      {hoursEditor ? (
+        <div className="modal-backdrop" role="presentation" onClick={closeHoursEditor}>
+          <div
+            className="modal-card stack"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Пакет часов"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="section-title" style={{ margin: 0 }}>
+              Пакет часов — {hoursEditor.portal.name || hoursEditor.portal.domain}
+            </h2>
+            <label className="field">
+              <span>Название</span>
+              <input
+                value={hoursTitle}
+                onChange={(e) => setHoursTitle(e.target.value)}
+                disabled={hoursBusy}
+              />
+            </label>
+            <label className="field">
+              <span>Оплачено (часов)</span>
+              <input
+                inputMode="decimal"
+                value={hoursPaid}
+                onChange={(e) => setHoursPaid(e.target.value)}
+                disabled={hoursBusy}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Остаток (часов)</span>
+              <input
+                inputMode="decimal"
+                value={hoursRemaining}
+                onChange={(e) => setHoursRemaining(e.target.value)}
+                disabled={hoursBusy}
+                placeholder="как оплачено, если пусто"
+              />
+            </label>
+            {hoursError ? <div className="error-banner">{hoursError}</div> : null}
+            <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={hoursBusy}
+                onClick={closeHoursEditor}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={hoursBusy}
+                onClick={() => void saveHoursPackage()}
+              >
+                {hoursBusy ? "Сохраняем…" : "Сохранить"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

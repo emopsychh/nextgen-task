@@ -19,7 +19,7 @@ from .deal_resolve import (
     serialize_deal_candidate,
     sync_deal_hours_meta,
 )
-from .models import Portal, PortalDealBinding, PortalLink, AgencyUserPreference
+from .models import AgencyUserPreference, BitrixUser, Portal, PortalDealBinding, PortalLink
 from .permissions import IsAgencyPortal, IsPortalAuthenticated, can_access_client_portal, linked_client_portal_ids
 from .serializers import (
     MeSerializer,
@@ -340,6 +340,44 @@ class PasswordAuthView(APIView):
         )
 
 
+class ChangePasswordView(APIView):
+    """Logged-in user changes their own password (agency or client)."""
+
+    permission_classes = [IsPortalAuthenticated]
+
+    def post(self, request):
+        bitrix_user = getattr(request.user, "bitrix_user", None)
+        if not bitrix_user:
+            return Response({"detail": "User required"}, status=400)
+
+        current = str(request.data.get("current_password") or "")
+        new_password = str(request.data.get("new_password") or "")
+        if len(new_password) < 8:
+            return Response(
+                {"detail": "Новый пароль должен быть не короче 8 символов"},
+                status=400,
+            )
+        # Users created without a password (Bitrix-only) can set one by leaving
+        # current_password empty once; afterwards current is required.
+        if bitrix_user.password:
+            if not current or not bitrix_user.check_password(current):
+                return Response({"detail": "Неверный текущий пароль"}, status=400)
+        bitrix_user.set_password(new_password)
+        bitrix_user.save(update_fields=["password", "updated_at"])
+        if not bitrix_user.username:
+            # Ensure they can log in via web next time
+            suggested = f"user{bitrix_user.id}"
+            if not BitrixUser.objects.filter(username__iexact=suggested).exclude(pk=bitrix_user.pk).exists():
+                bitrix_user.username = suggested
+                bitrix_user.save(update_fields=["username", "updated_at"])
+        return Response(
+            {
+                "ok": True,
+                "username": bitrix_user.username or "",
+            }
+        )
+
+
 class DevAuthView(APIView):
     """Local development login without Bitrix."""
 
@@ -605,17 +643,9 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             return err
 
         deal_id = str(request.data.get("deal_id") or "").strip()
-
         if not deal_id:
-            return Response(
-                {
-                    "detail": (
-                        "Укажите deal_id. Сделки и часы задаются в админке "
-                        "или этим API без синхронизации CRM."
-                    )
-                },
-                status=400,
-            )
+            # Manual package — no CRM deal required.
+            deal_id = f"manual-{client_portal.id}"
 
         from portals.deal_resolve import (
             cache_company_and_group_on_link,
@@ -624,12 +654,26 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             deal_company_matches_client,
         )
 
+        def _hours(value):
+            if value in (None, ""):
+                return None
+            from decimal import Decimal, InvalidOperation
+
+            try:
+                return Decimal(str(value))
+            except (InvalidOperation, TypeError, ValueError):
+                return None
+
         meta = {
-            "deal_title": str(request.data.get("deal_title") or "").strip(),
+            "deal_title": str(request.data.get("deal_title") or "").strip()
+            or (client_portal.name or client_portal.domain or "Пакет часов"),
             "category_id": str(request.data.get("category_id") or "").strip(),
-            "paid_hours": request.data.get("paid_hours"),
-            "remaining_hours": request.data.get("remaining_hours"),
+            "paid_hours": _hours(request.data.get("paid_hours")),
+            "remaining_hours": _hours(request.data.get("remaining_hours")),
         }
+        if meta["remaining_hours"] is None and meta["paid_hours"] is not None:
+            meta["remaining_hours"] = meta["paid_hours"]
+
         deal = None
         if settings.BITRIX_CRM_SYNC and request.user.portal.access_token:
             try:
@@ -711,11 +755,15 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         binding = self.get_object()
+        if not can_access_client_portal(request.user, binding.client_portal):
+            return Response({"detail": "No access"}, status=403)
+        if not getattr(request.user, "is_agency", False):
+            return Response({"detail": "Только для агентства"}, status=403)
+
         refresh = request.data.get("refresh") in (True, "1", "true", "yes")
         is_active = request.data.get("is_active")
 
         if (refresh or "bitrix_company_id" in request.data) and settings.BITRIX_CRM_SYNC:
-            # Re-resolve by portal link (company id no longer used)
             try:
                 binding = resolve_or_refresh_binding(
                     agency_portal=request.user.portal,
@@ -726,7 +774,30 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             if not binding:
                 return Response({"detail": "Не удалось обновить привязку"}, status=400)
 
-        if is_active is not None and binding:
+        from decimal import Decimal, InvalidOperation
+
+        update_fields: list[str] = []
+        if "deal_title" in request.data:
+            binding.deal_title = str(request.data.get("deal_title") or "").strip()
+            update_fields.append("deal_title")
+        if "deal_id" in request.data:
+            new_id = str(request.data.get("deal_id") or "").strip()
+            if new_id:
+                binding.deal_id = new_id
+                update_fields.append("deal_id")
+        for field in ("paid_hours", "remaining_hours"):
+            if field not in request.data:
+                continue
+            raw = request.data.get(field)
+            if raw in (None, ""):
+                setattr(binding, field, None)
+            else:
+                try:
+                    setattr(binding, field, Decimal(str(raw)))
+                except (InvalidOperation, TypeError, ValueError):
+                    return Response({"detail": f"Некорректное значение {field}"}, status=400)
+            update_fields.append(field)
+        if is_active is not None:
             active = bool(is_active)
             if active:
                 PortalDealBinding.objects.filter(
@@ -735,7 +806,10 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
                     is_active=True,
                 ).exclude(pk=binding.pk).update(is_active=False)
             binding.is_active = active
-            binding.save(update_fields=["is_active", "updated_at"])
+            update_fields.append("is_active")
+        if update_fields:
+            update_fields.append("updated_at")
+            binding.save(update_fields=list(dict.fromkeys(update_fields)))
 
         return Response(PortalDealBindingSerializer(binding).data)
 
@@ -747,7 +821,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         if not settings.BITRIX_CRM_SYNC:
             return Response(
                 {
-                    "detail": "CRM sync отключён — сделки задаются в Django admin",
+                    "detail": "CRM sync отключён — пакет часов задаётся в UI агентства",
                     "results": [],
                 }
             )

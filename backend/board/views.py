@@ -379,7 +379,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         # Soft realtime / first open: pull parent tasks from Bitrix company project
-        if request.query_params.get("pull") in ("1", "true", "yes"):
+        if (
+            settings.BITRIX_AGENCY_TASK_SYNC
+            and request.query_params.get("pull") in ("1", "true", "yes")
+        ):
             portal_id = request.query_params.get("portal")
             if portal_id:
                 try:
