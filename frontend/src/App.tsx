@@ -16,6 +16,7 @@ import { ProjectReports } from "./pages/shared/ProjectReports";
 import { ProjectsList } from "./pages/shared/ProjectsList";
 import { ReportDetail } from "./pages/shared/ReportDetail";
 import { ProjectTasks } from "./pages/shared/ProjectTasks";
+import { AccountPage } from "./pages/shared/AccountPage";
 import { TaskDetail } from "./pages/shared/TaskDetail";
 
 function RouteDataBoundary({ children }: { children: ReactNode }) {
@@ -138,6 +139,7 @@ export default function App() {
           path="tasks/:taskId"
           element={<RouteDataBoundary><TaskDetail /></RouteDataBoundary>}
         />
+        <Route path="account" element={<AccountPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

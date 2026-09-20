@@ -1,37 +1,24 @@
-import { useState } from "react";
+import { NavLink } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { ChangePasswordModal } from "./ChangePasswordModal";
 
-/** Logout + change-password controls for agency and client sidebars. */
+/** Compact link to the personal account page. */
 export function SidebarAccount() {
-  const { logout, user, portal } = useAuth();
-  const [pwdOpen, setPwdOpen] = useState(false);
+  const { user, portal } = useAuth();
   const isClient = portal?.role === "client";
-  // Agency staff: show person name. Clients don't need a redundant portal label here.
   const label = isClient
-    ? null
-    : (user?.display_name || user?.name || "Аккаунт").trim() || "Аккаунт";
+    ? "Личный кабинет"
+    : (user?.display_name || user?.name || "Личный кабинет").trim() || "Личный кабинет";
 
   return (
-    <>
-      <div className="sidebar-account">
-        {label ? (
-          <div className="sidebar-account-name muted" title={label}>
-            {label}
-          </div>
-        ) : null}
-        <button
-          type="button"
-          className="sidebar-logout"
-          onClick={() => setPwdOpen(true)}
-        >
-          Сменить пароль
-        </button>
-        <button type="button" className="sidebar-logout" onClick={logout}>
-          Выйти
-        </button>
-      </div>
-      <ChangePasswordModal open={pwdOpen} onClose={() => setPwdOpen(false)} />
-    </>
+    <div className="sidebar-account">
+      <NavLink
+        to="/account"
+        className={({ isActive }) => `sidebar-account-link${isActive ? " active" : ""}`}
+        title="Личный кабинет"
+      >
+        <span className="sidebar-account-link-label">{label}</span>
+        <span className="sidebar-account-link-hint muted">Профиль и пароль</span>
+      </NavLink>
+    </div>
   );
 }

@@ -230,6 +230,7 @@ class BitrixUserSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "bitrix_id",
+            "username",
             "name",
             "last_name",
             "email",

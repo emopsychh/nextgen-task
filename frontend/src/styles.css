@@ -202,6 +202,99 @@ a {
   white-space: nowrap;
 }
 
+.sidebar-account-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  margin: 0 -6px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.15s ease;
+}
+
+.sidebar-account-link:hover {
+  background: rgba(18, 20, 22, 0.05);
+}
+
+.sidebar-account-link.active {
+  background: rgba(18, 20, 22, 0.07);
+}
+
+.sidebar-account-link-label {
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.sidebar-account-link-hint {
+  font-size: 0.78rem;
+}
+
+.account-page {
+  max-width: 880px;
+}
+
+.account-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.account-card {
+  padding: 20px 22px;
+  border: 1.5px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.account-card .section-title {
+  margin: 0 0 12px;
+}
+
+.account-card-lead {
+  margin: 0 0 14px;
+}
+
+.account-meta {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.account-meta > div {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 8px 16px;
+  align-items: baseline;
+}
+
+.account-meta dt {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.88rem;
+}
+
+.account-meta dd {
+  margin: 0;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.account-logout {
+  color: #a33;
+}
+
+.account-logout:hover {
+  color: #822;
+}
+
+@media (max-width: 640px) {
+  .account-meta > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
 .brand-block {
   display: flex;
   align-items: center;

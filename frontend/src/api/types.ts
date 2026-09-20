@@ -13,6 +13,7 @@ export type Portal = {
 export type BitrixUser = {
   id: number;
   bitrix_id: string;
+  username?: string | null;
   display_name: string;
   name: string;
   last_name: string;
