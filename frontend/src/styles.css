@@ -168,7 +168,7 @@ a {
 
 .sidebar {
   --sidebar-w: 272px;
-  --sidebar-w-collapsed: 72px;
+  --sidebar-w-collapsed: 80px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -178,15 +178,14 @@ a {
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(14px);
   min-height: 0;
-  overflow: visible;
-  transition: width 0.28s cubic-bezier(0.22, 1, 0.36, 1), padding 0.28s ease;
+  overflow: hidden;
+  transition: width 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   z-index: 4;
 }
 
 .sidebar.is-collapsed {
   width: var(--sidebar-w-collapsed);
-  padding: 18px 12px 12px;
-  align-items: center;
+  overflow: visible;
 }
 
 .sidebar .brand-block {
@@ -195,18 +194,12 @@ a {
   width: 100%;
   min-height: 52px;
   align-items: center;
-  transition: margin 0.28s ease, gap 0.28s ease;
 }
 
 .sidebar .brand-mark {
   width: 48px;
   height: 48px;
   border-radius: 15px;
-  transition:
-    width 0.28s cubic-bezier(0.22, 1, 0.36, 1),
-    height 0.28s cubic-bezier(0.22, 1, 0.36, 1),
-    border-radius 0.28s ease,
-    box-shadow 0.2s ease;
 }
 
 .sidebar .brand-text {
@@ -214,30 +207,14 @@ a {
   white-space: nowrap;
   max-width: 180px;
   opacity: 1;
-  transform: translateX(0);
   transition:
-    max-width 0.26s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.18s ease,
-    transform 0.26s ease;
-}
-
-.sidebar.is-collapsed .brand-block {
-  justify-content: center;
-  gap: 0;
-  margin-bottom: 14px;
-}
-
-.sidebar.is-collapsed .brand-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 13px;
-  box-shadow: 0 4px 12px rgba(18, 20, 22, 0.1);
+    max-width 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.14s ease;
 }
 
 .sidebar.is-collapsed .brand-text {
   max-width: 0;
   opacity: 0;
-  transform: translateX(-8px);
   pointer-events: none;
 }
 
@@ -257,18 +234,13 @@ a {
   color: var(--ink-muted);
   box-shadow: 0 2px 10px rgba(18, 20, 22, 0.1);
   cursor: pointer;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease,
-    transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1),
-    box-shadow 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .sidebar-rail-toggle:hover {
   background: #121416;
   color: #fff;
   border-color: #121416;
-  transform: scale(1.06);
   box-shadow: 0 4px 14px rgba(18, 20, 22, 0.18);
 }
 
@@ -287,12 +259,6 @@ a {
   border-top: 1px solid var(--line);
 }
 
-.sidebar.is-collapsed .sidebar-footer {
-  align-items: center;
-  border-top-color: transparent;
-  padding-top: 8px;
-}
-
 .sidebar .sidebar-section-label,
 .sidebar .sidebar-hint,
 .sidebar .feed-nav-label,
@@ -303,11 +269,8 @@ a {
   max-width: 180px;
   opacity: 1;
   transition:
-    max-width 0.24s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.16s ease,
-    margin 0.24s ease,
-    padding 0.24s ease,
-    height 0.24s ease;
+    max-width 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.14s ease;
 }
 
 .sidebar.is-collapsed .sidebar-section-label,
@@ -329,8 +292,8 @@ a {
 
 .sidebar.is-collapsed .feed-nav-count {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: 10px;
+  left: 34px;
   max-width: none;
   opacity: 1;
   min-width: 15px;
@@ -356,38 +319,7 @@ a {
 .sidebar .feed-nav-item,
 .sidebar .nav-item {
   position: relative;
-  transition:
-    padding 0.24s ease,
-    gap 0.24s ease,
-    margin 0.24s ease,
-    background 0.15s ease,
-    width 0.24s ease,
-    border-radius 0.24s ease;
-}
-
-.sidebar.is-collapsed .feed-nav-item,
-.sidebar.is-collapsed .nav-item {
-  justify-content: center;
-  align-items: center;
-  width: 44px;
-  height: 44px;
-  gap: 0;
-  padding: 0;
-  margin: 0 auto 8px;
-  border-radius: 14px;
-}
-
-.sidebar.is-collapsed .feed-nav-icon {
-  width: 20px;
-  height: 20px;
-  opacity: 0.9;
-  display: inline-grid;
-  place-items: center;
-}
-
-.sidebar.is-collapsed .feed-nav-icon svg {
-  width: 18px;
-  height: 18px;
+  transition: background 0.15s ease;
 }
 
 .sidebar-account-link {
@@ -399,11 +331,7 @@ a {
   border-radius: 12px;
   text-decoration: none;
   color: inherit;
-  transition:
-    background 0.15s ease,
-    padding 0.24s ease,
-    gap 0.24s ease,
-    width 0.24s ease;
+  transition: background 0.15s ease;
 }
 
 .sidebar-account-link:hover {
@@ -412,17 +340,6 @@ a {
 
 .sidebar-account-link.active {
   background: rgba(18, 20, 22, 0.07);
-}
-
-.sidebar.is-collapsed .sidebar-account-link {
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
-  gap: 0;
-  padding: 0;
-  margin: 0 auto;
-  border-radius: 14px;
 }
 
 .sidebar-account-copy {
@@ -439,22 +356,6 @@ a {
 
 .sidebar-account-link-hint {
   font-size: 0.76rem;
-}
-
-.sidebar.is-collapsed .sidebar-account-glyph {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
-  background: rgba(18, 20, 22, 0.05);
-  display: inline-grid;
-  place-items: center;
-  color: var(--ink-muted);
-}
-
-.sidebar.is-collapsed .sidebar-account-link:hover .sidebar-account-glyph,
-.sidebar.is-collapsed .sidebar-account-link.active .sidebar-account-glyph {
-  background: color-mix(in srgb, var(--accent) 22%, #fff);
-  color: var(--ink);
 }
 
 /* Flyout labels when the rail is collapsed */
@@ -504,21 +405,7 @@ a {
 
   .sidebar.is-collapsed {
     width: auto;
-    padding: 22px 16px 14px;
-    align-items: stretch;
-  }
-
-  .sidebar.is-collapsed .brand-block {
-    justify-content: flex-start;
-    gap: 12px;
-    margin-bottom: 28px;
-    min-height: 52px;
-  }
-
-  .sidebar.is-collapsed .brand-mark {
-    width: 48px;
-    height: 48px;
-    border-radius: 15px;
+    overflow: hidden;
   }
 
   .sidebar.is-collapsed .brand-text,
@@ -529,20 +416,7 @@ a {
     max-width: 180px;
     opacity: 1;
     height: auto;
-    transform: none;
     pointer-events: auto;
-  }
-
-  .sidebar.is-collapsed .feed-nav-item,
-  .sidebar.is-collapsed .nav-item,
-  .sidebar.is-collapsed .sidebar-account-link {
-    width: auto;
-    height: auto;
-    min-height: 52px;
-    justify-content: flex-start;
-    gap: 14px;
-    padding: 16px;
-    margin: 0 0 10px;
   }
 
   .sidebar.is-collapsed .feed-nav-count {
@@ -559,25 +433,16 @@ a {
   .sidebar.is-collapsed .sidebar-account-link[data-tip]::after {
     display: none;
   }
-
-  .sidebar.is-collapsed .sidebar-footer {
-    align-items: stretch;
-    border-top-color: var(--line);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar,
-  .sidebar .brand-mark,
   .sidebar .brand-text,
   .sidebar .sidebar-section-label,
   .sidebar .sidebar-hint,
   .sidebar .feed-nav-label,
   .sidebar .feed-nav-count,
   .sidebar .sidebar-account-copy,
-  .sidebar .feed-nav-item,
-  .sidebar .nav-item,
-  .sidebar-account-link,
   .sidebar-rail-toggle {
     transition: none;
   }
@@ -669,11 +534,6 @@ a {
   border: none;
   outline: none;
   box-shadow: 0 8px 18px rgba(18, 20, 22, 0.08);
-  transition: transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
-}
-
-.brand-block:hover .brand-mark {
-  transform: translateY(-2px) rotate(-3deg);
 }
 
 .brand-logo {
