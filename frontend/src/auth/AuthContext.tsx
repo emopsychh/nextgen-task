@@ -23,6 +23,7 @@ type AuthState = {
   loading: boolean;
   error: string | null;
   loginDev: (role: "agency" | "client") => Promise<void>;
+  loginPassword: (username: string, password: string) => Promise<void>;
   loginBitrix: (payload: Record<string, unknown>) => Promise<void>;
   logout: () => void;
 };
@@ -105,6 +106,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           last_name: "Demo",
           bitrix_id: `dev-${role}-user`,
         }),
+      });
+      persist(session);
+    },
+    [persist]
+  );
+
+  const loginPassword = useCallback(
+    async (username: string, password: string) => {
+      setError(null);
+      const session = await api<AuthSession>("/api/auth/login/", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
       });
       persist(session);
     },
@@ -211,10 +224,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       loginDev,
+      loginPassword,
       loginBitrix,
       logout,
     }),
-    [token, portal, user, loading, error, loginDev, loginBitrix, logout]
+    [token, portal, user, loading, error, loginDev, loginPassword, loginBitrix, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

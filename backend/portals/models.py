@@ -81,6 +81,9 @@ class PortalLink(models.Model):
 class BitrixUser(models.Model):
     portal = models.ForeignKey(Portal, on_delete=models.CASCADE, related_name="users")
     bitrix_id = models.CharField(max_length=64)
+    # Agency staff login (password auth). Client users stay Bitrix-only.
+    username = models.CharField(max_length=150, unique=True, null=True, blank=True)
+    password = models.CharField(max_length=128, blank=True)
     name = models.CharField(max_length=255, blank=True)
     last_name = models.CharField(max_length=255, blank=True)
     email = models.EmailField(blank=True)
@@ -99,7 +102,19 @@ class BitrixUser(models.Model):
     @property
     def display_name(self):
         full = f"{self.name} {self.last_name}".strip()
-        return full or self.email or self.bitrix_id
+        return full or self.username or self.email or self.bitrix_id
+
+    def set_password(self, raw_password: str) -> None:
+        from django.contrib.auth.hashers import make_password
+
+        self.password = make_password(raw_password)
+
+    def check_password(self, raw_password: str) -> bool:
+        from django.contrib.auth.hashers import check_password
+
+        if not self.password or not raw_password:
+            return False
+        return check_password(raw_password, self.password)
 
 
 class AgencyUserPreference(models.Model):

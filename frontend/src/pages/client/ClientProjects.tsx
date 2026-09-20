@@ -247,22 +247,9 @@ export function ClientProjects() {
     return () => window.removeEventListener(PORTAL_LABEL_EVENT, onLabel);
   }, [isAgency, portalId]);
 
-  async function refreshDealHoursInBackground(bindingId: number, signal?: AbortSignal) {
-    if (!token || !portalId) return;
-    const requestedPortalId = portalId;
-    try {
-      const updated = await api<DealBinding>(
-        `/api/deal-bindings/${bindingId}/refresh-hours/`,
-        { method: "POST", signal },
-        token
-      );
-      if (signal?.aborted) return;
-      if (updated.client_portal.id !== requestedPortalId || !updated.is_active) return;
-      setDealHours(updated);
-      writePortalCache(CACHE_DEAL_HOURS, requestedPortalId, updated);
-    } catch (e) {
-      if (!isAbortError(e)) undefined;
-    }
+  async function refreshDealHoursInBackground(_bindingId: number, _signal?: AbortSignal) {
+    // Hours are managed in Django admin; no CRM refresh.
+    return;
   }
 
   useEffect(() => {
@@ -448,7 +435,6 @@ export function ClientProjects() {
           clearPortalCache(CACHE_DEAL_HOURS, requestedPortalId);
         }
         if (portal) setPortalInfo(portal);
-        if (scopedMine?.id) void refreshDealHoursInBackground(scopedMine.id, signal);
       } else {
         const bindings = unwrapList(hoursData as DealBinding[] | Paginated<DealBinding>);
         const binding =

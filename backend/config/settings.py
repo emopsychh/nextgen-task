@@ -220,6 +220,11 @@ BITRIX_DEAL_STAGE_REPORT_REVIEW = os.getenv("BITRIX_DEAL_STAGE_REPORT_REVIEW", "
 BITRIX_DEAL_STAGE_ACT_SIGNING = os.getenv("BITRIX_DEAL_STAGE_ACT_SIGNING", "").strip()
 PUBLIC_APP_URL = os.getenv("PUBLIC_APP_URL", "http://localhost:8000").rstrip("/")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+# Agency Bitrix task/project/comment/file/timer mirror. Off: Nextgen DB only.
+# Client portals keep Bitrix OAuth + app install regardless of this flag.
+BITRIX_AGENCY_TASK_SYNC = os.getenv("BITRIX_AGENCY_TASK_SYNC", "0") == "1"
+# Pull/push CRM deal hours & stage moves. Off: hours edited in Django admin / local billing.
+BITRIX_CRM_SYNC = os.getenv("BITRIX_CRM_SYNC", "0") == "1"
 DEV_AUTH_BYPASS = os.getenv("DEV_AUTH_BYPASS", "0") == "1"
 if DEV_AUTH_BYPASS and not DEBUG:
     from django.core.exceptions import ImproperlyConfigured

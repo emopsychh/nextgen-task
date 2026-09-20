@@ -61,6 +61,8 @@ logger = logging.getLogger(__name__)
 
 
 def enqueue_bitrix_sync(task_id: int) -> None:
+    if not settings.BITRIX_AGENCY_TASK_SYNC:
+        return
     if settings.CELERY_TASK_ALWAYS_EAGER:
         sync_task_to_bitrix(task_id)
     else:
@@ -68,6 +70,8 @@ def enqueue_bitrix_sync(task_id: int) -> None:
 
 
 def enqueue_project_sync(project_id: int) -> None:
+    if not settings.BITRIX_AGENCY_TASK_SYNC:
+        return
     if settings.CELERY_TASK_ALWAYS_EAGER:
         sync_project_to_bitrix(project_id)
     else:
@@ -75,6 +79,8 @@ def enqueue_project_sync(project_id: int) -> None:
 
 
 def enqueue_comment_sync(comment_id: int) -> None:
+    if not settings.BITRIX_AGENCY_TASK_SYNC:
+        return
     if settings.CELERY_TASK_ALWAYS_EAGER:
         sync_comment_to_bitrix(comment_id)
     else:
@@ -88,6 +94,8 @@ def enqueue_task_pull(
     include_comments: bool = True,
     include_files: bool = False,
 ) -> None:
+    if not settings.BITRIX_AGENCY_TASK_SYNC:
+        return
     # In eager/dev mode there is no worker; never turn an interactive GET into
     # a 30-second Bitrix call. Webhooks and the next normal sync still catch up.
     if settings.CELERY_TASK_ALWAYS_EAGER:
@@ -1081,6 +1089,8 @@ class AttachmentViewSet(viewsets.ModelViewSet):
             attachment.original_name = name
             attachment.save(update_fields=["original_name"])
         publish_task_event(task, kind="attachment")
+        if not settings.BITRIX_AGENCY_TASK_SYNC:
+            return
         from board.tasks import sync_attachment_to_bitrix
 
         # Never fail the HTTP upload if Bitrix/Celery is down

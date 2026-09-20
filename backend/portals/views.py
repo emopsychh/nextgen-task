@@ -246,6 +246,16 @@ class BitrixAuthView(APIView):
                     auth, domain=domain, update_oauth_tokens=True
                 )
             bitrix_user = upsert_bitrix_user(portal, user_data)
+            if portal.role == Portal.Role.AGENCY:
+                return Response(
+                    {
+                        "detail": (
+                            "Вход сотрудников агентства — по логину и паролю "
+                            "(/api/auth/login/), не через Bitrix OAuth."
+                        )
+                    },
+                    status=403,
+                )
             # event.bind is slow (many Bitrix REST calls) — never block JWT issue.
             try:
                 from board.tasks import ensure_portal_event_bindings
@@ -263,6 +273,59 @@ class BitrixAuthView(APIView):
             {
                 **tokens,
                 "portal": PortalSerializer(portal).data,
+                "user": {
+                    "id": bitrix_user.id,
+                    "bitrix_id": bitrix_user.bitrix_id,
+                    "display_name": bitrix_user.display_name,
+                    "name": bitrix_user.name,
+                    "last_name": bitrix_user.last_name,
+                    "email": bitrix_user.email,
+                    "avatar_url": bitrix_user.avatar_url,
+                    "is_admin": bitrix_user.is_admin,
+                },
+            }
+        )
+
+
+class PasswordAuthView(APIView):
+    """Agency staff login with username/password issued in Django admin."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        username = str(request.data.get("username") or "").strip()
+        password = str(request.data.get("password") or "")
+        if not username or not password:
+            return Response(
+                {"detail": "Укажите логин и пароль"},
+                status=400,
+            )
+
+        from portals.models import BitrixUser
+
+        bitrix_user = (
+            BitrixUser.objects.select_related("portal")
+            .filter(username__iexact=username)
+            .first()
+        )
+        if (
+            not bitrix_user
+            or not bitrix_user.check_password(password)
+            or not bitrix_user.portal.is_active
+        ):
+            return Response({"detail": "Неверный логин или пароль"}, status=401)
+        if bitrix_user.portal.role != Portal.Role.AGENCY:
+            return Response(
+                {"detail": "Парольный вход только для сотрудников агентства"},
+                status=403,
+            )
+
+        tokens = issue_tokens(bitrix_user.portal, bitrix_user)
+        return Response(
+            {
+                **tokens,
+                "portal": PortalSerializer(bitrix_user.portal).data,
                 "user": {
                     "id": bitrix_user.id,
                     "bitrix_id": bitrix_user.bitrix_id,
@@ -547,14 +610,13 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     "detail": (
-                        "Выберите сделку в списке. "
-                        "Привязываются только сделки этого портала."
+                        "Укажите deal_id. Сделки и часы задаются в админке "
+                        "или этим API без синхронизации CRM."
                     )
                 },
                 status=400,
             )
 
-        # Explicit deal_id — must match portal link UF and stay exclusive.
         from portals.deal_resolve import (
             cache_company_and_group_on_link,
             company_portal_link_field,
@@ -563,13 +625,13 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         )
 
         meta = {
-            "deal_title": "",
-            "category_id": "",
-            "paid_hours": None,
-            "remaining_hours": None,
+            "deal_title": str(request.data.get("deal_title") or "").strip(),
+            "category_id": str(request.data.get("category_id") or "").strip(),
+            "paid_hours": request.data.get("paid_hours"),
+            "remaining_hours": request.data.get("remaining_hours"),
         }
         deal = None
-        if request.user.portal.access_token:
+        if settings.BITRIX_CRM_SYNC and request.user.portal.access_token:
             try:
                 bx = BitrixClient(request.user.portal)
                 deal = bx.get_deal(deal_id)
@@ -621,8 +683,8 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
             client_portal=client_portal,
             deal_id=deal_id,
             defaults={
-                "deal_title": meta["deal_title"],
-                "category_id": meta["category_id"],
+                "deal_title": meta["deal_title"] or "",
+                "category_id": meta["category_id"] or "",
                 "paid_hours": meta["paid_hours"],
                 "remaining_hours": meta["remaining_hours"],
                 "is_active": True,
@@ -652,7 +714,7 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         refresh = request.data.get("refresh") in (True, "1", "true", "yes")
         is_active = request.data.get("is_active")
 
-        if refresh or "bitrix_company_id" in request.data:
+        if (refresh or "bitrix_company_id" in request.data) and settings.BITRIX_CRM_SYNC:
             # Re-resolve by portal link (company id no longer used)
             try:
                 binding = resolve_or_refresh_binding(
@@ -682,6 +744,13 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
         """Open CRM deals whose portal-link points at this client portal only."""
         if not getattr(request.user, "is_agency", False):
             return Response({"detail": "Только для агентства"}, status=403)
+        if not settings.BITRIX_CRM_SYNC:
+            return Response(
+                {
+                    "detail": "CRM sync отключён — сделки задаются в Django admin",
+                    "results": [],
+                }
+            )
         client_id = request.query_params.get("client_portal_id")
         if client_id is None:
             return Response({"detail": "client_portal_id required"}, status=400)
@@ -759,11 +828,15 @@ class PortalDealBindingViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="refresh-hours")
     def refresh_hours(self, request, pk=None):
         binding = self.get_object()
+        if not can_access_client_portal(request.user, binding.client_portal):
+            return Response({"detail": "No access"}, status=403)
+        if not settings.BITRIX_CRM_SYNC:
+            # Admin-managed hours — return cached row.
+            return Response(PortalDealBindingSerializer(binding).data)
+
         agency = binding.agency_portal
         if not agency or not agency.access_token:
             return Response({"detail": "Agency portal has no Bitrix token"}, status=400)
-        if not can_access_client_portal(request.user, binding.client_portal):
-            return Response({"detail": "No access"}, status=403)
 
         try:
             binding = resolve_or_refresh_binding(
@@ -900,6 +973,10 @@ class BitrixEventView(APIView):
                 return Response(
                     {"ok": False, "reason": "app_token_not_configured"}, status=403
                 )
+
+        # Agency task mirror disabled — ignore inbound agency events.
+        if portal.role == Portal.Role.AGENCY and not settings.BITRIX_AGENCY_TASK_SYNC:
+            return Response({"ok": True, "ignored": "agency_sync_disabled"})
 
         # Do NOT overwrite Portal OAuth from event auth — Bitrix attaches the
         # event actor's token, which would churn RESPONSIBLE_ID / API identity

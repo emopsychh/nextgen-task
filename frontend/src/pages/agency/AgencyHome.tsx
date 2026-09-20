@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, isAbortError, unwrapList, type DealBinding, type Portal } from "../../api/types";
+import { api, unwrapList, type DealBinding, type Portal } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { DealHoursCard } from "../../components/DealHoursCard";
-import { DealPickModal, type DealCandidate } from "../../components/DealPickModal";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { setPortalLabel } from "../../lib/portalLabelCache";
@@ -23,13 +22,6 @@ type LinkRow = {
 type PendingUnlink = {
   linkId: number;
   name: string;
-};
-
-type DealPickerState = {
-  portalId: number;
-  portalName: string;
-  portalDomain: string;
-  currentDealId?: string | null;
 };
 
 function initials(portal: Portal): string {
@@ -60,14 +52,6 @@ export function AgencyHome() {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [renaming, setRenaming] = useState(false);
-  const [dealBusyId, setDealBusyId] = useState<number | null>(null);
-  const [dealPicker, setDealPicker] = useState<DealPickerState | null>(null);
-  const [dealCandidates, setDealCandidates] = useState<DealCandidate[]>([]);
-  const [dealPickLoading, setDealPickLoading] = useState(false);
-  const [dealPickError, setDealPickError] = useState<string | null>(null);
-  const [dealConfirmId, setDealConfirmId] = useState<string | null>(null);
-  const bindingsRef = useRef(bindings);
-  bindingsRef.current = bindings;
 
   const available = useMemo(
     () => portals.filter((p) => !links.some((l) => l.client_portal.id === p.id)),
@@ -141,97 +125,9 @@ export function AgencyHome() {
     setBindings(readPortalCache<DealBinding[]>(CACHE_AGENCY_BINDINGS, agencyId) || []);
   }, [agencyId]);
 
-  const refreshAllDealHours = useCallback(async (signal?: AbortSignal) => {
-    if (!token) return;
-    const active = bindingsRef.current.filter((b) => b.is_active);
-    if (!active.length) return;
-    // Stagger CRM calls so the home page does not storm Bitrix.
-    for (const b of active) {
-      if (signal?.aborted) return;
-      try {
-        await api(
-          `/api/deal-bindings/${b.id}/refresh-hours/`,
-          { method: "POST", signal },
-          token
-        );
-      } catch (e) {
-        if (isAbortError(e)) return;
-        // ignore per-binding errors
-      }
-      if (signal?.aborted) return;
-      await new Promise<void>((resolve) => {
-        if (signal?.aborted) {
-          resolve();
-          return;
-        }
-        const t = window.setTimeout(resolve, 450);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            window.clearTimeout(t);
-            resolve();
-          },
-          { once: true }
-        );
-      });
-    }
-    if (signal?.aborted) return;
-    try {
-      const dealData = await api<DealBinding[] | { results: DealBinding[] }>(
-        "/api/deal-bindings/?is_active=true",
-        { signal },
-        token
-      );
-      if (!signal?.aborted) {
-        const list = unwrapList(dealData).filter(
-          (binding) => binding.agency_portal === agencyId && binding.is_active
-        );
-        setBindings(list);
-        writePortalCache(CACHE_AGENCY_BINDINGS, agencyId, list);
-      }
-    } catch (e) {
-      if (!isAbortError(e)) undefined;
-    }
-  }, [token, agencyId]);
-
   useEffect(() => {
     void load().catch((e) => setError(e instanceof Error ? e.message : "Ошибка загрузки"));
   }, [load]);
-
-  useEffect(() => {
-    if (!token) return;
-    const ac = new AbortController();
-    let lastRefreshAt = 0;
-    const COOLDOWN_MS = 20000;
-
-    async function tick(force = false) {
-      if (ac.signal.aborted || document.visibilityState === "hidden") return;
-      if (!bindingsRef.current.some((b) => b.is_active)) return;
-      const now = Date.now();
-      if (!force && now - lastRefreshAt < COOLDOWN_MS) return;
-      lastRefreshAt = now;
-      try {
-        await refreshAllDealHours(ac.signal);
-      } catch (e) {
-        if (!isAbortError(e)) undefined;
-      }
-    }
-
-    const interval = window.setInterval(() => void tick(true), 45000);
-    const onFocus = () => void tick(false);
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
-    // First refresh after paint — not immediately on mount.
-    const first = window.setTimeout(() => void tick(true), 6000);
-
-    return () => {
-      ac.abort();
-      window.clearInterval(interval);
-      window.clearTimeout(first);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onFocus);
-    };
-  }, [token, refreshAllDealHours]);
 
   async function linkClient(e: React.FormEvent) {
     e.preventDefault();
@@ -325,76 +221,12 @@ export function AgencyHome() {
     }
   }
 
-  async function openDealPicker(portal: Portal, currentDealId?: string | null) {
-    if (!token) return;
-    const portalName = portal.name || portal.domain;
-    setError(null);
-    setDealPickError(null);
-    setDealCandidates([]);
-    setDealConfirmId(null);
-    setDealBusyId(portal.id);
-    setDealPicker({
-      portalId: portal.id,
-      portalName,
-      portalDomain: portal.domain,
-      currentDealId: currentDealId || null,
-    });
-    setDealPickLoading(true);
-    try {
-      const data = await api<{ results: DealCandidate[] }>(
-        `/api/deal-bindings/candidates/?client_portal_id=${portal.id}`,
-        {},
-        token
-      );
-      setDealCandidates(data.results || []);
-    } catch (err) {
-      setDealPickError(err instanceof Error ? err.message : "Не удалось загрузить сделки");
-    } finally {
-      setDealPickLoading(false);
-      setDealBusyId(null);
-    }
-  }
-
-  function closeDealPicker() {
-    if (dealConfirmId) return;
-    setDealPicker(null);
-    setDealCandidates([]);
-    setDealPickError(null);
-  }
-
-  async function bindSelectedDeal(dealId: string) {
-    if (!token || !dealPicker) return;
-    setDealConfirmId(dealId);
-    setDealPickError(null);
-    try {
-      await api(
-        "/api/deal-bindings/",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            client_portal_id: dealPicker.portalId,
-            deal_id: dealId,
-          }),
-        },
-        token
-      );
-      toast.show("Пакет часов этого клиента обновлён", "Сделка привязана");
-      setDealPicker(null);
-      setDealCandidates([]);
-      await load();
-    } catch (err) {
-      setDealPickError(err instanceof Error ? err.message : "Не удалось привязать сделку");
-    } finally {
-      setDealConfirmId(null);
-    }
-  }
-
   return (
     <div className="clients-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">Клиенты</h1>
-          <p className="page-sub">Порталы Bitrix и сделки сопровождения</p>
+          <p className="page-sub">Порталы клиентов и пакеты часов</p>
         </div>
         <div className="stat-pill">
           <span className="stat-pill-value">
@@ -425,8 +257,8 @@ export function AgencyHome() {
         <div className="how-step">
           <span className="how-num">3</span>
           <div>
-            <strong>Выберите сделку</strong>
-            <p>По ссылке на портал в компании CRM</p>
+            <strong>Задайте пакет часов</strong>
+            <p>В Django admin → Portal deal bindings</p>
           </div>
         </div>
       </section>
@@ -498,7 +330,6 @@ export function AgencyHome() {
               const p = link.client_portal;
               const title = p.name || p.domain;
               const binding = bindingByPortal.get(p.id);
-              const dealBusy = dealBusyId === p.id;
               const hasDeal = Boolean(binding);
               return (
                 <article
@@ -597,7 +428,7 @@ export function AgencyHome() {
                     {hasDeal && binding ? (
                       <div className="deal-bind-status">
                         <div className="deal-bind-status-text">
-                          <span className="deal-bind-kicker">Сделка сопровождения</span>
+                          <span className="deal-bind-kicker">Пакет часов</span>
                           <strong className="deal-bind-deal-name">
                             {binding.deal_title || `Сделка #${binding.deal_id}`}
                           </strong>
@@ -606,29 +437,11 @@ export function AgencyHome() {
                           ) : null}
                         </div>
                         <DealHoursCard binding={binding} audience="agency" />
-                        <button
-                          type="button"
-                          className="btn btn-ghost deal-bind-change"
-                          disabled={dealBusy}
-                          onClick={() => void openDealPicker(p, binding.deal_id)}
-                        >
-                          {dealBusy ? "Загрузка…" : "Сменить сделку"}
-                        </button>
                       </div>
                     ) : (
-                      <>
-                        <p className="deal-bind-hint muted">
-                          Покажем сделки компании, где в CRM указана ссылка на этот портал
-                        </p>
-                        <button
-                          type="button"
-                          className="btn btn-accent"
-                          disabled={dealBusy}
-                          onClick={() => void openDealPicker(p)}
-                        >
-                          {dealBusy ? "Загрузка…" : "Выбрать сделку"}
-                        </button>
-                      </>
+                      <p className="deal-bind-hint muted">
+                        Пакет часов задаётся в админке Django (Portal deal bindings).
+                      </p>
                     )}
                   </div>
                 </article>
@@ -649,19 +462,6 @@ export function AgencyHome() {
           if (!unlinking) setPendingUnlink(null);
         }}
         onConfirm={() => void confirmUnlink()}
-      />
-
-      <DealPickModal
-        open={Boolean(dealPicker)}
-        portalName={dealPicker?.portalName || ""}
-        portalDomain={dealPicker?.portalDomain || ""}
-        loading={dealPickLoading}
-        error={dealPickError}
-        deals={dealCandidates}
-        currentDealId={dealPicker?.currentDealId}
-        confirmingId={dealConfirmId}
-        onClose={closeDealPicker}
-        onSelect={(dealId) => void bindSelectedDeal(dealId)}
       />
     </div>
   );

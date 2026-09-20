@@ -212,6 +212,10 @@ def schedule_deal_stage_move(
     portal_id: int | None, stage_key: str, *, binding_id: int | None = None
 ) -> None:
     """Enqueue after commit — never block the HTTP request on Bitrix CRM."""
+    from django.conf import settings
+
+    if not getattr(settings, "BITRIX_CRM_SYNC", False):
+        return
     if not portal_id:
         return
 

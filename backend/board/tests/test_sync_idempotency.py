@@ -27,6 +27,7 @@ def _mock_client() -> MagicMock:
     return client
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, BITRIX_AGENCY_TASK_SYNC=True)
 class SyncTaskIdempotencyTests(TestCase):
     def setUp(self):
         group_patch = patch(

@@ -1,15 +1,17 @@
 import { Brand } from "../components/Brand";
 import { useAuth } from "../auth/AuthContext";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 
 /** Dev-only role buttons — never shown in production builds. */
 const showDevLogin =
   import.meta.env.DEV === true || import.meta.env.VITE_DEV_AUTH === "1";
 
 export function LoginPage({ bootError }: { bootError?: string | null }) {
-  const { loginDev } = useAuth();
+  const { loginDev, loginPassword } = useAuth();
   const [error, setError] = useState<string | null>(bootError || null);
   const [busy, setBusy] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
 
   async function enter(role: "agency" | "client") {
     setBusy(true);
@@ -23,13 +25,55 @@ export function LoginPage({ bootError }: { bootError?: string | null }) {
     }
   }
 
+  async function onPasswordSubmit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await loginPassword(username.trim(), password);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ошибка входа");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="login-screen">
       <div className="login-card stack">
         <Brand />
         <p className="muted" style={{ marginTop: -4 }}>
-          Откройте приложение из меню Битрикс24 — вход выполнится автоматически.
+          Сотрудники агентства — логин и пароль. Клиенты открывают приложение из меню
+          Битрикс24.
         </p>
+
+        <form className="stack" onSubmit={(e) => void onPasswordSubmit(e)}>
+          <label className="field">
+            <span>Логин</span>
+            <input
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              disabled={busy}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Пароль</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={busy}
+              required
+            />
+          </label>
+          <button className="btn btn-primary" type="submit" disabled={busy}>
+            {busy ? "Входим…" : "Войти"}
+          </button>
+        </form>
+
         {(error || bootError) && (
           <div className="error-banner">
             {error || bootError}

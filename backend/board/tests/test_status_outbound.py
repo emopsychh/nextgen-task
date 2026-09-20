@@ -42,6 +42,7 @@ def _mock_client(
     return client
 
 
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True, BITRIX_AGENCY_TASK_SYNC=True)
 class OutboundStatusPushTests(TestCase):
     def setUp(self):
         group_patch = patch(

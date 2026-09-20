@@ -18,6 +18,14 @@ from portals.bitrix import (
 from board.titles import strip_portal_title_prefix
 
 
+def _agency_task_sync_enabled() -> bool:
+    return bool(getattr(settings, "BITRIX_AGENCY_TASK_SYNC", False))
+
+
+def _crm_sync_enabled() -> bool:
+    return bool(getattr(settings, "BITRIX_CRM_SYNC", False))
+
+
 def _extract_bitrix_id(result) -> str:
     if not isinstance(result, dict):
         return ""
@@ -732,6 +740,8 @@ def sync_project_to_bitrix(self, project_id: int):
     App Project → agency Bitrix parent task inside company workgroup (GROUP_ID).
     Not duplicated to the client Bitrix portal.
     """
+    if not _agency_task_sync_enabled():
+        return {"ok": True, "skipped": "agency_sync_disabled"}
     try:
         return _do_sync_project_to_bitrix(project_id)
     except BitrixAPIError as exc:
@@ -871,6 +881,8 @@ def sync_task_to_bitrix(self, task_id: int):
       1) create Bitrix row (if needed) and *commit* agency_bitrix_task_id
       2) push fields / RESPONSIBLE / status (webhooks now find the same row)
     """
+    if not _agency_task_sync_enabled():
+        return {"ok": True, "skipped": "agency_sync_disabled"}
     from django.db import transaction
 
     from board.models import Task
@@ -1004,6 +1016,8 @@ def sync_task_to_bitrix(self, task_id: int):
 @shared_task(bind=True, max_retries=5, default_retry_delay=5)
 def sync_comment_to_bitrix(self, comment_id: int):
     """Post a chat message into linked Bitrix task(s)."""
+    if not _agency_task_sync_enabled():
+        return {"ok": True, "skipped": "agency_sync_disabled"}
     from board.models import Comment
 
     try:
@@ -1164,6 +1178,8 @@ def _notify_comment_participants(comment, agency, task) -> None:
 @shared_task(bind=True, max_retries=3, default_retry_delay=15)
 def sync_attachment_to_bitrix(self, attachment_id: int):
     """Upload a local attachment to Bitrix and attach to linked task(s). Prefer agency subtask."""
+    if not _agency_task_sync_enabled():
+        return {"ok": True, "skipped": "agency_sync_disabled"}
     from board.file_sync import upload_and_attach
     from board.models import Attachment
     from board.realtime import publish_task_event
@@ -1279,6 +1295,8 @@ def pull_task_from_bitrix(
     include_files: bool = False,
 ):
     """Background Bitrix catch-up; never hold an interactive HTTP request."""
+    if not _agency_task_sync_enabled():
+        return {"ok": True, "skipped": "agency_sync_disabled"}
     from board.models import Task
     from board.realtime import publish_task_event
 
@@ -1353,7 +1371,7 @@ def post_time_entry_to_deal(self, entry_id: int):
 
     agency = link.agency_portal
     binding = get_active_binding(agency_portal=agency, client_portal=client_portal)
-    if not binding:
+    if not binding and _crm_sync_enabled():
         try:
             binding = resolve_or_refresh_binding(
                 agency_portal=agency,
@@ -1380,7 +1398,7 @@ def post_time_entry_to_deal(self, entry_id: int):
         return {"ok": True, "skipped": "already_billed"}
 
     seconds = int(entry.duration_seconds)
-    if settings.DEV_AUTH_BYPASS or not agency.access_token:
+    if settings.DEV_AUTH_BYPASS or not agency.access_token or not _crm_sync_enabled():
         from decimal import Decimal
 
         if binding.remaining_hours is not None:
@@ -1598,6 +1616,8 @@ def cleanup_bitrix_elapsed_items(self, task_id: int, elapsed_ids: list):
 @shared_task(bind=True, max_retries=3, default_retry_delay=15)
 def sync_timer_to_bitrix(self, entry_id: int, action: str = "set"):
     """Push TimeEntry into Bitrix «Учёт времени» via task.elapseditem.add/update."""
+    if not _agency_task_sync_enabled():
+        return {"ok": True, "skipped": "agency_sync_disabled"}
     from django.db import transaction
 
     from board.models import TimeEntry
@@ -1782,10 +1802,11 @@ def ensure_portal_event_bindings(self, portal_id: int):
     from portals.models import Portal
     from board.status_sync import ensure_task_event_bindings
 
-    try:
-        portal = Portal.objects.get(pk=portal_id)
-    except Portal.DoesNotExist:
+    portal = Portal.objects.filter(pk=portal_id).first()
+    if not portal:
         return {"ok": False, "reason": "missing"}
+    if portal.role == Portal.Role.AGENCY and not _agency_task_sync_enabled():
+        return {"ok": True, "skipped": "agency_sync_disabled"}
     try:
         ok = ensure_task_event_bindings(portal)
         return {"ok": bool(ok), "portal_id": portal_id}

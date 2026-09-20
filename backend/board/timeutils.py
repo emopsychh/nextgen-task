@@ -43,6 +43,9 @@ def enqueue_timer_bitrix_sync(entry_id: int, action: str = "set") -> None:
     In production, wait for DB commit so the Celery worker sees the row.
     Under CELERY_TASK_ALWAYS_EAGER (tests), run immediately.
     """
+    if not settings.BITRIX_AGENCY_TASK_SYNC:
+        return
+
     from django.db import transaction
 
     from board.tasks import sync_timer_to_bitrix
