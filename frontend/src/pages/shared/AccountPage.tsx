@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { api } from "../../api/types";
+import { useEffect, useState, type FormEvent } from "react";
+import { api, type Portal } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
@@ -13,16 +13,35 @@ function roleLabel(role: string | undefined): string {
 export function AccountPage() {
   const { token, user, portal, logout } = useAuth();
   const toast = useFlashToast();
+  const [portalInfo, setPortalInfo] = useState<Portal | null>(portal);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    setPortalInfo(portal);
+  }, [portal]);
+
+  useEffect(() => {
+    if (!token || !portal?.id) return;
+    let cancelled = false;
+    void api<Portal>(`/api/portals/${portal.id}/`, {}, token)
+      .then((data) => {
+        if (!cancelled) setPortalInfo(data);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, portal?.id]);
+
   const displayName =
     (user?.display_name || [user?.name, user?.last_name].filter(Boolean).join(" ") || "").trim() ||
     "—";
-  const portalTitle = (portal?.name || portal?.domain || "").trim() || "—";
+  const portalTitle = (portalInfo?.name || portalInfo?.domain || "").trim() || "—";
+  const organization = (portalInfo?.organization || "").trim();
 
   async function onChangePassword(e: FormEvent) {
     e.preventDefault();
@@ -93,20 +112,20 @@ export function AccountPage() {
               <dt>Кабинет</dt>
               <dd>{portalTitle}</dd>
             </div>
-            {portal?.organization?.trim() ? (
+            {organization ? (
               <div>
                 <dt>Организация</dt>
-                <dd>{portal.organization.trim()}</dd>
+                <dd>{organization}</dd>
               </div>
             ) : null}
             <div>
               <dt>Роль</dt>
-              <dd>{roleLabel(portal?.role)}</dd>
+              <dd>{roleLabel(portalInfo?.role || portal?.role)}</dd>
             </div>
-            {portal?.domain ? (
+            {portalInfo?.domain ? (
               <div>
                 <dt>Портал</dt>
-                <dd>{portal.domain}</dd>
+                <dd>{portalInfo.domain}</dd>
               </div>
             ) : null}
           </dl>
