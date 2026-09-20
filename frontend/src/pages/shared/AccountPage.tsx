@@ -4,12 +4,6 @@ import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { useFlashToast } from "../../hooks/useFlashToast";
 
-function roleLabel(role: string | undefined): string {
-  if (role === "agency") return "Агентство";
-  if (role === "client") return "Клиент";
-  return "—";
-}
-
 export function AccountPage() {
   const { token, user, portal, logout } = useAuth();
   const toast = useFlashToast();
@@ -37,11 +31,10 @@ export function AccountPage() {
     };
   }, [token, portal?.id]);
 
-  const displayName =
-    (user?.display_name || [user?.name, user?.last_name].filter(Boolean).join(" ") || "").trim() ||
-    "—";
-  const portalTitle = (portalInfo?.name || portalInfo?.domain || "").trim() || "—";
   const organization = (portalInfo?.organization || "").trim();
+  const email = (user?.email || "").trim();
+  const username = (user?.username || "").trim();
+  const hasProfile = Boolean(username || email || organization);
 
   async function onChangePassword(e: FormEvent) {
     e.preventDefault();
@@ -91,45 +84,31 @@ export function AccountPage() {
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
       <div className="account-grid">
-        <section className="account-card">
-          <h2 className="section-title">Профиль</h2>
-          <dl className="account-meta">
-            <div>
-              <dt>Имя</dt>
-              <dd>{displayName}</dd>
-            </div>
-            {user?.username ? (
-              <div>
-                <dt>Логин</dt>
-                <dd>{user.username}</dd>
-              </div>
-            ) : null}
-            <div>
-              <dt>Email</dt>
-              <dd>{user?.email?.trim() || "—"}</dd>
-            </div>
-            <div>
-              <dt>Кабинет</dt>
-              <dd>{portalTitle}</dd>
-            </div>
-            {organization ? (
-              <div>
-                <dt>Организация</dt>
-                <dd>{organization}</dd>
-              </div>
-            ) : null}
-            <div>
-              <dt>Роль</dt>
-              <dd>{roleLabel(portalInfo?.role || portal?.role)}</dd>
-            </div>
-            {portalInfo?.domain ? (
-              <div>
-                <dt>Портал</dt>
-                <dd>{portalInfo.domain}</dd>
-              </div>
-            ) : null}
-          </dl>
-        </section>
+        {hasProfile ? (
+          <section className="account-card">
+            <h2 className="section-title">Профиль</h2>
+            <dl className="account-meta">
+              {organization ? (
+                <div>
+                  <dt>Организация</dt>
+                  <dd>{organization}</dd>
+                </div>
+              ) : null}
+              {username ? (
+                <div>
+                  <dt>Логин</dt>
+                  <dd>{username}</dd>
+                </div>
+              ) : null}
+              {email ? (
+                <div>
+                  <dt>Email</dt>
+                  <dd>{email}</dd>
+                </div>
+              ) : null}
+            </dl>
+          </section>
+        ) : null}
 
         <section className="account-card">
           <h2 className="section-title">Смена пароля</h2>
