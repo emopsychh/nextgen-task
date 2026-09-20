@@ -247,11 +247,6 @@ export function ClientProjects() {
     return () => window.removeEventListener(PORTAL_LABEL_EVENT, onLabel);
   }, [isAgency, portalId]);
 
-  async function refreshDealHoursInBackground(_bindingId: number, _signal?: AbortSignal) {
-    // Hours are managed in Django admin; no CRM refresh.
-    return;
-  }
-
   useEffect(() => {
     // Clear first: an absent cache must not mean "keep the previous client".
     setDealHours(null);
