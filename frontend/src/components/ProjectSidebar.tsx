@@ -38,7 +38,7 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [resolvedPortalId, setResolvedPortalId] = useState<number | null>(null);
   const [clientLabel, setClientLabel] = useState("");
-  const [reportsAttention, setReportsAttention] = useState(0);
+  const [, setReportsAttention] = useState(0);
   const [pendingRequests, setPendingRequests] = useState(0);
   const lastPortalRef = useRef<number | null>(null);
 
@@ -366,13 +366,16 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
 
   const feedTo = isAgency ? `/portals/${contextPortalId}` : "/";
   const projectsTo = isAgency ? `/portals/${contextPortalId}/projects` : "/projects";
+  const tasksTo = isAgency ? `/portals/${contextPortalId}/tasks` : "/tasks";
   const onFeed =
     location.pathname === feedTo ||
     (!isAgency && location.pathname === "/") ||
     (isAgency && location.pathname === `/portals/${contextPortalId}`);
-  const onProjectsList =
+  const onWorkList =
     location.pathname === projectsTo ||
-    location.pathname === `/portals/${contextPortalId}/projects`;
+    location.pathname === tasksTo ||
+    location.pathname === `/portals/${contextPortalId}/projects` ||
+    location.pathname === `/portals/${contextPortalId}/tasks`;
 
   return (
     <div className={`project-sidebar${collapsed ? " is-collapsed" : ""}`} data-tour="tour-sidebar">
@@ -393,11 +396,11 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
         <span className="feed-nav-label">Обзор</span>
       </NavLink>
       <NavLink
-        to={projectsTo}
+        to={tasksTo}
         end
-        data-tip="Проекты"
+        data-tip="Задачи"
         className={({ isActive }) =>
-          `feed-nav-item${isActive || onProjectsList ? " active" : ""}`
+          `feed-nav-item${isActive || onWorkList ? " active" : ""}`
         }
       >
         <span className="feed-nav-icon" aria-hidden>
@@ -410,9 +413,9 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
             />
           </svg>
         </span>
-        <span className="feed-nav-label">Проекты</span>
+        <span className="feed-nav-label">Задачи</span>
         {projectsUnseen > 0 ? (
-          <span className="feed-nav-count" aria-label={`${projectsUnseen} новых проектов`}>
+          <span className="feed-nav-count" aria-label={`${projectsUnseen} обновлений по задачам`}>
             {projectsUnseen > 99 ? "99+" : projectsUnseen}
           </span>
         ) : null}
@@ -433,19 +436,10 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
               />
             </svg>
           </span>
-          <span className="feed-nav-label">На согласование</span>
-          {pendingRequests > 0 ? (
-            <span className="feed-nav-count" aria-label={`${pendingRequests} заявок`}>
-              {pendingRequests > 99 ? "99+" : pendingRequests}
-            </span>
-          ) : null}
+          <span className="feed-nav-label">Планирование</span>
         </NavLink>
       ) : null}
-      <NavLink
-        to={isAgency ? `/portals/${contextPortalId}/reports` : "/reports"}
-        data-tip="Отчёты"
-        className={({ isActive }) => `feed-nav-item${isActive ? " active" : ""}`}
-      >
+      <span className="feed-nav-item is-locked" data-tip="Скоро заработает" aria-disabled="true">
         <span className="feed-nav-icon" aria-hidden>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
             <path
@@ -457,13 +451,11 @@ export function ProjectSidebarNav({ collapsed = false }: Props) {
             <path d="M9 9h6M9 13h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
         </span>
-        <span className="feed-nav-label">Отчёты</span>
-        {reportsAttention > 0 ? (
-          <span className="feed-nav-count" aria-label={`${reportsAttention} требуют внимания`}>
-            {reportsAttention > 99 ? "99+" : reportsAttention}
-          </span>
-        ) : null}
-      </NavLink>
+        <span className="feed-nav-label">
+          Отчёты
+          <span className="feed-nav-soon">Скоро заработает</span>
+        </span>
+      </span>
       {isAgency ? (
         <NavLink
           to={`/portals/${contextPortalId}/backlog`}

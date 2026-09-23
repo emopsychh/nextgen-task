@@ -1,10 +1,8 @@
 import { Link } from "react-router-dom";
 import type { Task, TaskStatus } from "../../api/types";
 import { DueDatePicker } from "../DueDatePicker";
-import { FlameIcon } from "../icons";
 import { formatDateTime, formatDueFull } from "../../lib/format";
 import { formatRuDateTime } from "../../lib/dates";
-import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import type { DueTone } from "../../lib/dates";
 import { AutoGrowTextarea } from "./AutoGrowTextarea";
 import { TaskTimer } from "./TaskTimer";
@@ -12,22 +10,14 @@ import { TaskTimer } from "./TaskTimer";
 type Props = {
   task: Task;
   creator: string;
-  overdue: boolean;
   due: { label: string; tone: DueTone; detail?: string };
   canManage: boolean;
   canChangeStatus: boolean;
   canEditDueDate: boolean;
   saveBusy: boolean;
-  draftTitle: string;
-  draftDescription: string;
-  onDraftTitle: (value: string) => void;
-  onDraftDescription: (value: string) => void;
-  onCommitTitle: () => void;
-  onCommitDescription: () => void;
   onSetStatus: (status: TaskStatus) => void;
   onRequestComplete: () => void;
   onSetDueDate: (iso: string) => void;
-  onToggleImportant: () => void;
   onToggleAwaitingClient?: () => void;
   draftOutcome?: string;
   onDraftOutcome?: (value: string) => void;
@@ -42,22 +32,14 @@ type Props = {
 export function TaskSummaryCard({
   task,
   creator,
-  overdue,
   due,
   canManage,
   canChangeStatus,
   canEditDueDate,
   saveBusy,
-  draftTitle,
-  draftDescription,
-  onDraftTitle,
-  onDraftDescription,
-  onCommitTitle,
-  onCommitDescription,
   onSetStatus,
   onRequestComplete,
   onSetDueDate,
-  onToggleImportant,
   onToggleAwaitingClient,
   draftOutcome = "",
   onDraftOutcome,
@@ -67,91 +49,14 @@ export function TaskSummaryCard({
   dueTimeZone,
   onDelete,
 }: Props) {
-  const important = Boolean(task.is_important);
-  const isWorking = Boolean(task.is_working);
   const awaitingClient = Boolean(task.awaiting_client);
   return (
     <aside
-      className={`task-meta-pane${canManage ? " is-editable" : ""}${task.status === "done" ? " is-done" : ""}`}
+      className={`task-meta-pane${task.status === "done" ? " is-done" : ""}`}
     >
-      <div className="task-meta-title-row">
-        {canManage ? (
-          <input
-            className={`task-meta-title-input${task.status === "done" ? " is-struck" : ""}`}
-            value={draftTitle}
-            onChange={(e) => onDraftTitle(e.target.value)}
-            onBlur={() => onCommitTitle()}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                (e.target as HTMLInputElement).blur();
-              }
-            }}
-            disabled={saveBusy}
-            aria-label="Название задачи"
-          />
-        ) : (
-          <h1 className={`task-meta-title${task.status === "done" ? " is-struck" : ""}`}>
-            {task.title}
-          </h1>
-        )}
-        {canManage ? (
-          <button
-            type="button"
-            className={`task-important-toggle${important ? " is-important" : ""}`}
-            onClick={onToggleImportant}
-            disabled={saveBusy}
-            aria-pressed={important}
-            title={important ? "Снять отметку «Важная»" : "Отметить как важную"}
-            aria-label={important ? "Снять отметку «Важная»" : "Отметить как важную"}
-          >
-            <FlameIcon filled={important} size={18} />
-          </button>
-        ) : important ? (
-          <span
-            className="task-important-toggle is-important is-static"
-            title="Важная задача"
-            aria-label="Важная задача"
-          >
-            <FlameIcon filled size={18} />
-          </span>
-        ) : null}
-      </div>
-
-      <div className="task-meta-status-line">
-        <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
-          {STATUS_LABEL[task.status]}
-        </span>
-        {isWorking ? (
-          <span className="task-working-pill" title={task.working_by_name || undefined}>
-            Сейчас в работе
-          </span>
-        ) : null}
-        {awaitingClient ? (
-          <span className="task-awaiting-pill">Ожидает ответа</span>
-        ) : null}
-        {overdue ? <span className="task-status-pill status-overdue">Опаздывает</span> : null}
-      </div>
-
-      <div className="task-meta-section">
-        <div className="task-meta-section-label">Описание</div>
-        {canManage ? (
-          <AutoGrowTextarea
-            className={`task-meta-desc-input${!draftDescription.trim() ? " is-empty" : ""}`}
-            value={draftDescription}
-            onChange={(e) => onDraftDescription(e.target.value)}
-            onBlur={() => onCommitDescription()}
-            minRows={2}
-            maxHeight={180}
-            placeholder="Добавить описание…"
-            disabled={saveBusy}
-            aria-label="Описание задачи"
-          />
-        ) : task.description?.trim() ? (
-          <p className="task-meta-desc">{task.description}</p>
-        ) : (
-          <p className="task-meta-desc is-empty">Не указано</p>
-        )}
+      <div className="task-details-heading">
+        <strong>Детали</strong>
+        <span>#{task.id}</span>
       </div>
 
       <dl className="task-meta-fields">

@@ -3,9 +3,9 @@ import { isValidDate, parseDue } from "./dates";
 
 /** Bitrix-aligned labels for local statuses */
 export const STATUS_LABEL: Record<TaskStatus, string> = {
-  todo: "Ждёт выполнения",
-  in_progress: "Выполняется",
-  done: "Завершена",
+  todo: "К работе",
+  in_progress: "В работе",
+  done: "Готово",
 };
 
 export const STATUS_TONE: Record<TaskStatus, string> = {

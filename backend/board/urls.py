@@ -6,6 +6,7 @@ from .views import (
     AttachmentViewSet,
     BacklogItemViewSet,
     CommentViewSet,
+    ProjectMeetingViewSet,
     ProjectViewSet,
     SupportTicketViewSet,
     TaskViewSet,
@@ -15,6 +16,7 @@ from .stream import PortalStreamView, StreamTokenView, SyncCursorView
 
 router = DefaultRouter()
 router.register("projects", ProjectViewSet, basename="project")
+router.register("meetings", ProjectMeetingViewSet, basename="meeting")
 router.register("tasks", TaskViewSet, basename="task")
 router.register("comments", CommentViewSet, basename="comment")
 router.register("attachments", AttachmentViewSet, basename="attachment")

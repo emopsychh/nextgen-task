@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { formatPackageHours } from "../lib/format";
+import { ModalPortal } from "./ModalPortal";
 
 export type DealCandidate = {
   deal_id: string;
@@ -59,6 +60,7 @@ export function DealPickModal({
     selectable.some((d) => d.deal_id === picked);
 
   return (
+    <ModalPortal>
     <div className="modal-backdrop deal-pick-backdrop" role="presentation" onClick={onClose}>
       <div
         className="modal-card modal-card-wide deal-pick-modal"
@@ -171,5 +173,6 @@ export function DealPickModal({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }

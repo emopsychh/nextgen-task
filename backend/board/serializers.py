@@ -1,5 +1,8 @@
+import sys
+
 from django.conf import settings
 from django.db.models import Sum
+from django.utils import timezone
 from rest_framework import serializers
 
 from portals.models import Portal
@@ -10,6 +13,7 @@ from .models import (
     BacklogItem,
     Comment,
     Project,
+    ProjectMeeting,
     SupportTicket,
     SupportTicketMessage,
     Task,
@@ -48,10 +52,25 @@ def _clean_task_title(instance: Task) -> str:
         Task.objects.filter(pk=instance.pk).update(title=cleaned)
         instance.title = cleaned
         try:
-            if settings.CELERY_TASK_ALWAYS_EAGER:
+            if not settings.CELERY_TASK_ALWAYS_EAGER:
+                sync_task_to_bitrix.delay(instance.id)
+            elif "test" in sys.argv:
                 sync_task_to_bitrix(instance.id)
             else:
-                sync_task_to_bitrix.delay(instance.id)
+                import threading
+
+                from django.db import close_old_connections
+
+                task_id = instance.id
+
+                def _worker() -> None:
+                    try:
+                        close_old_connections()
+                        sync_task_to_bitrix(task_id)
+                    finally:
+                        close_old_connections()
+
+                threading.Thread(target=_worker, daemon=True).start()
         except Exception:
             pass
     return instance.title or ""
@@ -557,6 +576,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     total_tracked_seconds = serializers.SerializerMethodField()
     completed_at = serializers.SerializerMethodField()
     portal_name = serializers.CharField(source="portal.name", read_only=True)
+    team_members = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
@@ -564,6 +584,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "id",
             "portal",
             "portal_name",
+            "team_members",
             "name",
             "description",
             "is_active",
@@ -660,6 +681,28 @@ class ProjectSerializer(serializers.ModelSerializer):
             .first()
         )
 
+    def get_team_members(self, obj):
+        request = self.context.get("request")
+        view = getattr(getattr(request, "parser_context", {}), "get", lambda *_: None)("view")
+        if getattr(view, "action", None) != "retrieve":
+            return []
+
+        members = []
+        seen = set()
+        for task in obj.tasks.select_related("working_by__portal", "created_by__portal"):
+            user = task.working_by or task.created_by
+            if not user or user.id in seen:
+                continue
+            seen.add(user.id)
+            members.append(
+                {
+                    "id": user.id,
+                    "name": user.display_name,
+                    "role": "agency" if user.portal.role == Portal.Role.AGENCY else "client",
+                }
+            )
+        return members
+
     def validate_portal(self, portal: Portal):
         request = self.context.get("request")
         if request and not can_access_client_portal(request.user, portal):
@@ -668,6 +711,73 @@ class ProjectSerializer(serializers.ModelSerializer):
             # Allow creating projects on client portals primarily
             pass
         return portal
+
+
+class ProjectMeetingSerializer(serializers.ModelSerializer):
+    organizer_name = serializers.SerializerMethodField()
+    organizer_role = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProjectMeeting
+        fields = (
+            "id",
+            "project",
+            "title",
+            "scheduled_at",
+            "duration_minutes",
+            "format",
+            "location",
+            "notes",
+            "cancelled_at",
+            "outcome",
+            "organizer_name",
+            "organizer_role",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "organizer_name",
+            "organizer_role",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_organizer_name(self, obj):
+        return obj.created_by.display_name if obj.created_by else ""
+
+    def get_organizer_role(self, obj):
+        if not obj.created_by:
+            return "unknown"
+        return "agency" if obj.created_by.portal.role == Portal.Role.AGENCY else "client"
+
+    def validate(self, attrs):
+        from .meeting_slots import has_meeting_conflict
+
+        request = self.context.get("request")
+        if "outcome" in attrs and request is not None and not request.user.is_agency:
+            raise serializers.ValidationError({"outcome": "Итог встречи заполняет агентство"})
+
+        instance = self.instance
+        project = attrs.get("project") or getattr(instance, "project", None)
+        starts_at = attrs.get("scheduled_at", getattr(instance, "scheduled_at", None))
+        duration = attrs.get("duration_minutes", getattr(instance, "duration_minutes", 60))
+        cancelled_at = attrs.get("cancelled_at", getattr(instance, "cancelled_at", None))
+        time_changed = instance is None or "scheduled_at" in attrs or "duration_minutes" in attrs
+        if cancelled_at or not time_changed:
+            return attrs
+        if duration < 15 or duration > 480:
+            raise serializers.ValidationError({"duration_minutes": "Допустимая длительность встречи: от 15 минут до 8 часов"})
+        if starts_at and starts_at <= timezone.now():
+            raise serializers.ValidationError({"scheduled_at": "Выберите время в будущем"})
+        if project and starts_at and has_meeting_conflict(
+            project.portal_id,
+            starts_at,
+            duration,
+            exclude_meeting_id=getattr(instance, "id", None),
+        ):
+            raise serializers.ValidationError({"scheduled_at": "Это время уже занято. Выберите другой слот"})
+        return attrs
 
 
 class WorkReportEventSerializer(serializers.ModelSerializer):

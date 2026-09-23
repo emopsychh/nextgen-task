@@ -21,12 +21,12 @@ export function reportPackageFill(
 export type ReportBucket = "all" | "current" | "review" | "accepted";
 
 export const STATUS_LABEL_RU: Record<WorkReportStatus, string> = {
-  draft: "На рассмотрении руководителя",
-  pending_client: "Требует согласования",
-  disputed: "Связь с менеджером",
+  draft: "Черновик",
+  pending_client: "На согласовании",
+  disputed: "Замечания",
   accepted: "Согласован",
   paid: "Согласован",
-  dismissed: "Снято с контроля",
+  dismissed: "Снято",
 };
 
 export const EVENT_LABEL: Record<string, string> = {

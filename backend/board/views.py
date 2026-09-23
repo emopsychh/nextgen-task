@@ -1,11 +1,14 @@
 import logging
 import mimetypes
+import sys
+from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
 from django.conf import settings
 from django.core import signing
 from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
@@ -23,6 +26,7 @@ from .models import (
     BacklogItem,
     Comment,
     Project,
+    ProjectMeeting,
     SupportTicket,
     SupportTicketMessage,
     Task,
@@ -36,6 +40,7 @@ from .serializers import (
     BacklogItemSerializer,
     CommentSerializer,
     ProjectSerializer,
+    ProjectMeetingSerializer,
     SupportTicketCreateSerializer,
     SupportTicketListSerializer,
     SupportTicketMessageCreateSerializer,
@@ -60,31 +65,54 @@ from .realtime import publish_portal_event, publish_task_event
 logger = logging.getLogger(__name__)
 
 
+def _defer_bitrix_job(task_fn, *args) -> None:
+    """Run Bitrix sync off the request thread.
+
+    Eager Celery has no worker, so calling the task inline holds the HTTP
+    response for the whole Bitrix round trip. Tests still run inline.
+    """
+    if not settings.CELERY_TASK_ALWAYS_EAGER:
+        task_fn.delay(*args)
+        return
+    if "test" in sys.argv:
+        task_fn(*args)
+        return
+
+    import threading
+
+    from django.db import close_old_connections
+
+    def _worker() -> None:
+        try:
+            close_old_connections()
+            task_fn(*args)
+        except Exception:
+            logger.exception(
+                "background bitrix job failed %s",
+                getattr(task_fn, "name", task_fn),
+            )
+        finally:
+            close_old_connections()
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def enqueue_bitrix_sync(task_id: int) -> None:
     if not settings.BITRIX_AGENCY_TASK_SYNC:
         return
-    if settings.CELERY_TASK_ALWAYS_EAGER:
-        sync_task_to_bitrix(task_id)
-    else:
-        sync_task_to_bitrix.delay(task_id)
+    _defer_bitrix_job(sync_task_to_bitrix, task_id)
 
 
 def enqueue_project_sync(project_id: int) -> None:
     if not settings.BITRIX_AGENCY_TASK_SYNC:
         return
-    if settings.CELERY_TASK_ALWAYS_EAGER:
-        sync_project_to_bitrix(project_id)
-    else:
-        sync_project_to_bitrix.delay(project_id)
+    _defer_bitrix_job(sync_project_to_bitrix, project_id)
 
 
 def enqueue_comment_sync(comment_id: int) -> None:
     if not settings.BITRIX_AGENCY_TASK_SYNC:
         return
-    if settings.CELERY_TASK_ALWAYS_EAGER:
-        sync_comment_to_bitrix(comment_id)
-    else:
-        sync_comment_to_bitrix.delay(comment_id)
+    _defer_bitrix_job(sync_comment_to_bitrix, comment_id)
 
 
 def enqueue_task_pull(
@@ -462,6 +490,92 @@ class ProjectViewSet(viewsets.ModelViewSet):
                     project_id,
                     bitrix_id,
                 )
+
+
+class ProjectMeetingViewSet(viewsets.ModelViewSet):
+    """Shared project calendar. A client and an agency can both schedule a meeting."""
+
+    serializer_class = ProjectMeetingSerializer
+    permission_classes = [IsPortalAuthenticated]
+    filterset_fields = ["project", "format"]
+    search_fields = ["title", "notes", "location"]
+
+    def get_queryset(self):
+        ids = accessible_portal_ids(self.request.user)
+        return ProjectMeeting.objects.filter(project__portal_id__in=ids).select_related(
+            "project", "created_by", "created_by__portal"
+        )
+
+    def perform_create(self, serializer):
+        project = serializer.validated_data["project"]
+        if not can_access_client_portal(self.request.user, project.portal):
+            raise PermissionDenied("No access to this project")
+        serializer.save(created_by=self.request.user.bitrix_user)
+
+    @action(detail=False, methods=["get"])
+    def availability(self, request):
+        from .due_dates import portal_zone
+        from .meeting_slots import (
+            DEFAULT_MEETING_MINUTES,
+            WORKDAY_END_HOUR,
+            WORKDAY_START_HOUR,
+            has_meeting_conflict,
+        )
+
+        project = get_object_or_404(Project.objects.select_related("portal"), pk=request.query_params.get("project"))
+        if not can_access_client_portal(request.user, project.portal):
+            raise PermissionDenied("No access to this project")
+        try:
+            requested_date = date.fromisoformat(str(request.query_params.get("date") or ""))
+        except ValueError as exc:
+            raise ValidationError({"date": "Укажите дату в формате YYYY-MM-DD"}) from exc
+
+        zone = portal_zone(project.portal)
+        now = timezone.now()
+        is_workday = requested_date.weekday() < 5
+        exclude_raw = request.query_params.get("exclude")
+        try:
+            exclude_meeting_id = int(exclude_raw) if exclude_raw else None
+        except (TypeError, ValueError):
+            exclude_meeting_id = None
+        slots = []
+        cursor = datetime.combine(requested_date, datetime_time(WORKDAY_START_HOUR, 0))
+        workday_end = datetime.combine(requested_date, datetime_time(WORKDAY_END_HOUR, 0))
+        while cursor + timedelta(minutes=DEFAULT_MEETING_MINUTES) <= workday_end:
+            starts_at = timezone.make_aware(cursor, zone)
+            is_past = starts_at <= now
+            is_occupied = False if is_past or not is_workday else has_meeting_conflict(
+                project.portal_id,
+                starts_at,
+                DEFAULT_MEETING_MINUTES,
+                exclude_meeting_id=exclude_meeting_id,
+            )
+            slots.append({
+                "starts_at": starts_at.isoformat(),
+                "label": cursor.strftime("%H:%M"),
+                "available": is_workday and not is_past and not is_occupied,
+                "reason": "weekend" if not is_workday else "past" if is_past else "occupied" if is_occupied else "",
+            })
+            cursor += timedelta(minutes=DEFAULT_MEETING_MINUTES)
+
+        return Response({
+            "date": requested_date.isoformat(),
+            "timezone": getattr(zone, "key", str(zone)),
+            "duration_minutes": DEFAULT_MEETING_MINUTES,
+            "slots": slots,
+        })
+
+    def perform_update(self, serializer):
+        meeting = self.get_object()
+        if not can_access_client_portal(self.request.user, meeting.project.portal):
+            raise PermissionDenied("No access")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if self.request.user.is_agency or instance.created_by_id == self.request.user.bitrix_user.id:
+            instance.delete()
+            return
+        raise PermissionDenied("Удалить встречу может её организатор или агентство")
 
 
 def default_task_board_ordering():
@@ -1098,10 +1212,7 @@ class AttachmentViewSet(viewsets.ModelViewSet):
 
         # Never fail the HTTP upload if Bitrix/Celery is down
         try:
-            if settings.CELERY_TASK_ALWAYS_EAGER:
-                sync_attachment_to_bitrix(attachment.id)
-            else:
-                sync_attachment_to_bitrix.delay(attachment.id)
+            _defer_bitrix_job(sync_attachment_to_bitrix, attachment.id)
         except Exception:
             logger.exception(
                 "Failed to enqueue Bitrix sync for attachment %s", attachment.id
@@ -1910,6 +2021,16 @@ class BacklogItemViewSet(viewsets.ModelViewSet):
         if "notes" in data:
             item.notes = (data["notes"] or "").strip()
             update_fields.append("notes")
+        if not is_agency and "status" in data:
+            allowed = {
+                BacklogItem.Status.IDEA,
+                BacklogItem.Status.IN_PROGRESS,
+                BacklogItem.Status.DEFERRED,
+            }
+            if data["status"] not in allowed:
+                raise ValidationError({"status": "Этот этап назначает агентство"})
+            item.status = data["status"]
+            update_fields.append("status")
         if is_agency:
             if "status" in data:
                 item.status = data["status"]

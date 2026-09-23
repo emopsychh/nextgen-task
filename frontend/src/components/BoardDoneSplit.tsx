@@ -6,6 +6,7 @@ type Props<T> = {
   split: boolean;
   isDone: (item: T) => boolean;
   doneLabel: string;
+  showDoneHeading?: boolean;
   as?: "ul" | "div";
   className?: string;
   renderItem: (item: T) => ReactNode;
@@ -26,6 +27,7 @@ export function BoardDoneSplit<T>({
   split,
   isDone,
   doneLabel,
+  showDoneHeading = true,
   as = "ul",
   className = "board-list",
   renderItem,
@@ -37,6 +39,9 @@ export function BoardDoneSplit<T>({
   const active: T[] = [];
   const done: T[] = [];
   for (const item of items) (isDone(item) ? done : active).push(item);
+  if (!showDoneHeading) {
+    return <Group className={className}>{[...active, ...done].map(renderItem)}</Group>;
+  }
   return (
     <div className="board-split">
       {active.length > 0 ? (

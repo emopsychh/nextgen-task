@@ -13,6 +13,7 @@ dist/
 *.log
 .idea/
 .vscode/
+.tools/
 *.sqlite3
 *.whl
 frontend/tsconfig.tsbuildinfo

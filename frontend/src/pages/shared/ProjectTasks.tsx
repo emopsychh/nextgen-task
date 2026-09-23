@@ -16,7 +16,7 @@ import { SmartBackButton } from "../../components/SmartBackButton";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { useSeenProjects } from "../../hooks/useSeenProjects";
-import { dueMeta, formatRuDateTime, formatRuDateTimeOrDash } from "../../lib/dates";
+import { dueMeta, formatRuDateTime } from "../../lib/dates";
 import {
   readPortalCache,
   readBoardTasksCache,
@@ -25,26 +25,45 @@ import {
 } from "../../lib/portalSessionCache";
 import { canGoBackInApp, linkStateFrom } from "../../lib/smartBack";
 import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
-import { BoardAvatar } from "../../components/BoardAvatar";
 import { FlameIcon } from "../../components/icons";
 import { formatDuration } from "../../lib/format";
 import { BoardDoneSplit } from "../../components/BoardDoneSplit";
 import { PaginationBar } from "../../components/PaginationBar";
+import { StatusFilterMenu } from "../../components/StatusFilterMenu";
 import { LIST_PAGE_SIZE, pageTotal } from "../../lib/pagination";
 import { displayTimeZone } from "../../lib/timezone";
-import { SyncHint } from "../../components/SyncHint";
+import { ProjectsGantt } from "../../components/ProjectsGantt";
 
-function dueHint(due: ReturnType<typeof dueMeta>): string {
-  if (due.tone === "due-overdue") return "Срок истёк";
-  return due.label;
+function ListViewIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M8 7h12M8 12h12M8 17h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="4.5" cy="7" r="1.2" fill="currentColor" />
+      <circle cx="4.5" cy="12" r="1.2" fill="currentColor" />
+      <circle cx="4.5" cy="17" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+function GanttViewIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" strokeWidth="1.5" opacity="0.35" />
+      <rect x="7" y="4.3" width="8" height="3.4" rx="1.2" fill="currentColor" />
+      <rect x="10" y="10.3" width="10" height="3.4" rx="1.2" fill="currentColor" />
+      <rect x="5" y="16.3" width="7" height="3.4" rx="1.2" fill="currentColor" />
+    </svg>
+  );
 }
 
 export function ProjectTasks() {
-  const { projectId } = useParams();
+  const { projectId, portalId: routePortalId } = useParams();
   const location = useLocation();
   const fromState = linkStateFrom(location);
   const { token, portal } = useAuth();
   const isAgency = portal?.role === "agency";
+  const allTasks = !projectId;
+  const scopedPortalId = Number(routePortalId || portal?.id || 0);
   const dueTz = displayTimeZone({
     role: portal?.role,
     portalTimezone: portal?.timezone,
@@ -52,13 +71,15 @@ export function ProjectTasks() {
   const toast = useFlashToast();
 
   const numericProjectId = Number(projectId || 0);
+  const taskScopeKey = allTasks ? -scopedPortalId : numericProjectId;
   const [project, setProject] = useState<Project | null>(
     () =>
       readPortalCache<Project>("project-meta", numericProjectId) || null
   );
-  const { markSeen } = useSeenProjects(project?.portal ?? null);
+  const { markSeen } = useSeenProjects(allTasks ? scopedPortalId || null : project?.portal ?? null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [filter, setFilter] = useState<TaskStatus | "all">("all");
+  const [view, setView] = useState<"list" | "gantt">("list");
   const [query, setQuery] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState("");
@@ -70,7 +91,7 @@ export function ProjectTasks() {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [counts, setCounts] = useState<TaskCounts>(
     () =>
-      readPortalCache<TaskCounts>("task-counts", numericProjectId) || {
+      readPortalCache<TaskCounts>("task-counts", taskScopeKey) || {
         all: 0,
         todo: 0,
         in_progress: 0,
@@ -80,7 +101,7 @@ export function ProjectTasks() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [initialLoading, setInitialLoading] = useState(true);
-  const [bitrixSyncing, setBitrixSyncing] = useState(false);
+  const [, setBitrixSyncing] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const genRef = useRef(0);
   const pageRef = useRef(1);
@@ -89,7 +110,8 @@ export function ProjectTasks() {
   const visible = tasks;
 
   function buildListUrl(pageNum: number, withPull: boolean): string {
-    let url = `/api/tasks/?project=${projectId}&page=${pageNum}&page_size=${LIST_PAGE_SIZE}`;
+    const scope = allTasks ? `portal=${scopedPortalId}` : `project=${projectId}`;
+    let url = `/api/tasks/?${scope}&page=${pageNum}&page_size=${LIST_PAGE_SIZE}`;
     if (filter !== "all") url += `&status=${filter}`;
     const q = debouncedQuery.trim();
     if (q) url += `&search=${encodeURIComponent(q)}`;
@@ -124,26 +146,30 @@ export function ProjectTasks() {
   }
 
   async function loadCounts() {
-    if (!token || !projectId) return;
+    if (!token || (!allTasks && !projectId) || (allTasks && !scopedPortalId)) return;
     try {
-      const c = await api<TaskCounts>(`/api/tasks/counts/?project=${projectId}`, {}, token);
+      const scope = allTasks ? `portal=${scopedPortalId}` : `project=${projectId}`;
+      const c = await api<TaskCounts>(`/api/tasks/counts/?${scope}`, {}, token);
       setCounts(c);
-      writePortalCache("task-counts", Number(projectId), c);
+      writePortalCache("task-counts", taskScopeKey, c);
     } catch {
       // non-critical
     }
   }
 
   async function loadPage(pageNum: number, withPull: boolean, signal?: AbortSignal) {
-    if (!token || !projectId) return;
+    if (!token || (!allTasks && !projectId) || (allTasks && !scopedPortalId)) return;
     const gen = genRef.current;
-    const [projectData, taskData] = await Promise.all([
-      api<Project>(`/api/projects/${projectId}/`, { signal }, token),
-      fetchPage(pageNum, false, signal),
-    ]);
+    const taskData = await fetchPage(pageNum, false, signal);
     if (gen !== genRef.current || signal?.aborted) return;
-    setProject(projectData);
-    writePortalCache("project-meta", Number(projectId), projectData);
+    if (!allTasks) {
+      const projectData = await api<Project>(`/api/projects/${projectId}/`, { signal }, token);
+      if (gen !== genRef.current || signal?.aborted) return;
+      setProject(projectData);
+      writePortalCache("project-meta", Number(projectId), projectData);
+    } else {
+      setProject(null);
+    }
     applyPage(taskData, pageNum);
     void loadCounts();
 
@@ -173,15 +199,15 @@ export function ProjectTasks() {
 
   useEffect(() => {
     const id = Number(projectId);
-    if (!id || !project) return;
+    if (allTasks || !id || !project) return;
     markSeen(id);
-  }, [projectId, project, markSeen]);
+  }, [projectId, project, allTasks, markSeen]);
 
   useEffect(() => {
     const id = Number(projectId || 0);
-    setProject(readPortalCache<Project>("project-meta", id));
+    setProject(allTasks ? null : readPortalCache<Project>("project-meta", id));
     setCounts(
-      readPortalCache<TaskCounts>("task-counts", id) || {
+      readPortalCache<TaskCounts>("task-counts", allTasks ? taskScopeKey : id) || {
         all: 0,
         todo: 0,
         in_progress: 0,
@@ -190,10 +216,10 @@ export function ProjectTasks() {
     );
     setError(null);
     setPage(1);
-  }, [projectId]);
+  }, [projectId, allTasks, taskScopeKey]);
 
   useEffect(() => {
-    if (!token || !projectId) return;
+    if (!token || (!allTasks && !projectId) || (allTasks && !scopedPortalId)) return;
     genRef.current += 1;
     const gen = genRef.current;
     setBitrixSyncing(false);
@@ -222,20 +248,20 @@ export function ProjectTasks() {
       });
     return () => ac.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, projectId, filter, debouncedQuery, page]);
+  }, [token, projectId, allTasks, scopedPortalId, filter, debouncedQuery, page]);
 
   const pullNowRef = useRef(false);
   usePortalLiveSync({
     token,
-    portalId: project?.portal ?? null,
-    enabled: !!projectId,
+    portalId: allTasks ? scopedPortalId || null : project?.portal ?? null,
+    enabled: allTasks ? !!scopedPortalId : !!projectId,
     onEvent: () => {
       pullNowRef.current = false;
     },
   });
 
   useEffect(() => {
-    if (!token || !projectId) return;
+    if (!token || (!allTasks && !projectId) || (allTasks && !scopedPortalId)) return;
     let cancelled = false;
     let inFlight = false;
     let tickCount = 0;
@@ -276,7 +302,7 @@ export function ProjectTasks() {
       document.removeEventListener("visibilitychange", onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, projectId, filter, debouncedQuery]);
+  }, [token, projectId, allTasks, scopedPortalId, filter, debouncedQuery]);
 
   async function createTask(e: React.FormEvent) {
     e.preventDefault();
@@ -344,19 +370,22 @@ export function ProjectTasks() {
 
   const filters: { id: TaskStatus | "all"; label: string; count: number }[] = [
     { id: "all", label: "Все", count: counts.all },
-    { id: "todo", label: STATUS_LABEL.todo, count: counts.todo },
     { id: "in_progress", label: STATUS_LABEL.in_progress, count: counts.in_progress },
     { id: "done", label: STATUS_LABEL.done, count: counts.done },
   ];
 
   const fromPath = (location.state as { from?: string } | null)?.from;
   const showBack =
-    canGoBackInApp() || Boolean(fromPath && fromPath !== location.pathname + location.search);
+    !allTasks &&
+    (canGoBackInApp() || Boolean(fromPath && fromPath !== location.pathname + location.search));
   const projectsFallback =
     project?.portal && isAgency ? `/clients/${project.portal}/projects` : "/projects";
+  const projectsListPath = isAgency ? `/portals/${scopedPortalId}/projects` : "/projects";
+  const allTasksPath = isAgency ? `/portals/${scopedPortalId}/tasks` : "/tasks";
 
   return (
     <div className="tasks-page">
+      {!allTasks || showBack ? (
       <div className="page-header">
         <div>
           {showBack ? (
@@ -364,7 +393,10 @@ export function ProjectTasks() {
               <span className="task-back-label">Назад</span>
             </SmartBackButton>
           ) : null}
+          {!allTasks ? (
           <h1 className="page-title">{project?.name || "Задачи"}</h1>
+          ) : null}
+          {!allTasks ? (
           <p className="page-sub">
             {counts.all
               ? `${counts.done} из ${counts.all} выполнено`
@@ -375,10 +407,16 @@ export function ProjectTasks() {
             {project && (project.total_tracked_seconds || 0) > 0
               ? ` · учёт ${formatDuration(project.total_tracked_seconds || 0)}`
               : ""}
-            {bitrixSyncing ? <SyncHint>Обновляем статусы…</SyncHint> : null}
           </p>
+          ) : null}
         </div>
+        {!allTasks ? (
         <div className="report-header-actions">
+          {project ? (
+            <Link to={`/projects/${project.id}/roadmap`} className="btn btn-ghost">
+              Дорожная карта
+            </Link>
+          ) : null}
           {isAgency ? (
             <button
               type="button"
@@ -388,19 +426,36 @@ export function ProjectTasks() {
             >
               {showCreate ? "Закрыть" : "Новая задача"}
             </button>
-          ) : (
-            <Link to="/requests" className="btn btn-primary">
-              На согласование
-            </Link>
-          )}
+          ) : null}
         </div>
+        ) : null}
       </div>
+      ) : null}
 
       {error && <div className="error-banner">{error}</div>}
 
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
-      {showCreate && isAgency && (
+      <div className="work-kind-switch" role="tablist" aria-label="Раздел работы">
+        <Link
+          to={allTasksPath}
+          role="tab"
+          aria-selected
+          className="work-kind-switch-item is-active"
+        >
+          Задачи
+        </Link>
+        <Link
+          to={projectsListPath}
+          role="tab"
+          aria-selected={false}
+          className="work-kind-switch-item"
+        >
+          Проекты
+        </Link>
+      </div>
+
+      {showCreate && isAgency && !allTasks && (
         <form className="connect-panel create-task-panel stack" onSubmit={createTask}>
           <div>
             <h2 className="section-title">Новая задача</h2>
@@ -475,31 +530,46 @@ export function ProjectTasks() {
             </button>
           )}
         </label>
-        <div className="task-filters" role="tablist" aria-label="Фильтр по статусу">
-          {filters.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              role="tab"
-              aria-selected={filter === f.id}
-              className={`task-filter-chip${filter === f.id ? " active" : ""}${
-                f.id !== "all" ? ` ${STATUS_TONE[f.id]}` : ""
-              }`}
-              onClick={() => {
-                if (f.id === filter) return;
-                setPage(1);
-                setInitialLoading(true);
-                setFilter(f.id);
-              }}
-            >
-              <span>{f.label}</span>
-              <span className="task-filter-count">{f.count}</span>
-            </button>
-          ))}
+        <StatusFilterMenu
+          label="Статус задач"
+          value={filter}
+          options={filters.map((item) => ({ ...item, tone: item.id === "all" ? undefined : STATUS_TONE[item.id] }))}
+          onChange={(next) => {
+            if (next === filter) return;
+            setPage(1);
+            setInitialLoading(true);
+            setFilter(next);
+          }}
+        />
+        <div className="projects-view-toggle" role="group" aria-label="Вид задач">
+          <button
+            type="button"
+            className={`projects-view-btn${view === "list" ? " is-active" : ""}`}
+            aria-pressed={view === "list"}
+            title="Список"
+            onClick={() => setView("list")}
+          >
+            <ListViewIcon />
+            <span>Список</span>
+          </button>
+          <button
+            type="button"
+            className={`projects-view-btn${view === "gantt" ? " is-active" : ""}`}
+            aria-pressed={view === "gantt"}
+            title="Диаграмма Ганта"
+            onClick={() => setView("gantt")}
+          >
+            <GanttViewIcon />
+            <span>Гант</span>
+          </button>
         </div>
       </div>
 
-      <div className="task-list">
+      {view === "gantt" ? (
+        <ProjectsGantt tasks={visible} mode="tasks" timeZone={dueTz} linkState={fromState} />
+      ) : null}
+
+      {view === "list" ? <div className="task-list">
         {initialLoading && visible.length === 0 ? (
           <div className="empty-linked task-empty data-loading-state">
             <span className="data-loading-spinner" aria-hidden />
@@ -523,81 +593,50 @@ export function ProjectTasks() {
             split={filter === "all"}
             isDone={(t) => t.status === "done"}
             doneLabel="Завершённые задачи"
+            showDoneHeading={false}
             as="div"
             className="task-list-group"
             renderItem={(t) => {
               const due = dueMeta(t.due_date, t.status, dueTz);
-              const person = t.working_by_name || t.created_by_name || "";
-              const personLabel = t.working_by_name ? "Исполнитель" : "Автор";
-              const tracked = t.total_tracked_seconds || 0;
               return (
                 <Link
                   key={t.id}
                   to={`/tasks/${t.id}`}
                   state={fromState}
-                  className={`board-row task-card${t.status === "done" ? " is-done" : ""}${t.is_important ? " is-important" : ""}${enteringId === t.id ? " is-entering" : ""}`}
+                  onClick={() => writePortalCache("task-detail", t.id, t)}
+                  className={`board-row task-card${t.status === "done" ? " is-done" : ""}${t.is_important && t.status !== "done" ? " is-important" : ""}${enteringId === t.id ? " is-entering" : ""}`}
                 >
                   <div className="board-row-main">
-                    <div className="board-row-chips">
-                      <span className={`task-status-pill ${STATUS_TONE[t.status]}`}>
-                        {STATUS_LABEL[t.status]}
-                      </span>
-                      {t.is_important ? (
-                        <span className="task-important-pill" title="Важная задача">
-                          <FlameIcon filled size={14} />
-                          Важно
-                        </span>
-                      ) : null}
-                      {t.is_working ? (
-                        <span className="task-working-pill" title={t.working_by_name || undefined}>
-                          Сейчас в работе
-                        </span>
-                      ) : null}
-                      {t.awaiting_client ? (
-                        <span className="task-awaiting-pill">Ожидает ответа</span>
-                      ) : null}
+                    <div className="task-compact-heading">
+                      <strong
+                        className={`board-row-title task-card-title${t.status === "done" ? " is-struck" : ""}`}
+                      >
+                        {t.title}
+                      </strong>
+                      <div className="board-row-chips">
+                        {t.status !== "todo" ? (
+                          <span className={`task-status-pill ${STATUS_TONE[t.status]}`}>
+                            {STATUS_LABEL[t.status]}
+                          </span>
+                        ) : null}
+                        {t.is_important && t.status !== "done" ? (
+                          <span className="task-important-pill" title="Важная задача">
+                            <FlameIcon filled size={13} />
+                            Важно
+                          </span>
+                        ) : null}
+                        {t.awaiting_client ? (
+                          <span className="task-awaiting-pill">Ждёт ответа</span>
+                        ) : null}
+                      </div>
                     </div>
-                    <strong
-                      className={`board-row-title task-card-title${t.status === "done" ? " is-struck" : ""}`}
-                    >
-                      {t.title}
-                    </strong>
-                    {t.description ? (
-                      <span className="board-row-desc task-card-desc muted">{t.description}</span>
-                    ) : null}
-                    {typeof t.comments_count === "number" && t.comments_count > 0 ? (
-                      <span className="board-row-note muted">{t.comments_count} комм.</span>
-                    ) : null}
+                    {allTasks ? <span className="board-row-note muted">{t.project_name}</span> : null}
                   </div>
-                  <div className="board-row-meta is-task">
-                    <div className="board-meta">
-                      <span className="board-meta-label">{personLabel}</span>
-                      {person ? (
-                        <span className="board-meta-person">
-                          <BoardAvatar name={person} />
-                          <span className="board-meta-text">{person}</span>
-                        </span>
-                      ) : (
-                        <span className="board-meta-empty">—</span>
-                      )}
-                    </div>
-                    <div className="board-meta">
-                      <span className="board-meta-label">Срок</span>
-                      <span className={`board-meta-due ${due.tone}`}>
-                        <strong>{due.detail || "Без срока"}</strong>
-                        {t.status !== "done" && due.detail ? <small>{dueHint(due)}</small> : null}
-                      </span>
-                    </div>
-                    <div className="board-meta">
-                      <span className="board-meta-label">Учёт</span>
-                      <span className="board-meta-time">{formatDuration(tracked)}</span>
-                    </div>
-                    <div className="board-meta">
-                      <span className="board-meta-label">Реализовали</span>
-                      <span className="board-meta-due">
-                        <strong>{formatRuDateTimeOrDash(t.completed_at, dueTz)}</strong>
-                      </span>
-                    </div>
+                  <div className="task-compact-side">
+                    <span className={`board-meta-due ${due.tone}`}>
+                      <strong>{due.detail || "Без срока"}</strong>
+                    </span>
+                    <span className="task-compact-arrow" aria-hidden>›</span>
                   </div>
                   {isAgency && t.can_delete ? (
                     <button
@@ -624,7 +663,7 @@ export function ProjectTasks() {
             window.scrollTo({ top: 0, behavior: "smooth" });
           }}
         />
-      </div>
+      </div> : null}
     </div>
   );
 }

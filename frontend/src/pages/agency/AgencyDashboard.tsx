@@ -94,8 +94,7 @@ function TaskCard({
       <strong>{task.title}</strong>
       <span className="muted">
         {task.project_name}
-        {" · "}
-        {STATUS_LABEL[task.status]}
+        {task.status !== "todo" ? ` · ${STATUS_LABEL[task.status]}` : ""}
         {due ? ` · до ${due}` : " · без срока"}
       </span>
     </Link>

@@ -30,6 +30,7 @@ export function SidebarAccount({ collapsed = false }: Props) {
   return (
     <NavLink
       to="/account"
+      aria-label="Личный кабинет"
       className={({ isActive }) =>
         `sidebar-account-link${isActive ? " active" : ""}${collapsed ? " is-collapsed" : ""}`
       }

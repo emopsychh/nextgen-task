@@ -11,10 +11,10 @@ import { AgencyDashboard } from "./pages/agency/AgencyDashboard";
 import { AgencyHome } from "./pages/agency/AgencyHome";
 import { ClientBacklog } from "./pages/agency/ClientBacklog";
 import { ClientProjects } from "./pages/client/ClientProjects";
-import { ClientTaskRequests } from "./pages/client/ClientTaskRequests";
-import { ProjectReports } from "./pages/shared/ProjectReports";
+import { ClientTaskRequests, ProjectRoadmapPage } from "./pages/client/ClientTaskRequests";
+import { ClientBacklogItemDetail } from "./pages/client/ClientBacklogItemDetail";
+import { ReportsLocked } from "./pages/shared/ProjectReports";
 import { ProjectsList } from "./pages/shared/ProjectsList";
-import { ReportDetail } from "./pages/shared/ReportDetail";
 import { ProjectTasks } from "./pages/shared/ProjectTasks";
 import { AccountPage } from "./pages/shared/AccountPage";
 import { TaskDetail } from "./pages/shared/TaskDetail";
@@ -94,12 +94,21 @@ function AppLayout() {
 
   return (
     <div
-      className={`app-shell${isAgency ? " with-client-rail" : ""}${
+      className={`app-shell${isAgency ? " with-client-rail" : ""}${!isAgency ? " client-topnav" : ""}${
         taskFocus ? " task-focus" : ""
       }${collapsed && !taskFocus ? " sidebar-collapsed" : ""}`}
     >
       {isAgency ? <ClientRail /> : null}
-      {!taskFocus ? (
+      {!isAgency ? (
+        <header className="client-topbar">
+          <Brand />
+          <ProjectSidebarNav />
+          <div className="client-topbar-account">
+            <SidebarAccount />
+          </div>
+        </header>
+      ) : null}
+      {(isAgency && !taskFocus) ? (
         <aside className={`sidebar${collapsed ? " is-collapsed" : ""}`}>
           <Brand
             compact={collapsed}
@@ -123,7 +132,9 @@ function AppLayout() {
       ) : null}
       <main className="main">
         {error && <div className="error-banner">{error}</div>}
-        <Outlet />
+        <div className="route-content" key={location.pathname}>
+          <Outlet />
+        </div>
       </main>
       <OnboardingTour />
     </div>
@@ -177,12 +188,21 @@ export default function App() {
         />
         <Route path="projects" element={isAgency ? <Navigate to="/" replace /> : <ProjectsList />} />
         <Route
+          path="portals/:portalId/tasks"
+          element={<RouteDataBoundary><ProjectTasks /></RouteDataBoundary>}
+        />
+        <Route path="tasks" element={<ProjectTasks />} />
+        <Route
           path="requests"
           element={isAgency ? <Navigate to="/" replace /> : <ClientTaskRequests />}
         />
         <Route
+          path="requests/:requestId"
+          element={isAgency ? <Navigate to="/" replace /> : <ClientBacklogItemDetail />}
+        />
+        <Route
           path="portals/:portalId/reports"
-          element={<RouteDataBoundary><ProjectReports /></RouteDataBoundary>}
+          element={<ReportsLocked />}
         />
         <Route
           path="portals/:portalId/reports/new"
@@ -190,12 +210,16 @@ export default function App() {
         />
         <Route
           path="portals/:portalId/reports/:reportId"
-          element={<RouteDataBoundary><ReportDetail /></RouteDataBoundary>}
+          element={<ReportsLocked />}
         />
-        <Route path="reports" element={<ProjectReports />} />
+        <Route path="reports" element={<ReportsLocked />} />
         <Route
           path="reports/:reportId"
-          element={<RouteDataBoundary><ReportDetail /></RouteDataBoundary>}
+          element={<ReportsLocked />}
+        />
+        <Route
+          path="projects/:projectId/roadmap"
+          element={<RouteDataBoundary><ProjectRoadmapPage /></RouteDataBoundary>}
         />
         <Route
           path="projects/:projectId"
@@ -203,7 +227,7 @@ export default function App() {
         />
         <Route
           path="projects/:projectId/reports"
-          element={<RouteDataBoundary><ProjectReports /></RouteDataBoundary>}
+          element={<ReportsLocked />}
         />
         <Route
           path="tasks/:taskId"

@@ -5,6 +5,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { DealHoursCard } from "../../components/DealHoursCard";
 import { FlashToast } from "../../components/FlashToast";
+import { ModalPortal } from "../../components/ModalPortal";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { setPortalLabel } from "../../lib/portalLabelCache";
 import { hueFromId, initialsFromLabel } from "../../lib/portalUi";
@@ -586,6 +587,7 @@ export function AgencyHome() {
       />
 
       {hoursEditor ? (
+        <ModalPortal>
         <div className="modal-backdrop" role="presentation" onClick={closeHoursEditor}>
           <div
             className="modal-card stack"
@@ -665,6 +667,7 @@ export function AgencyHome() {
             </div>
           </div>
         </div>
+        </ModalPortal>
       ) : null}
     </div>
   );

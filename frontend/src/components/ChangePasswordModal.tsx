@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { api } from "../api/types";
+import { ModalPortal } from "./ModalPortal";
 import { useAuth } from "../auth/AuthContext";
 
 type Props = {
@@ -56,6 +57,7 @@ export function ChangePasswordModal({ open, onClose }: Props) {
   }
 
   return (
+    <ModalPortal>
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
         className="modal-card stack"
@@ -124,5 +126,6 @@ export function ChangePasswordModal({ open, onClose }: Props) {
         )}
       </div>
     </div>
+    </ModalPortal>
   );
 }

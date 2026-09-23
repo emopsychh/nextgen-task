@@ -79,8 +79,11 @@ class Command(BaseCommand):
                 deal_id=DEAL_ID,
                 defaults={
                     "deal_title": "Пакет часов — закрытие августа",
+                    "hourly_rate_rub": Decimal("3000.00"),
+                    "package_rub": Decimal("18000.00"),
+                    "balance_rub": Decimal("12000.00"),
                     "paid_hours": Decimal("6.00"),
-                    "remaining_hours": Decimal("0.00"),
+                    "remaining_hours": Decimal("4.00"),
                     "is_active": True,
                     "stage_semantic": "",
                 },

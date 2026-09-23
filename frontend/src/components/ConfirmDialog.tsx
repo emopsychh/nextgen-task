@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { ModalPortal } from "./ModalPortal";
 
 type ConfirmDialogProps = {
   open: boolean;
@@ -35,6 +36,7 @@ export function ConfirmDialog({
   if (!open) return null;
 
   return (
+    <ModalPortal>
     <div className="modal-backdrop" role="presentation" onClick={onCancel}>
       <div
         className="modal-card"
@@ -86,5 +88,6 @@ export function ConfirmDialog({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }

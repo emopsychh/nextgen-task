@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ModalPortal } from "./ModalPortal";
 
 type Props = {
   open: boolean;
@@ -41,6 +42,7 @@ export function TaskCompleteModal({
   const trimmed = outcome.trim();
 
   return (
+    <ModalPortal>
     <div className="modal-backdrop" role="presentation" onClick={() => !busy && onCancel()}>
       <div
         className="modal-card modal-card-wide complete-outcome-modal"
@@ -112,5 +114,6 @@ export function TaskCompleteModal({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }

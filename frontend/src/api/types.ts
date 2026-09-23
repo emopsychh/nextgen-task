@@ -31,6 +31,7 @@ export type Project = {
   id: number;
   portal: number;
   portal_name: string;
+  team_members?: Array<{ id: number; name: string; role: PortalRole }>;
   name: string;
   description: string;
   is_active: boolean;
@@ -45,6 +46,25 @@ export type Project = {
   completed_at?: string | null;
   created_at?: string;
   updated_at?: string;
+};
+
+export type ProjectMeetingFormat = "video" | "phone" | "office";
+
+export type ProjectMeeting = {
+  id: number;
+  project: number;
+  title: string;
+  scheduled_at: string;
+  duration_minutes: number;
+  format: ProjectMeetingFormat;
+  location: string;
+  notes: string;
+  cancelled_at?: string | null;
+  outcome?: string;
+  organizer_name: string;
+  organizer_role: PortalRole;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ActivityType =

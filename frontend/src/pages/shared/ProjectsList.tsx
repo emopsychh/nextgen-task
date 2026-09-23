@@ -3,27 +3,26 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import {
   api,
   isAbortError,
+  unwrapList,
   type Paginated,
   type Project,
   type ProjectCounts,
+  type Task,
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { BoardDoneSplit } from "../../components/BoardDoneSplit";
 import { PaginationBar } from "../../components/PaginationBar";
 import { ProjectsGantt } from "../../components/ProjectsGantt";
+import { StatusFilterMenu } from "../../components/StatusFilterMenu";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { useSeenProjects } from "../../hooks/useSeenProjects";
-import { dueMeta, formatRuDateTimeOrDash } from "../../lib/dates";
+import { dueMeta } from "../../lib/dates";
 import { formatDuration } from "../../lib/format";
 import { LIST_PAGE_SIZE, PICKER_PAGE_SIZE, pageTotal, withPage } from "../../lib/pagination";
 import { displayTimeZone } from "../../lib/timezone";
-import {
-  getPortalLabel,
-  portalDisplayName,
-  setPortalLabel,
-} from "../../lib/portalLabelCache";
+import { portalDisplayName, setPortalLabel } from "../../lib/portalLabelCache";
 import {
   CACHE_PROJECTS,
   readPortalCache,
@@ -31,6 +30,7 @@ import {
 } from "../../lib/portalSessionCache";
 import { isProjectComplete, projectProgress } from "../../lib/projectProgress";
 import { linkStateFrom } from "../../lib/smartBack";
+import { STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 
 type ProjectsView = "list" | "gantt";
 
@@ -106,13 +106,18 @@ export function ProjectsList() {
   const [description, setDescription] = useState("");
   const [enteringId, setEnteringId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [title, setTitle] = useState("Проекты");
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "open" | "done">("all");
   const [view, setView] = useState<ProjectsView>(readProjectsView);
+  const [expandedProjectId, setExpandedProjectId] = useState<number | null>(null);
+  const [inlineTasks, setInlineTasks] = useState<Record<number, Task[]>>({});
+  const [inlineLoadingId, setInlineLoadingId] = useState<number | null>(null);
+  const [inlineErrors, setInlineErrors] = useState<Record<number, string>>({});
   const { isUnseen, seedIfEmpty } = useSeenProjects(portalId);
   const pageSize = view === "gantt" ? PICKER_PAGE_SIZE : LIST_PAGE_SIZE;
+  const projectsListPath = isAgency ? `/portals/${portalId}/projects` : "/projects";
+  const allTasksPath = isAgency ? `/portals/${portalId}/tasks` : "/tasks";
 
   useEffect(() => {
     const id = window.setTimeout(() => {
@@ -159,17 +164,9 @@ export function ProjectsList() {
   }, [token, portalId, seedIfEmpty, filter, debouncedQuery, loadCounts, pageSize]);
 
   useEffect(() => {
-    if (!portalId) return;
-    if (!isAgency && portal) {
-      const label = portalDisplayName(portal);
-      if (label) {
-        setPortalLabel(portalId, label);
-        setTitle("Проекты");
-        return;
-      }
-    }
-    const cached = getPortalLabel(portalId);
-    setTitle(cached ? `Проекты · ${cached}` : "Проекты");
+    if (!portalId || isAgency || !portal) return;
+    const label = portalDisplayName(portal);
+    if (label) setPortalLabel(portalId, label);
   }, [portalId, isAgency, portal]);
 
   useEffect(() => {
@@ -258,6 +255,32 @@ export function ProjectsList() {
     }
   }
 
+  async function toggleProjectTasks(project: Project) {
+    if (expandedProjectId === project.id) {
+      setExpandedProjectId(null);
+      return;
+    }
+    setExpandedProjectId(project.id);
+    if (inlineTasks[project.id] || !token) return;
+    setInlineLoadingId(project.id);
+    setInlineErrors((prev) => ({ ...prev, [project.id]: "" }));
+    try {
+      const data = await api<Paginated<Task> | Task[]>(
+        `/api/tasks/?project=${project.id}&page=1&page_size=100`,
+        {},
+        token
+      );
+      setInlineTasks((prev) => ({ ...prev, [project.id]: unwrapList(data) }));
+    } catch (err) {
+      setInlineErrors((prev) => ({
+        ...prev,
+        [project.id]: err instanceof Error ? err.message : "Не удалось загрузить задачи",
+      }));
+    } finally {
+      setInlineLoadingId((current) => (current === project.id ? null : current));
+    }
+  }
+
   const visibleProjects = projects;
 
   function changeView(next: ProjectsView) {
@@ -277,16 +300,8 @@ export function ProjectsList() {
 
   return (
     <div className="tasks-page">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">{title}</h1>
-          <p className="page-sub">
-            {counts.all
-              ? `${counts.done} из ${counts.all} завершено`
-              : "Все модули клиента — открытые и завершённые"}
-          </p>
-        </div>
-        {isAgency ? (
+      {isAgency ? (
+        <div className="page-header">
           <button
             type="button"
             className="btn btn-primary"
@@ -295,11 +310,30 @@ export function ProjectsList() {
           >
             {showCreate ? "Закрыть" : "Новый проект"}
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       {error && <div className="error-banner">{error}</div>}
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
+
+      <div className="work-kind-switch" role="tablist" aria-label="Раздел работы">
+        <Link
+          to={allTasksPath}
+          role="tab"
+          aria-selected={false}
+          className="work-kind-switch-item"
+        >
+          Задачи
+        </Link>
+        <Link
+          to={projectsListPath}
+          role="tab"
+          aria-selected
+          className="work-kind-switch-item is-active"
+        >
+          Проекты
+        </Link>
+      </div>
 
       {isAgency && showCreate ? (
         <form className="connect-panel create-project-panel stack" onSubmit={createProject}>
@@ -364,31 +398,20 @@ export function ProjectsList() {
             </button>
           ) : null}
         </label>
-        <div className="task-filters" role="tablist" aria-label="Фильтр проектов">
-          {(
-            [
-              { id: "all", label: "Все", count: counts.all },
-              { id: "open", label: "Активные", count: counts.open },
-              { id: "done", label: "Завершены", count: counts.done },
-            ] as const
-          ).map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              role="tab"
-              aria-selected={filter === f.id}
-              className={`task-filter-chip${filter === f.id ? " active" : ""}`}
-              onClick={() => {
-                if (f.id === filter) return;
-                setPage(1);
-                setFilter(f.id);
-              }}
-            >
-              <span>{f.label}</span>
-              <span className="task-filter-count">{f.count}</span>
-            </button>
-          ))}
-        </div>
+        <StatusFilterMenu
+          label="Статус проектов"
+          value={filter}
+          options={[
+            { id: "all", label: "Все проекты", count: counts.all },
+            { id: "open", label: "Активные", count: counts.open, tone: "status-progress" },
+            { id: "done", label: "Завершённые", count: counts.done, tone: "status-done" },
+          ] as const}
+          onChange={(next) => {
+            if (next === filter) return;
+            setPage(1);
+            setFilter(next);
+          }}
+        />
         <div className="projects-view-toggle" role="group" aria-label="Вид проектов">
           <button
             type="button"
@@ -438,68 +461,64 @@ export function ProjectsList() {
           split={filter === "all"}
           isDone={isProjectComplete}
           doneLabel="Завершённые проекты"
+          showDoneHeading={false}
           renderItem={(p) => {
-            const { done, total: taskTotal, pct } = projectProgress(p);
+            const { done, total: taskTotal } = projectProgress(p);
+            const progress = taskTotal > 0 ? Math.round((done / taskTotal) * 100) : 0;
             const unseen = isUnseen(p.id);
             const complete = isProjectComplete(p);
+            const projectStatus = complete
+              ? { label: "Завершён", tone: "status-done" }
+              : p.has_active_work
+                ? { label: "В работе", tone: "status-progress" }
+                : { label: "Запланирован", tone: "status-todo" };
             const due = dueMeta(p.due_date, complete ? "done" : "todo", dueTz);
             const tracked = p.total_tracked_seconds || 0;
+            const expanded = expandedProjectId === p.id;
+            const projectTasks = inlineTasks[p.id] || [];
             return (
-              <li key={p.id} className="board-list-item">
-                <Link
-                  to={`/projects/${p.id}`}
-                  state={fromState}
-                  className={`board-row${enteringId === p.id ? " is-entering" : ""}${unseen ? " is-new" : ""}${complete ? " is-done" : ""}`}
-                >
-                  <div className="board-row-main">
-                    <div className="board-row-chips">
-                      <span className={`task-status-pill ${complete ? "status-done" : "status-progress"}`}>
-                        {complete ? "Завершён" : "Активный"}
-                      </span>
-                      {p.has_active_work ? (
-                        <span className="task-working-pill">Сейчас в работе</span>
-                      ) : null}
-                    </div>
-                    <strong className="board-row-title">{p.name}</strong>
-                    {p.description ? (
-                      <span className="board-row-desc muted">{p.description}</span>
-                    ) : null}
-                    <span className="board-row-note muted">
-                      {done}/{taskTotal} задач выполнено
+              <li key={p.id} className={`board-list-item project-list-item${expanded ? " is-expanded" : ""}`}>
+                  <div
+                  className={`board-row project-expand-row${enteringId === p.id ? " is-entering" : ""}${unseen ? " is-new" : ""}${complete ? " is-done" : ""}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expanded}
+                  onClick={() => void toggleProjectTasks(p)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      void toggleProjectTasks(p);
+                    }
+                  }}
+                  >
+                    <span className="project-row-mark" aria-hidden>
+                      <span>{progress}</span>
                     </span>
-                  </div>
-                  <div className="board-row-meta is-project">
-                    <div className="board-meta">
-                      <span className="board-meta-label">Срок</span>
+                    <div className="board-row-main">
+                      <div className="project-compact-heading">
+                        <strong className="board-row-title">{p.name}</strong>
+                      </div>
+                      <span className="board-row-note muted">
+                        {done} из {taskTotal} задач · {formatDuration(tracked)}
+                      </span>
+                    </div>
+                    <div className="project-row-progress" aria-label={`Выполнено ${progress}%`}>
+                      <span className="project-row-progress-copy"><span>Прогресс</span><strong>{progress}%</strong></span>
+                      <span className="project-row-progress-track" aria-hidden><span style={{ width: `${progress}%` }} /></span>
+                    </div>
+                    <div className="project-compact-side">
+                      <span className={`task-status-pill ${projectStatus.tone}`}>
+                        {projectStatus.label}
+                      </span>
                       <span className={`board-meta-due ${due.tone}`}>
                         <strong>{due.detail || "Без срока"}</strong>
-                        {complete || !due.detail ? null : (
-                          <small>
-                            {due.tone === "due-overdue" ? "Срок истёк" : due.label}
-                          </small>
-                        )}
+                      </span>
+                      <span className={`project-expand-chevron${expanded ? " is-open" : ""}`} aria-hidden>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                          <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
                       </span>
                     </div>
-                    <div className="board-meta">
-                      <span className="board-meta-label">Учёт</span>
-                      <span className="board-meta-time">{formatDuration(tracked)}</span>
-                    </div>
-                    <div className="board-meta">
-                      <span className="board-meta-label">Прогресс</span>
-                      <div className="board-progress">
-                        <span className="board-progress-pct">{pct}%</span>
-                        <span className="board-progress-track" aria-hidden>
-                          <span style={{ width: `${pct}%` }} />
-                        </span>
-                      </div>
-                    </div>
-                    <div className="board-meta">
-                      <span className="board-meta-label">Реализовали</span>
-                      <span className="board-meta-due">
-                        <strong>{formatRuDateTimeOrDash(p.completed_at, dueTz)}</strong>
-                      </span>
-                    </div>
-                  </div>
                   {isAgency && p.can_delete ? (
                     <button
                       type="button"
@@ -511,7 +530,39 @@ export function ProjectsList() {
                       {deletingId === p.id ? "Удаляем…" : "Удалить"}
                     </button>
                   ) : null}
-                </Link>
+                </div>
+                {expanded ? (
+                  <div className="project-inline-tasks">
+                    {inlineLoadingId === p.id ? (
+                      <div className="project-inline-tasks-empty">
+                        <span className="data-loading-spinner" aria-hidden />
+                        <span className="muted">Загружаем задачи…</span>
+                      </div>
+                    ) : inlineErrors[p.id] ? (
+                      <p className="project-inline-tasks-empty muted">{inlineErrors[p.id]}</p>
+                    ) : projectTasks.length === 0 ? (
+                      <p className="project-inline-tasks-empty muted">Задач пока нет.</p>
+                    ) : (
+                      <div className="project-inline-tasks-list">
+                        {projectTasks.map((task) => (
+                          <Link
+                            key={task.id}
+                            to={`/tasks/${task.id}`}
+                            state={fromState}
+                            className="project-inline-task"
+                          >
+                            <strong>{task.title}</strong>
+                            {task.status !== "todo" ? (
+                              <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
+                                {STATUS_LABEL[task.status]}
+                              </span>
+                            ) : null}
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </li>
             );
           }}

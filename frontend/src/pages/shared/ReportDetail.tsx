@@ -9,7 +9,6 @@ import {
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
-import { FileGlyph } from "../../components/icons";
 import { SmartBackButton } from "../../components/SmartBackButton";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
@@ -20,83 +19,20 @@ import {
 } from "../../lib/format";
 import { linkStateFrom } from "../../lib/smartBack";
 import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
-import { STATUS_LABEL } from "../../lib/status";
 import {
-  EVENT_LABEL,
   reportPackageFill,
-  reportSheetTitle,
+  reportTitle,
   reportsListPath,
   STATUS_LABEL_RU,
 } from "./reportHelpers";
 
 type FlatTask = WorkReportTaskRow & { projectId: number; projectName: string };
 
-function tasksWord(n: number): string {
-  const n10 = n % 10;
-  const n100 = n % 100;
-  if (n100 >= 11 && n100 <= 14) return "задач";
-  if (n10 === 1) return "задача";
-  if (n10 >= 2 && n10 <= 4) return "задачи";
-  return "задач";
-}
-
-function taskStatusMeta(task: WorkReportTaskRow): { label: string; tone: string } {
-  if (task.disputed || task.awaiting_client) {
-    return { label: "На согласовании", tone: "review" };
-  }
-  if (task.status === "done") return { label: "Выполнено", tone: "done" };
-  if (task.status === "in_progress") return { label: "В работе", tone: "progress" };
-  return { label: STATUS_LABEL[task.status], tone: "todo" };
-}
-
-function reportStatusContext(status: WorkReport["status"], isAgency: boolean): string {
-  if (status === "draft") {
-    return "Завершённые задачи попадают в отчёт сами. Проверьте итоги и отправьте клиенту.";
-  }
-  if (status === "pending_client") {
-    return isAgency ? "Отчёт отправлен клиенту и ожидает согласования." : "";
-  }
-  if (status === "disputed") {
-    return isAgency
-      ? "Клиент оставил замечания. Проверьте отмеченные задачи и верните отчёт на рассмотрение."
-      : "Замечания отправлены менеджеру. История останется доступна в этом отчёте.";
-  }
-  if (status === "dismissed") return "Отчёт снят с контроля и сохранён в истории.";
-  return "Работы по отчёту согласованы. Документ доступен для просмотра и скачивания.";
-}
-
-function MetricIcon({ kind }: { kind: "deal" | "pack" | "used" | "left" }) {
-  if (kind === "deal") {
-    return (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-        <path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" stroke="currentColor" strokeWidth="1.8" />
-        <path d="M14 3v6h6M9 13h6M9 17h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  if (kind === "pack") {
-    return (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-        <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
-        <path d="M12 8v4.5L15 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  if (kind === "used") {
-    return (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-        <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
-        <circle cx="12" cy="12" r="1.4" fill="currentColor" />
-        <path d="M12 7v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M12 4a8 8 0 0 1 8 8H12V4Z" fill="currentColor" opacity="0.22" />
-    </svg>
-  );
+function reportStatusTone(status: WorkReport["status"]): string {
+  if (status === "accepted" || status === "paid" || status === "dismissed") return "status-done";
+  if (status === "pending_client") return "status-progress";
+  if (status === "disputed") return "status-overdue";
+  return "status-todo";
 }
 
 export function ReportDetail() {
@@ -290,13 +226,10 @@ export function ReportDetail() {
     );
   }
 
-  const events = [...(detail.events || [])].reverse();
-  const statusLead = reportStatusContext(detail.status, isAgency);
-  const note =
-    detail.client_comment?.trim() ||
-    (hours.deal
-      ? `Отчёт сформирован по пакету часов сделки «${detail.deal_title}» №${detail.deal_id}. Сюда сами попадают завершённые задачи.`
-      : "Отчёт включает задачи выбранных проектов и зафиксированное по ним время.");
+  const hoursLabel =
+    hours.paid != null
+      ? `${formatPackageHours(hours.used)} из ${formatPackageHours(hours.paid)}`
+      : formatPackageHours(hours.used);
 
   return (
     <div className="tasks-page report-detail-page">
@@ -318,19 +251,27 @@ export function ReportDetail() {
       {error && <div className="error-banner">{error}</div>}
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
-      <article className="report-sheet">
-        <header className="report-sheet-head">
-          <div className="report-sheet-head-text">
-            <div className="report-detail-badges">
-              <span className={`report-status-pill status-${detail.status}`}>
-                {STATUS_LABEL_RU[detail.status]}
-              </span>
-              <span className="report-detail-date">Создан {formatDateTime(detail.created_at)}</span>
-            </div>
-            <h1 className="report-detail-title">{reportSheetTitle(detail)}</h1>
-            {statusLead ? <p className="report-detail-lead">{statusLead}</p> : null}
+      <header className="report-simple-head">
+        <div>
+          <div className="task-compact-heading">
+            <h1>{reportTitle(detail)}</h1>
+            <span className={`task-status-pill ${reportStatusTone(detail.status)}`}>
+              {STATUS_LABEL_RU[detail.status]}
+            </span>
           </div>
-          <div className="report-actions">
+          <p className="muted">
+            Сделка №{detail.deal_id} · {hoursLabel}
+            {hours.leftover != null && hours.leftover > 0
+              ? ` · осталось ${formatPackageHours(hours.leftover)}`
+              : ""}
+            {" · "}
+            {formatDateTime(detail.created_at)}
+          </p>
+          {hours.overage > 0 ? (
+            <p className="muted">Перерасход {formatPackageHours(hours.overage)} уйдёт в следующий пакет.</p>
+          ) : null}
+        </div>
+        <div className="report-simple-actions">
             <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void downloadPdf()}>
               Скачать PDF
             </button>
@@ -379,223 +320,68 @@ export function ReportDetail() {
                 Согласовать
               </button>
             ) : null}
-          </div>
-        </header>
-
-        <div className="report-sheet-grid">
-          <div className="report-sheet-main">
-            <div className="report-metric-grid">
-              <div className="report-metric">
-                <span className="report-metric-icon is-deal">
-                  <MetricIcon kind="deal" />
-                </span>
-                <div>
-                  <strong>{detail.deal_id ? `Сделка №${detail.deal_id}` : "Сделка"}</strong>
-                  <span>{detail.deal_title || "Пакет часов по сделке"}</span>
-                </div>
-              </div>
-              <div className="report-metric">
-                <span className="report-metric-icon is-pack">
-                  <MetricIcon kind="pack" />
-                </span>
-                <div>
-                  <strong>{hours.paid != null ? formatPackageHours(hours.paid) : "—"}</strong>
-                  <span>Всего по сделке</span>
-                </div>
-              </div>
-              <div className="report-metric">
-                <span className="report-metric-icon is-used">
-                  <MetricIcon kind="used" />
-                </span>
-                <div>
-                  <strong>{formatPackageHours(hours.used)}</strong>
-                  <span>В отчёте</span>
-                </div>
-              </div>
-              <div className="report-metric">
-                <span className="report-metric-icon is-left">
-                  <MetricIcon kind="left" />
-                </span>
-                <div>
-                  <strong>
-                    {hours.leftover != null ? formatPackageHours(hours.leftover) : "—"}
-                  </strong>
-                  <span>Осталось закрыть</span>
-                </div>
-              </div>
-            </div>
-
-            {hours.overage > 0 ? (
-              <p className="report-overage-hint">
-                Перерасход {formatPackageHours(hours.overage)} уйдёт в следующий пакет.
-              </p>
-            ) : null}
-            {hours.carried > 0 ? (
-              <p className="report-overage-hint">
-                В отчёт уже вошло {formatPackageHours(hours.carried)} перерасхода с прошлой сделки.
-              </p>
-            ) : null}
-
-            {hours.usedPct != null && hours.paid != null ? (
-              <div className="report-pack-bar">
-                <div className="report-pack-bar-copy">
-                  <strong>{Math.round(hours.usedPct)}% пакета в отчёте</strong>
-                  <span>
-                    {hours.used != null ? formatPackageHours(hours.used) : "—"} из {formatPackageHours(hours.paid)}
-                  </span>
-                </div>
-                <div
-                  className="report-pack-track"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(hours.usedPct)}
-                >
-                  <span style={{ width: `${Math.max(hours.usedPct, hours.reportSeconds > 0 ? 2 : 0)}%` }} />
-                </div>
-              </div>
-            ) : null}
-
-            {detail.status === "disputed" && detail.client_comment ? (
-              <div className="report-dispute-banner">
-                <strong>Комментарий клиента:</strong> {detail.client_comment}
-                {detail.dispute_items && detail.dispute_items.length > 0 ? (
-                  <ul>
-                    {detail.dispute_items.map((item) => (
-                      <li key={item.id}>
-                        {item.task_title}
-                        {item.note ? ` — ${item.note}` : ""}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : null}
-
-            <section className="report-table-card">
-              <div className="report-section-head">
-                <h2 className="report-section-title">
-                  {detail.status === "disputed" ? "Задачи к обсуждению" : "Завершённые задачи"}
-                </h2>
-                <div className="report-table-tools">
-                  {detail.status === "disputed" ? (
-                    <p className="muted report-dispute-scope-hint">
-                      Показаны только задачи, которые клиент отметил для обсуждения
-                    </p>
-                  ) : null}
-                  <span className="report-table-count">
-                    {allTasks.length} {tasksWord(allTasks.length)}
-                  </span>
-                </div>
-              </div>
-
-              {allTasks.length === 0 ? (
-                <p className="muted report-tasks-empty">
-                  {detail.status === "draft"
-                    ? "Закройте задачу — она появится здесь сама."
-                    : "В отчёте пока нет задач"}
-                </p>
-              ) : (
-                <div className="report-task-list">
-                    {allTasks.map((task) => {
-                      const outcome = (task.outcome || "").trim();
-                      const status = taskStatusMeta(task);
-                      const files = task.files || [];
-                      return (
-                        <article
-                          key={task.id}
-                          className={`report-task-item${task.disputed || task.awaiting_client ? " is-review" : ""}`}
-                        >
-                          <header className="report-task-item-head">
-                            <div className="report-task-item-title">
-                              <Link to={`/tasks/${task.id}`} state={fromState}>
-                                {task.title}
-                              </Link>
-                              <Link to={`/projects/${task.projectId}`} state={fromState}>
-                                {task.projectName}
-                              </Link>
-                            </div>
-                            <div className="report-task-item-meta">
-                              <span className={`report-dot-status is-${status.tone}`}>
-                                <i aria-hidden />
-                                {status.label}
-                              </span>
-                              <strong>{formatDuration(task.tracked_seconds)}</strong>
-                            </div>
-                          </header>
-                          <div className="report-task-item-body">
-                            <section className={`report-task-result${outcome ? "" : " is-empty"}`}>
-                              <span>Итог работы</span>
-                              <p>{outcome || "Итог пока не указан"}</p>
-                            </section>
-                            <section className="report-task-files">
-                              <span>Файлы к результату</span>
-                              {files.length ? (
-                                <ul className="report-result-files">
-                                  {files.map((file) => (
-                                    <li key={file.id}>
-                                      <a
-                                        href={file.url}
-                                        className="report-file-link"
-                                        target="_blank"
-                                        rel="noreferrer"
-                                      >
-                                        <FileGlyph />
-                                        <span>{file.name}</span>
-                                      </a>
-                                    </li>
-                                  ))}
-                                </ul>
-                              ) : (
-                                <p className="muted">Нет файлов</p>
-                              )}
-                            </section>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  <footer className="report-task-list-total">
-                    <span>Итого по задачам</span>
-                    <strong>{formatDuration(hours.taskSeconds)}</strong>
-                  </footer>
-                  {hours.carried > 0 ? (
-                    <footer className="report-task-list-total">
-                      <span>Перерасход с прошлой сделки</span>
-                      <strong>{formatPackageHours(hours.carried)}</strong>
-                    </footer>
-                  ) : null}
-                </div>
-              )}
-            </section>
-          </div>
-
-          <aside className="report-sheet-aside">
-            {events.length > 0 ? (
-              <section className="report-aside-card">
-                <h3>История согласования</h3>
-                <ol className="report-aside-timeline">
-                  {events.map((event, idx) => (
-                    <li key={event.id} className={idx === 0 ? "is-latest" : ""}>
-                      <span className="report-aside-dot" aria-hidden />
-                      <div>
-                        <strong>{EVENT_LABEL[event.kind] || event.kind}</strong>
-                        <span>
-                          {event.actor_name || "система"} · {formatDateTime(event.created_at)}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ol>
-              </section>
-            ) : null}
-
-            <section className="report-aside-card report-note-card">
-              <h3>Комментарий к отчёту</h3>
-              <p>{note}</p>
-            </section>
-          </aside>
         </div>
-      </article>
+      </header>
+
+      {detail.client_comment?.trim() || detail.dispute_items?.length ? (
+        <p className="report-simple-note">
+          {detail.client_comment?.trim()}
+          {detail.dispute_items?.length
+            ? `${detail.client_comment?.trim() ? " · " : ""}${detail.dispute_items
+                .map((item) => item.task_title)
+                .join(", ")}`
+            : ""}
+        </p>
+      ) : null}
+
+      {allTasks.length === 0 ? (
+        <p className="muted">
+          {detail.status === "draft"
+            ? "Закройте задачу — она появится здесь сама."
+            : "В отчёте пока нет задач"}
+        </p>
+      ) : (
+        <div className="task-list-group">
+          {allTasks.map((task) => {
+            const outcome = (task.outcome || "").trim();
+            const files = task.files || [];
+            return (
+              <article key={task.id} className="board-row task-card">
+                <div className="board-row-main">
+                  <div className="task-compact-heading">
+                    <Link to={`/tasks/${task.id}`} state={fromState} className="board-row-title task-card-title">
+                      {task.title}
+                    </Link>
+                    {task.status === "done" ? (
+                      <span className="task-status-pill status-done">Готово</span>
+                    ) : task.status === "in_progress" ? (
+                      <span className="task-status-pill status-progress">В работе</span>
+                    ) : null}
+                  </div>
+                  <span className="board-row-note muted">
+                    {task.projectName}
+                    {outcome ? ` · ${outcome}` : ""}
+                  </span>
+                  {files.length ? (
+                    <span className="report-file-line">
+                      {files.map((file) => (
+                        <a key={file.id} href={file.url} target="_blank" rel="noreferrer">
+                          {file.name}
+                        </a>
+                      ))}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="task-compact-side">
+                  <span className="board-meta-due">
+                    <strong>{formatDuration(task.tracked_seconds)}</strong>
+                  </span>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

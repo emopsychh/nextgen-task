@@ -12,6 +12,7 @@ import {
 import { useAuth } from "../../auth/AuthContext";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { FlashToast } from "../../components/FlashToast";
+import { ModalPortal } from "../../components/ModalPortal";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
 import { formatDateTime } from "../../lib/format";
@@ -561,6 +562,26 @@ export function ClientBacklog() {
                   </span>
                 </button>
                 <div className="request-card-actions">
+                  {item.status !== "in_progress" ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      disabled={savingId === item.id}
+                      onClick={() => void patchItem(item.id, { status: "in_progress" })}
+                    >
+                      Запланировать
+                    </button>
+                  ) : null}
+                  {item.status !== "deferred" ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      disabled={savingId === item.id}
+                      onClick={() => void patchItem(item.id, { status: "deferred" })}
+                    >
+                      Отложить
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="btn btn-primary"
@@ -830,6 +851,7 @@ export function ClientBacklog() {
       )}
 
       {selected ? (
+        <ModalPortal>
         <div
           className="modal-backdrop"
           role="presentation"
@@ -999,6 +1021,7 @@ export function ClientBacklog() {
             </div>
           </div>
         </div>
+        </ModalPortal>
       ) : null}
 
       <ConfirmDialog

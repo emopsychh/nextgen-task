@@ -31,10 +31,18 @@ export function AccountPage() {
     };
   }, [token, portal?.id]);
 
-  const organization = (portalInfo?.organization || "").trim();
+  const displayName =
+    (user?.display_name || user?.name || "").trim() || "Пользователь";
+  const organization = (portalInfo?.organization || portalInfo?.name || "").trim();
   const email = (user?.email || "").trim();
   const username = (user?.username || "").trim();
-  const hasProfile = Boolean(username || email || organization);
+  const roleLabel = portal?.role === "agency" ? "Агентство" : "Клиент";
+  const initials = displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("") || "NG";
 
   async function onChangePassword(e: FormEvent) {
     e.preventDefault();
@@ -74,48 +82,46 @@ export function AccountPage() {
 
   return (
     <div className="account-page">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Личный кабинет</h1>
-          <p className="page-sub">Профиль, пароль и выход из системы</p>
-        </div>
-      </div>
-
       <FlashToast message={toast.message} title={toast.title} leaving={toast.leaving} />
 
-      <div className="account-grid">
-        {hasProfile ? (
-          <section className="account-card">
-            <h2 className="section-title">Профиль</h2>
-            <dl className="account-meta">
-              {organization ? (
-                <div>
-                  <dt>Организация</dt>
-                  <dd>{organization}</dd>
-                </div>
-              ) : null}
-              {username ? (
-                <div>
-                  <dt>Логин</dt>
-                  <dd>{username}</dd>
-                </div>
-              ) : null}
-              {email ? (
-                <div>
-                  <dt>Email</dt>
-                  <dd>{email}</dd>
-                </div>
-              ) : null}
-            </dl>
-          </section>
-        ) : null}
+      <section className="account-identity" aria-label="Профиль">
+        <div className="account-avatar" aria-hidden>
+          {user?.avatar_url ? <img src={user.avatar_url} alt="" /> : <span>{initials}</span>}
+        </div>
+        <div className="account-identity-copy">
+          <div className="account-identity-head">
+            <strong>{displayName}</strong>
+            <span className="account-role">{roleLabel}</span>
+          </div>
+          <dl className="account-meta">
+            {organization ? (
+              <div>
+                <dt>Организация</dt>
+                <dd>{organization}</dd>
+              </div>
+            ) : null}
+            {username ? (
+              <div>
+                <dt>Логин</dt>
+                <dd>{username}</dd>
+              </div>
+            ) : null}
+            {email ? (
+              <div>
+                <dt>Email</dt>
+                <dd>{email}</dd>
+              </div>
+            ) : null}
+          </dl>
+        </div>
+        <button type="button" className="account-logout" onClick={logout}>
+          Выйти
+        </button>
+      </section>
 
-        <section className="account-card">
-          <h2 className="section-title">Смена пароля</h2>
-          <p className="muted account-card-lead">
-            Пароль нужен для входа через веб. Минимум 8 символов.
-          </p>
-          <form className="stack" onSubmit={(e) => void onChangePassword(e)}>
+      <section className="account-panel" aria-label="Смена пароля">
+        <h2>Изменить пароль</h2>
+        <form className="account-password-form" onSubmit={(e) => void onChangePassword(e)}>
             <label className="field">
               <span>Текущий пароль</span>
               <input
@@ -151,22 +157,11 @@ export function AccountPage() {
               />
             </label>
             {error ? <div className="error-banner">{error}</div> : null}
-            <button type="submit" className="btn btn-primary" disabled={busy}>
+            <button type="submit" className="account-save" disabled={busy}>
               {busy ? "Сохраняем…" : "Сохранить пароль"}
             </button>
           </form>
-        </section>
-
-        <section className="account-card account-card-session">
-          <h2 className="section-title">Сессия</h2>
-          <p className="muted account-card-lead">
-            Выйти из кабинета на этом устройстве. Данные клиентов и задач не удалятся.
-          </p>
-          <button type="button" className="btn btn-ghost account-logout" onClick={logout}>
-            Выйти
-          </button>
-        </section>
-      </div>
+      </section>
     </div>
   );
 }

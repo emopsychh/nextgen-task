@@ -32,6 +32,38 @@ class Project(models.Model):
         return f"{self.name} ({self.portal})"
 
 
+class ProjectMeeting(models.Model):
+    class Format(models.TextChoices):
+        VIDEO = "video", "Видеовстреча"
+        PHONE = "phone", "Звонок"
+        OFFICE = "office", "Офлайн"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="meetings")
+    title = models.CharField(max_length=255)
+    scheduled_at = models.DateTimeField(db_index=True)
+    duration_minutes = models.PositiveSmallIntegerField(default=60)
+    format = models.CharField(max_length=16, choices=Format.choices, default=Format.VIDEO)
+    location = models.CharField(max_length=500, blank=True)
+    notes = models.TextField(blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    outcome = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        BitrixUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_project_meetings",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["scheduled_at", "id"]
+
+    def __str__(self):
+        return f"{self.project_id}: {self.title}"
+
+
 class Task(models.Model):
     class Status(models.TextChoices):
         TODO = "todo", "To do"

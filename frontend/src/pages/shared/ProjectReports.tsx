@@ -10,7 +10,6 @@ import {
 } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { usePortalLiveSync } from "../../hooks/usePortalLiveSync";
-import { BoardDoneSplit } from "../../components/BoardDoneSplit";
 import { PaginationBar } from "../../components/PaginationBar";
 import { formatPackageHours } from "../../lib/format";
 import { LIST_PAGE_SIZE, pageTotal, withPage } from "../../lib/pagination";
@@ -27,10 +26,6 @@ import {
   STATUS_LABEL_RU,
 } from "./reportHelpers";
 
-function reportRowTitle(r: WorkReport): string {
-  return reportTitle(r);
-}
-
 function reportStatusTone(status: WorkReport["status"]): string {
   if (status === "accepted" || status === "paid" || status === "dismissed") return "status-done";
   if (status === "pending_client") return "status-progress";
@@ -38,25 +33,15 @@ function reportStatusTone(status: WorkReport["status"]): string {
   return "status-todo";
 }
 
-function packageHint(report: WorkReport, isAgency: boolean): string | null {
-  const fill = reportPackageFill(report);
-  if (report.status === "accepted" || report.status === "paid") return "Пакет закрыт";
-  if (report.status === "dismissed") return "Снято с контроля";
-  if (report.status === "disputed") return isAgency ? "Клиент оставил замечания" : "Менеджер смотрит замечания";
-  if (report.status === "pending_client") {
-    return isAgency ? "Ждём согласования клиента" : "Нужно согласовать закрытие пакета";
-  }
-  if (fill.leftover == null) return null;
-  if (fill.leftover > 0) return `Ещё ${formatPackageHours(fill.leftover)} закрыть в отчёт`;
-  if (fill.overage > 0) {
-    return isAgency
-      ? `Перерасход ${formatPackageHours(fill.overage)} уйдёт в следующий пакет`
-      : `Перерасход ${formatPackageHours(fill.overage)} перейдёт в следующий пакет`;
-  }
-  if (fill.carried > 0) {
-    return `В том числе ${formatPackageHours(fill.carried)} с прошлого пакета`;
-  }
-  return isAgency ? "Отчёт заполнен — можно отправлять" : "Отчёт заполнен";
+export function ReportsLocked() {
+  return (
+    <div className="tasks-page reports-locked">
+      <section className="reports-locked-card">
+        <h1>Отчёты</h1>
+        <p>Скоро заработает</p>
+      </section>
+    </div>
+  );
 }
 
 const EMPTY_REPORT_COUNTS: Record<ReportBucket, number> = {
@@ -226,17 +211,6 @@ export function ProjectReports() {
 
   return (
     <div className="tasks-page report-hub">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Отчёты</h1>
-          {isAgency ? (
-            <p className="page-sub">
-              Завершённые задачи сами попадают в отчёт. Когда пакет выработан — отправьте клиенту
-            </p>
-          ) : null}
-        </div>
-      </div>
-
       {error && <div className="error-banner">{error}</div>}
 
       <section className="package-reports">
@@ -284,82 +258,40 @@ export function ProjectReports() {
             </p>
           </div>
         ) : (
-          <BoardDoneSplit
-            items={reports}
-            split={bucket === "all"}
-            isDone={(r) =>
-              r.status === "accepted" || r.status === "paid" || r.status === "dismissed"
-            }
-            doneLabel="Закрытые пакеты"
-            renderItem={(r) => {
-              const done = r.status === "accepted" || r.status === "paid" || r.status === "dismissed";
+          <div className="task-list-group">
+            {reports.map((r) => {
               const fill = reportPackageFill(r);
-              const paid = fill.paid;
-              const used = fill.used;
-              const leftover = fill.leftover;
-              const usedPct = fill.usedPct != null ? Math.round(fill.usedPct) : 0;
-              const hint = packageHint(r, isAgency);
-              const readyToClose = !done && fill.isFull && (r.tasks_count || 0) > 0 && r.status === "draft";
-              const needsAction = r.status === "pending_client" || r.status === "disputed";
+              const hoursLabel =
+                fill.paid != null
+                  ? `${formatPackageHours(fill.used)} из ${formatPackageHours(fill.paid)}`
+                  : formatPackageHours(fill.used);
               return (
-                <li key={r.id} className="board-list-item">
-                  <Link
-                    to={reportDetailPath(portalId, isAgency, r.id)}
-                    className={`board-row${done ? " is-done" : ""}${needsAction ? " needs-action" : ""}${readyToClose ? " is-ready" : ""}`}
-                  >
-                    <div className="board-row-main">
-                      <div className="board-row-chips">
-                        <span className={`task-status-pill ${reportStatusTone(r.status)}`}>
-                          {STATUS_LABEL_RU[r.status]}
-                        </span>
-                        {readyToClose ? (
-                          <span className="report-ready-pill">
-                            {isAgency ? "Можно закрывать" : "Часы израсходованы"}
-                          </span>
-                        ) : null}
-                        {r.dispute_count ? (
-                          <span className="task-working-pill">Есть замечания</span>
-                        ) : null}
-                      </div>
-                      <strong className="board-row-title">{reportRowTitle(r)}</strong>
-                      <span className="board-row-note muted">
-                        Сделка №{r.deal_id} · {reportSubtitle(r)}
-                        {hint ? ` · ${hint}` : ""}
+                <Link
+                  key={r.id}
+                  to={reportDetailPath(portalId, isAgency, r.id)}
+                  className="board-row task-card"
+                >
+                  <div className="board-row-main">
+                    <div className="task-compact-heading">
+                      <strong className="board-row-title task-card-title">{reportTitle(r)}</strong>
+                      <span className={`task-status-pill ${reportStatusTone(r.status)}`}>
+                        {STATUS_LABEL_RU[r.status]}
                       </span>
-                      {paid != null ? (
-                        <div className={`board-progress report-package-progress${readyToClose ? " is-ready" : ""}`}>
-                          <span className="board-progress-pct">{usedPct}%</span>
-                          <span className="board-progress-track" aria-hidden>
-                            <span style={{ width: `${usedPct}%` }} />
-                          </span>
-                        </div>
-                      ) : null}
                     </div>
-                    <div className="board-row-meta is-report">
-                      <div className="board-meta">
-                        <span className="board-meta-label">Пакет</span>
-                        <span className="board-meta-due">
-                          <strong>{paid == null ? "—" : formatPackageHours(paid)}</strong>
-                        </span>
-                      </div>
-                      <div className="board-meta">
-                        <span className="board-meta-label">В отчёте</span>
-                        <span className="board-meta-time">
-                          {formatPackageHours(used)}
-                        </span>
-                      </div>
-                      <div className={`board-meta${readyToClose ? " is-ready" : ""}`}>
-                        <span className="board-meta-label">Осталось закрыть</span>
-                        <span className="board-meta-due">
-                          <strong>{leftover == null ? "—" : formatPackageHours(leftover)}</strong>
-                        </span>
-                      </div>
-                    </div>
-                  </Link>
-                </li>
+                    <span className="board-row-note muted">
+                      Сделка №{r.deal_id} · {reportSubtitle(r)}
+                    </span>
+                  </div>
+                  <div className="task-compact-side">
+                    <span className="board-meta-due">
+                      <strong>{hoursLabel}</strong>
+                    </span>
+                    <span className="task-compact-arrow" aria-hidden>›</span>
+                  </div>
+                </Link>
               );
-            }}
-          />
+            })}
+          </div>
         )}
         <PaginationBar
           page={page}

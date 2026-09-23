@@ -13,17 +13,18 @@ import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { SmartBackButton } from "../../components/SmartBackButton";
 import { TaskCompleteModal } from "../../components/TaskCompleteModal";
+import { FlameIcon } from "../../components/icons";
+import { AutoGrowTextarea } from "../../components/task/AutoGrowTextarea";
 import { TaskComposer } from "../../components/task/TaskComposer";
 import { TaskSummaryCard } from "../../components/task/TaskSummaryCard";
 import { TaskThread, type ThreadRow } from "../../components/task/TaskThread";
-import { SyncHint } from "../../components/SyncHint";
 import { useFlashToast } from "../../hooks/useFlashToast";
 import { useTaskLiveSync } from "../../hooks/useTaskLiveSync";
 import { dueMeta } from "../../lib/dates";
 import { formatDayLabel } from "../../lib/format";
 import { isImageFile } from "../../lib/files";
 import { readPortalCache, writePortalCache } from "../../lib/portalSessionCache";
-import { isTaskOverdue } from "../../lib/status";
+import { isTaskOverdue, STATUS_LABEL, STATUS_TONE } from "../../lib/status";
 import { displayTimeZone } from "../../lib/timezone";
 
 /** Images first, then documents; drop exact duplicates (same name+size). */
@@ -65,8 +66,11 @@ export function TaskDetail() {
   const textInputRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const patchSeq = useRef(0);
 
-  const [task, setTask] = useState<Task | null>(null);
+  const [task, setTask] = useState<Task | null>(() =>
+    readPortalCache<Task>("task-detail", Number(taskId || 0))
+  );
   const [items, setItems] = useState<ThreadItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -86,7 +90,7 @@ export function TaskDetail() {
   const [draftDescription, setDraftDescription] = useState("");
   const [draftOutcome, setDraftOutcome] = useState("");
   const [completeOpen, setCompleteOpen] = useState(false);
-  const [threadSyncing, setThreadSyncing] = useState(false);
+  const [, setThreadSyncing] = useState(false);
 
   const canEditDueDate =
     portal?.role === "agency" ||
@@ -392,7 +396,12 @@ export function TaskDetail() {
 
   async function patchTask(fields: TaskPatch, okMessage?: string) {
     if (!token || !task || !canManage) return;
-    setSaveBusy(true);
+    const prev = task;
+    const seq = ++patchSeq.current;
+    setTask({ ...task, ...fields, updated_at: new Date().toISOString() });
+    if (fields.title !== undefined) setDraftTitle(fields.title);
+    if (fields.description !== undefined) setDraftDescription(fields.description);
+    if (fields.outcome !== undefined) setDraftOutcome(fields.outcome);
     setError(null);
     try {
       const updated = await api<Task>(
@@ -400,17 +409,20 @@ export function TaskDetail() {
         { method: "PATCH", body: JSON.stringify(fields) },
         token
       );
+      if (seq !== patchSeq.current) return;
       setTask(updated);
       setDraftTitle(updated.title);
       setDraftDescription(updated.description || "");
+      setDraftOutcome(updated.outcome || "");
       if (okMessage) toast.show(okMessage);
       window.dispatchEvent(new Event("projects-updated"));
     } catch (err) {
+      if (seq !== patchSeq.current) return;
+      setTask(prev);
+      setDraftTitle(prev.title);
+      setDraftDescription(prev.description || "");
+      setDraftOutcome(prev.outcome || "");
       setError(err instanceof Error ? err.message : "Не удалось сохранить");
-      setDraftTitle(task.title);
-      setDraftDescription(task.description || "");
-    } finally {
-      setSaveBusy(false);
     }
   }
 
@@ -505,7 +517,6 @@ export function TaskDetail() {
       working_by_name: status === "in_progress" ? task.working_by_name : null,
       updated_at: optimisticAt,
     });
-    setSaveBusy(true);
     setError(null);
     try {
       const updated = await api<Task>(
@@ -521,8 +532,6 @@ export function TaskDetail() {
     } catch (err) {
       setTask(prev);
       setError(err instanceof Error ? err.message : "Не удалось сохранить");
-    } finally {
-      setSaveBusy(false);
     }
   }
 
@@ -582,8 +591,15 @@ export function TaskDetail() {
 
   async function toggleAwaitingClient() {
     if (!token || !task || !canChangeStatus) return;
+    const prev = task;
     const next = !task.awaiting_client;
-    setSaveBusy(true);
+    const optimisticAt = new Date().toISOString();
+    setTask({
+      ...task,
+      awaiting_client: next,
+      awaiting_client_at: next ? optimisticAt : null,
+      updated_at: optimisticAt,
+    });
     setError(null);
     try {
       const updated = await api<Task>(
@@ -597,9 +613,8 @@ export function TaskDetail() {
       );
       window.dispatchEvent(new Event("projects-updated"));
     } catch (err) {
+      setTask(prev);
       setError(err instanceof Error ? err.message : "Не удалось обновить ожидание ответа");
-    } finally {
-      setSaveBusy(false);
     }
   }
 
@@ -672,7 +687,30 @@ export function TaskDetail() {
       taskId: task.id,
     });
 
-    setSendBusy(true);
+    const optimisticId = -Date.now();
+    const sentAt = new Date().toISOString();
+    const authorName = user?.display_name || user?.name || "Вы";
+    if (text) {
+      appendNew([
+        {
+          kind: "comment",
+          at: sentAt,
+          comment: {
+            id: optimisticId,
+            task: task.id,
+            author: user?.id ?? null,
+            author_name: authorName,
+            author_display: authorName,
+            text,
+            created_at: sentAt,
+          },
+        },
+      ]);
+      scrollToBottom(true);
+    }
+    setComment("");
+    setPendingFiles([]);
+    if (files.length) setSendBusy(true);
     setError(null);
     try {
       // Always create a comment so files appear in the thread and sync to Bitrix chat.
@@ -694,9 +732,27 @@ export function TaskDetail() {
       setComment("");
       setPendingFiles([]);
       await refreshAfterSend();
-      toast.show(text ? "Сообщение отправлено" : "Файл отправлен");
+      if (text) {
+        setItems((prev) => {
+          const delivered = prev.some(
+            (item) =>
+              item.kind === "comment" && item.comment.id > 0 && item.comment.text === text
+          );
+          if (!delivered) return prev;
+          return prev.filter(
+            (item) => !(item.kind === "comment" && item.comment.id === optimisticId)
+          );
+        });
+      }
     } catch (err) {
       console.error("[nextgen-attach] sendMessage failed", err);
+      if (text) {
+        setItems((prev) =>
+          prev.filter((item) => !(item.kind === "comment" && item.comment.id === optimisticId))
+        );
+      }
+      setComment(text);
+      setPendingFiles(files);
       setError(err instanceof Error ? err.message : "Не удалось отправить");
     } finally {
       setSendBusy(false);
@@ -712,7 +768,7 @@ export function TaskDetail() {
 
   if (!task) {
     return (
-      <div className="task-detail-page">
+      <div className="task-detail-page chat-mode task-detail-loading" aria-busy={!error}>
         {error ? (
           <div className="stack" style={{ gap: 12 }}>
             <div className="error-banner">{error}</div>
@@ -721,7 +777,16 @@ export function TaskDetail() {
             </SmartBackButton>
           </div>
         ) : (
-          <div className="muted">Загрузка задачи…</div>
+          <>
+            <div className="chat-topbar task-loading-topbar" aria-hidden>
+              <span className="task-loading-back" />
+              <span className="task-loading-title" />
+            </div>
+            <div className="task-loading-grid" aria-label="Загрузка задачи">
+              <span className="task-loading-panel" />
+              <span className="task-loading-panel is-chat" />
+            </div>
+          </>
         )}
       </div>
     );
@@ -735,39 +800,13 @@ export function TaskDetail() {
   const due = dueMeta(task.due_date, task.status, dueTz);
   const overdue = isTaskOverdue(task.due_date, task.status);
   const canSend = Boolean(comment.trim() || pendingFiles.length) && !sendBusy;
-  const creator = task.created_by_name || "Команда";
+  const creator =
+    task.created_by_name?.replace(/\?{2,}/g, "").replace(/\s{2,}/g, " ").trim() ||
+    "Команда";
   const backFallback = `/projects/${task.project}`;
 
   return (
     <div className="task-detail-page chat-mode">
-      <div className="chat-topbar">
-        <div className="chat-topbar-left">
-          <SmartBackButton
-            fallback={backFallback}
-            className="task-back"
-            title="Назад"
-          >
-            <span className="task-back-icon" aria-hidden>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M15 6 9 12l6 6"
-                  stroke="currentColor"
-                  strokeWidth="2.2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </span>
-            <span className="task-back-label">Назад</span>
-          </SmartBackButton>
-          <div className="chat-topbar-title">
-            <strong>{task.title}</strong>
-            <span className="muted">{task.project_name}</span>
-          </div>
-          {threadSyncing ? <SyncHint>Обновляем чат…</SyncHint> : null}
-        </div>
-      </div>
-
       {error && <div className="error-banner">{error}</div>}
       {task.sync_status === "error" && task.sync_error ? (
         <div className="error-banner">
@@ -787,45 +826,25 @@ export function TaskDetail() {
       />
 
       <div className="task-bitrix">
-        <TaskSummaryCard
-          task={task}
-          creator={creator}
-          overdue={overdue}
-          due={due}
-          canManage={canManage}
-          canChangeStatus={canChangeStatus}
-          canEditDueDate={canEditDueDate}
-          saveBusy={saveBusy}
-          draftTitle={draftTitle}
-          draftDescription={draftDescription}
-          onDraftTitle={setDraftTitle}
-          onDraftDescription={setDraftDescription}
-          onCommitTitle={() => void commitTitle()}
-          onCommitDescription={() => void commitDescription()}
-          onSetStatus={(s) => void setStatus(s)}
-          onRequestComplete={() => setCompleteOpen(true)}
-          onSetDueDate={(iso) => void setDueDate(iso)}
-          onToggleImportant={() => void toggleImportant()}
-          onToggleAwaitingClient={
-            canChangeStatus ? () => void toggleAwaitingClient() : undefined
-          }
-          draftOutcome={draftOutcome}
-          onDraftOutcome={setDraftOutcome}
-          onCommitOutcome={() => void commitOutcome()}
-          canAddTime={canChangeStatus}
-          onSetTime={setTime}
-          dueTimeZone={dueTz}
-          onDelete={() => void deleteTask()}
-        />
-
         <section className="messenger task-chat-pane">
           <div className="task-chat-header">
-            <strong>Чат задачи</strong>
-            <span className="task-chat-header-sub">
-              {items.length > 0
-                ? `${items.length}${hasMore ? "+" : ""} в ленте`
-                : "переписка и файлы"}
-            </span>
+            <div className="task-chat-header-main">
+              <SmartBackButton fallback={backFallback} className="task-back" title="Назад">
+                <span className="task-back-icon" aria-hidden>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="M15 6 9 12l6 6"
+                      stroke="currentColor"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+                <span className="task-back-label">Назад</span>
+              </SmartBackButton>
+              <strong>Чат задачи</strong>
+            </div>
           </div>
 
           <div className="messenger-thread" ref={threadRef}>
@@ -860,6 +879,113 @@ export function TaskDetail() {
             onKeyDown={onComposerKeyDown}
           />
         </section>
+
+        <aside className="task-side">
+          <section className="task-focus-hero">
+            <div className="task-focus-title-row">
+              {canManage ? (
+                <AutoGrowTextarea
+                  className={`task-focus-title${task.status === "done" ? " is-struck" : ""}`}
+                  value={draftTitle}
+                  onChange={(event) => setDraftTitle(event.target.value)}
+                  onBlur={() => void commitTitle()}
+                  minRows={1}
+                  maxHeight={118}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  aria-label="Название задачи"
+                />
+              ) : (
+                <h1 className={`task-focus-title${task.status === "done" ? " is-struck" : ""}`}>
+                  {task.title}
+                </h1>
+              )}
+              {canManage ? (
+                <button
+                  type="button"
+                  className={`task-important-toggle${task.is_important ? " is-important" : ""}`}
+                  onClick={() => void toggleImportant()}
+                  aria-pressed={Boolean(task.is_important)}
+                  title={task.is_important ? "Снять отметку «Важная»" : "Отметить как важную"}
+                  aria-label={task.is_important ? "Снять отметку «Важная»" : "Отметить как важную"}
+                >
+                  <FlameIcon filled={Boolean(task.is_important)} size={18} />
+                </button>
+              ) : task.is_important ? (
+                <span className="task-important-toggle is-important is-static" title="Важная задача">
+                  <FlameIcon filled size={18} />
+                </span>
+              ) : null}
+            </div>
+
+            <div className="task-focus-statuses">
+              {task.status !== "todo" ? (
+                <span className={`task-status-pill ${STATUS_TONE[task.status]}`}>
+                  {STATUS_LABEL[task.status]}
+                </span>
+              ) : null}
+              {task.is_working || task.awaiting_client || overdue ? (
+                <span className="task-focus-flags">
+                  {task.is_working ? (
+                    <span className="task-focus-flag is-live" title={task.working_by_name || undefined}>
+                      Сейчас в работе
+                    </span>
+                  ) : null}
+                  {task.awaiting_client ? (
+                    <span className="task-focus-flag">Ожидает ответа</span>
+                  ) : null}
+                  {overdue ? <span className="task-focus-flag is-late">Опаздывает</span> : null}
+                </span>
+              ) : null}
+            </div>
+
+            <div className="task-focus-description">
+              {canManage ? (
+                <AutoGrowTextarea
+                  className={`task-focus-description-input${!draftDescription.trim() ? " is-empty" : ""}`}
+                  value={draftDescription}
+                  onChange={(event) => setDraftDescription(event.target.value)}
+                  onBlur={() => void commitDescription()}
+                  minRows={1}
+                  maxHeight={140}
+                  placeholder="Добавить описание задачи"
+                  aria-label="Описание задачи"
+                />
+              ) : task.description?.trim() ? (
+                <p>{task.description}</p>
+              ) : (
+                <p className="is-empty">Описание не указано</p>
+              )}
+            </div>
+          </section>
+
+        <TaskSummaryCard
+          task={task}
+          creator={creator}
+          due={due}
+          canManage={canManage}
+          canChangeStatus={canChangeStatus}
+          canEditDueDate={canEditDueDate}
+          saveBusy={saveBusy}
+          onSetStatus={(s) => void setStatus(s)}
+          onRequestComplete={() => setCompleteOpen(true)}
+          onSetDueDate={(iso) => void setDueDate(iso)}
+          onToggleAwaitingClient={
+            canChangeStatus ? () => void toggleAwaitingClient() : undefined
+          }
+          draftOutcome={draftOutcome}
+          onDraftOutcome={setDraftOutcome}
+          onCommitOutcome={() => void commitOutcome()}
+          canAddTime={canChangeStatus}
+          onSetTime={setTime}
+          dueTimeZone={dueTz}
+          onDelete={() => void deleteTask()}
+        />
+        </aside>
       </div>
     </div>
   );

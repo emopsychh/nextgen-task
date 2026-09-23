@@ -101,6 +101,7 @@ export function DealHoursCard({ binding, audience = "agency" }: Props) {
       >
         <div className="deal-hours-card-head">
           <h2 className="section-title">{moneyMode ? "Баланс" : "Пакет часов"}</h2>
+          {over ? <span className="deal-hours-pack-state">Пакет исчерпан</span> : null}
         </div>
 
         <div className="deal-hours-pack-top">

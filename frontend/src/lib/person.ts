@@ -1,4 +1,4 @@
-const AVATAR_COLORS = ["#5b6ce2", "#0f8f82", "#c45c2a", "#6d5cae", "#2f7d4a", "#b45309"];
+const AVATAR_COLORS = ["#171717", "#555552", "#d68d48", "#343432", "#8b6546", "#b97837"];
 
 export function personInitials(name: string | null | undefined): string {
   const parts = (name || "").trim().split(/\s+/).filter(Boolean);

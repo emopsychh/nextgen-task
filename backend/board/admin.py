@@ -5,6 +5,7 @@ from .models import (
     BacklogItem,
     Comment,
     Project,
+    ProjectMeeting,
     SupportTicket,
     SupportTicketMessage,
     Task,
@@ -58,6 +59,13 @@ class ProjectAdmin(admin.ModelAdmin):
     list_display = ("name", "portal", "bitrix_task_id", "bitrix_group_id", "is_active", "created_at")
     list_filter = ("portal", "is_active")
     search_fields = ("name", "bitrix_task_id")
+
+
+@admin.register(ProjectMeeting)
+class ProjectMeetingAdmin(admin.ModelAdmin):
+    list_display = ("title", "project", "scheduled_at", "duration_minutes", "format", "created_by")
+    list_filter = ("format", "project__portal")
+    search_fields = ("title", "location", "notes")
 
 
 @admin.register(Task)

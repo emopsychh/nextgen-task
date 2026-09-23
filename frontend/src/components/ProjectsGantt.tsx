@@ -7,12 +7,12 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Link } from "react-router-dom";
-import type { Project } from "../api/types";
+import type { Project, Task } from "../api/types";
 import { addDays, isValidDate, parseDue, startOfDay } from "../lib/dates";
 import { isProjectComplete, projectProgress } from "../lib/projectProgress";
 
 const DAY_MS = 86400000;
-const BAR_H = 26;
+const BAR_H = 20;
 const ZOOM_MIN = 10;
 const ZOOM_MAX = 48;
 const ZOOM_DEFAULT = 22;
@@ -38,8 +38,10 @@ const MONTHS_RU = [
 
 type BarTone = "active" | "working" | "done" | "overdue";
 
-type ProjectBar = {
-  project: Project;
+type TimelineBar = {
+  id: number;
+  name: string;
+  href: string;
   start: Date;
   end: Date;
   openEnded: boolean;
@@ -63,7 +65,7 @@ function eachDay(from: Date, to: Date): Date[] {
   return days;
 }
 
-function projectBar(project: Project, today: Date): ProjectBar {
+function projectBar(project: Project, today: Date): TimelineBar {
   const created = parseDue(project.created_at);
   const due = parseDue(project.due_date);
   const completed = parseDue(project.completed_at);
@@ -86,7 +88,32 @@ function projectBar(project: Project, today: Date): ProjectBar {
   if (complete) tone = "done";
   else if (isValidDate(due) && startOfDay(due).getTime() < today.getTime()) tone = "overdue";
   else if (project.has_active_work) tone = "working";
-  return { project, start, end, openEnded, tone, pct, complete };
+  return { id: project.id, name: project.name, href: `/projects/${project.id}`, start, end, openEnded, tone, pct, complete };
+}
+
+function taskBar(task: Task, today: Date): TimelineBar {
+  const created = parseDue(task.created_at);
+  const due = parseDue(task.due_date);
+  const completed = parseDue(task.completed_at);
+  const start = isValidDate(created) ? startOfDay(created) : today;
+  const complete = task.status === "done";
+  let end = today;
+  let openEnded = false;
+  if (complete && isValidDate(completed)) {
+    end = startOfDay(completed);
+  } else if (isValidDate(due)) {
+    end = startOfDay(due);
+  } else {
+    openEnded = true;
+    end = addDays(today, 7);
+  }
+  if (end.getTime() < start.getTime()) end = start;
+  let tone: BarTone = "active";
+  if (complete) tone = "done";
+  else if (isValidDate(due) && startOfDay(due).getTime() < today.getTime()) tone = "overdue";
+  else if (task.status === "in_progress" || task.is_working) tone = "working";
+  const pct = complete ? 100 : task.status === "in_progress" ? 50 : 0;
+  return { id: task.id, name: task.title, href: `/tasks/${task.id}`, start, end, openEnded, tone, pct, complete };
 }
 
 function toneLabel(tone: BarTone, openEnded: boolean): string {
@@ -138,7 +165,9 @@ function writeZoom(zoom: number) {
 }
 
 type Props = {
-  projects: Project[];
+  projects?: Project[];
+  tasks?: Task[];
+  mode?: "projects" | "tasks";
   timeZone: string;
   linkState?: { from: string };
 };
@@ -148,7 +177,7 @@ function isNameColumn(target: EventTarget | null): boolean {
   return Boolean(target.closest(".projects-gantt-name, .projects-gantt-corner, .projects-gantt-resizer"));
 }
 
-export function ProjectsGantt({ projects, linkState }: Props) {
+export function ProjectsGantt({ projects = [], tasks = [], mode = "projects", linkState }: Props) {
   const chartRef = useRef<HTMLDivElement>(null);
   const [chartW, setChartW] = useState(0);
   const [nameW, setNameW] = useState(readNameWidth);
@@ -166,7 +195,10 @@ export function ProjectsGantt({ projects, linkState }: Props) {
   zoomRef.current = zoom;
   nameWRef.current = nameW;
   const today = useMemo(() => startOfDay(new Date()), []);
-  const bars = useMemo(() => projects.map((project) => projectBar(project, today)), [projects, today]);
+  const bars = useMemo(
+    () => mode === "tasks" ? tasks.map((task) => taskBar(task, today)) : projects.map((project) => projectBar(project, today)),
+    [mode, projects, tasks, today]
+  );
 
   const { rangeStart, rangeEnd } = useMemo(() => {
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -203,7 +235,7 @@ export function ProjectsGantt({ projects, linkState }: Props) {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [projects.length]);
+  }, [bars.length]);
 
   useEffect(() => {
     writeNameWidth(nameW);
@@ -345,7 +377,6 @@ export function ProjectsGantt({ projects, linkState }: Props) {
 
   return (
     <div className="projects-gantt">
-      <p className="projects-gantt-hint">Колесо — масштаб времени. Зажмите и тяните — сдвиг шкалы.</p>
       <div
         className={`projects-gantt-chart${panning ? " is-panning" : ""}`}
         ref={chartRef}
@@ -355,7 +386,7 @@ export function ProjectsGantt({ projects, linkState }: Props) {
         <div className="projects-gantt-inner" style={{ minWidth: nameW + trackWidth }}>
           <div className="projects-gantt-head">
             <div className="projects-gantt-corner" style={{ width: nameW }}>
-              Проект
+              {mode === "tasks" ? "Задача" : "Проект"}
               <button
                 type="button"
                 className="projects-gantt-resizer"
@@ -395,29 +426,23 @@ export function ProjectsGantt({ projects, linkState }: Props) {
             const spanDays = Math.max(1, dayOffset(bar.start, bar.end) + 1);
             const width = Math.max(dayW, spanDays * dayW);
             const showLabel = width >= 96;
-            const title = `${bar.project.name} · ${toneLabel(bar.tone, bar.openEnded)} · ${formatDay(bar.start)} – ${formatDay(bar.end)}`;
+            const title = `${bar.name} · ${toneLabel(bar.tone, bar.openEnded)} · ${formatDay(bar.start)} – ${formatDay(bar.end)}`;
             return (
-              <div key={bar.project.id} className="projects-gantt-row">
+              <div key={bar.id} className="projects-gantt-row">
                 <Link
-                  to={`/projects/${bar.project.id}`}
+                  to={bar.href}
                   state={linkState}
                   className="projects-gantt-name"
                   style={{ width: nameW }}
-                  title={bar.project.name}
+                  title={bar.name}
                 >
-                  <strong>{bar.project.name}</strong>
-                  <span className="projects-gantt-name-meta">
-                    <span className={`projects-gantt-chip is-${bar.tone}`}>
-                      {toneLabel(bar.tone, false)}
-                    </span>
-                    <span className="muted">{bar.pct}%</span>
-                  </span>
+                  <strong>{bar.name}</strong>
                 </Link>
                 <div className="projects-gantt-row-track" style={{ width: trackWidth }}>
                   {days.map((day, index) =>
                     day.getDay() === 0 || day.getDay() === 6 ? (
                       <span
-                        key={`wk-${bar.project.id}-${day.toISOString()}`}
+                        key={`wk-${bar.id}-${day.toISOString()}`}
                         className="projects-gantt-weekend"
                         style={{ left: index * dayW, width: dayW }}
                         aria-hidden
@@ -426,7 +451,7 @@ export function ProjectsGantt({ projects, linkState }: Props) {
                   )}
                   <span className="projects-gantt-today" style={{ left: todayLeft }} aria-hidden />
                   <Link
-                    to={`/projects/${bar.project.id}`}
+                    to={bar.href}
                     state={linkState}
                     className={`projects-gantt-bar is-${bar.tone}${bar.openEnded ? " is-open" : ""}`}
                     style={{ left, width, height: BAR_H }}

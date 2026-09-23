@@ -75,7 +75,13 @@ class BacklogItemApiTests(TestCase):
         self.assertEqual(patched.status_code, 200, patched.content)
         self.assertEqual(patched.data["title"], "Другое название")
         self.assertEqual(patched.data["notes"], "уже не к пятнице")
-        self.assertEqual(patched.data["status"], "idea")
+        self.assertEqual(patched.data["status"], "in_progress")
+        denied_stage = self.client_client.patch(
+            f"/api/backlog-items/{item_id}/",
+            {"status": "converted"},
+            format="json",
+        )
+        self.assertEqual(denied_stage.status_code, 400)
 
         project = make_project(self.client_a, name="Сайт")
         as_project = self.agency_client.post(

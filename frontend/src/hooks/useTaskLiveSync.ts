@@ -30,6 +30,7 @@ function fingerprint(task: Task): string {
     task.working_started_at || "",
     task.working_by_name || "",
     task.due_timezone || "",
+    task.is_important ? "1" : "0",
     task.awaiting_client ? "1" : "0",
     task.awaiting_client_at || "",
     task.outcome_seen_at || "",

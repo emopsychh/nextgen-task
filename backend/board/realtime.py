@@ -20,7 +20,13 @@ def _redis():
         import redis
 
         url = getattr(settings, "REDIS_URL", None) or "redis://localhost:6379/0"
-        return redis.Redis.from_url(url, decode_responses=True)
+        # Short timeouts: a down Redis must not hold task/comment requests.
+        return redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=0.2,
+            socket_timeout=0.2,
+        )
     except Exception as exc:
         logger.info("realtime redis unavailable: %s", exc)
         return None
