@@ -20536,6 +20536,123 @@ select:focus {
   box-shadow: none;
 }
 
+.board-split .project-inline-tasks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 44px;
+  padding: 4px 10px 8px;
+}
+
+.project-inline-tasks-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-inline-tasks-title strong {
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.project-inline-tasks-title span {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #e9e5dd;
+  color: #68615a;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.project-inline-task-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #d7d1c7;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.project-inline-task-add:hover {
+  border-color: #aaa198;
+  background: #fbfaf7;
+}
+
+.project-inline-task-add span {
+  font-size: 1.15rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.project-inline-task-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.25fr) minmax(220px, 1fr) minmax(180px, 0.65fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 0 10px 10px;
+  padding: 14px;
+  border: 1px solid #dcd6cc;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(33, 29, 39, 0.06);
+}
+
+.project-inline-task-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.project-inline-task-field > span {
+  color: #6f6861;
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.project-inline-task-field input,
+.project-inline-task-field textarea {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 11px;
+  border: 1px solid #d7d2ca;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.86rem;
+  resize: vertical;
+}
+
+.project-inline-task-field input:focus,
+.project-inline-task-field textarea:focus {
+  border-color: #706578;
+  outline: 3px solid rgba(112, 101, 120, 0.12);
+}
+
+.project-inline-task-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 2px;
+}
+
+.project-inline-task-form-actions .btn {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
 .board-split .project-inline-tasks-list {
   gap: 0;
 }
@@ -20723,6 +20840,14 @@ select:focus {
   .project-compact-side .task-status-pill {
     display: none;
   }
+
+  .project-inline-task-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .project-inline-task-form-actions {
+    justify-content: flex-end;
+  }
 }
 
 @media (max-width: 620px) {
@@ -20744,6 +20869,27 @@ select:focus {
 
   .project-compact-heading .board-row-title {
     white-space: nowrap;
+  }
+
+  .board-split .project-inline-tasks {
+    margin-left: 8px;
+  }
+
+  .board-split .project-inline-tasks-head {
+    padding-inline: 6px;
+  }
+
+  .project-inline-task-form {
+    grid-template-columns: 1fr;
+    margin-inline: 6px;
+  }
+
+  .project-inline-task-form-actions {
+    justify-content: stretch;
+  }
+
+  .project-inline-task-form-actions .btn {
+    flex: 1;
   }
 }
 

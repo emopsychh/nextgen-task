@@ -12,6 +12,7 @@ import {
 import { useAuth } from "../../auth/AuthContext";
 import { FlashToast } from "../../components/FlashToast";
 import { BoardDoneSplit } from "../../components/BoardDoneSplit";
+import { DueDatePicker } from "../../components/DueDatePicker";
 import { PaginationBar } from "../../components/PaginationBar";
 import { ProjectsGantt } from "../../components/ProjectsGantt";
 import { StatusFilterMenu } from "../../components/StatusFilterMenu";
@@ -114,6 +115,11 @@ export function ProjectsList() {
   const [inlineTasks, setInlineTasks] = useState<Record<number, Task[]>>({});
   const [inlineLoadingId, setInlineLoadingId] = useState<number | null>(null);
   const [inlineErrors, setInlineErrors] = useState<Record<number, string>>({});
+  const [creatingTaskProjectId, setCreatingTaskProjectId] = useState<number | null>(null);
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskDescription, setTaskDescription] = useState("");
+  const [taskDueDate, setTaskDueDate] = useState("");
+  const [taskBusy, setTaskBusy] = useState(false);
   const { isUnseen, seedIfEmpty } = useSeenProjects(portalId);
   const pageSize = view === "gantt" ? PICKER_PAGE_SIZE : LIST_PAGE_SIZE;
   const projectsListPath = isAgency ? `/portals/${portalId}/projects` : "/projects";
@@ -278,6 +284,59 @@ export function ProjectsList() {
       }));
     } finally {
       setInlineLoadingId((current) => (current === project.id ? null : current));
+    }
+  }
+
+  function openTaskForm(projectId: number) {
+    setCreatingTaskProjectId(projectId);
+    setTaskTitle("");
+    setTaskDescription("");
+    setTaskDueDate("");
+    setInlineErrors((prev) => ({ ...prev, [projectId]: "" }));
+  }
+
+  function closeTaskForm() {
+    setCreatingTaskProjectId(null);
+    setTaskTitle("");
+    setTaskDescription("");
+    setTaskDueDate("");
+  }
+
+  async function createInlineTask(event: React.FormEvent, project: Project) {
+    event.preventDefault();
+    if (!token || !isAgency || taskBusy || !taskTitle.trim()) return;
+    setTaskBusy(true);
+    setInlineErrors((prev) => ({ ...prev, [project.id]: "" }));
+    try {
+      const created = await api<Task>(
+        "/api/tasks/",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            project: project.id,
+            title: taskTitle.trim(),
+            description: taskDescription.trim(),
+            due_date: taskDueDate || null,
+            status: "todo",
+          }),
+        },
+        token
+      );
+      setInlineTasks((prev) => ({
+        ...prev,
+        [project.id]: [...(prev[project.id] || []), created],
+      }));
+      closeTaskForm();
+      toast.show(`Добавлена в «${project.name}»`, "Задача создана");
+      await load(undefined, page);
+      window.dispatchEvent(new Event("projects-updated"));
+    } catch (err) {
+      setInlineErrors((prev) => ({
+        ...prev,
+        [project.id]: err instanceof Error ? err.message : "Не удалось создать задачу",
+      }));
+    } finally {
+      setTaskBusy(false);
     }
   }
 
@@ -533,6 +592,65 @@ export function ProjectsList() {
                 </div>
                 {expanded ? (
                   <div className="project-inline-tasks">
+                    <div className="project-inline-tasks-head">
+                      <div className="project-inline-tasks-title">
+                        <strong>Задачи проекта</strong>
+                        <span>{projectTasks.length}</span>
+                      </div>
+                      {isAgency && !complete && creatingTaskProjectId !== p.id ? (
+                        <button
+                          type="button"
+                          className="project-inline-task-add"
+                          onClick={() => openTaskForm(p.id)}
+                        >
+                          <span aria-hidden>+</span>
+                          Добавить задачу
+                        </button>
+                      ) : null}
+                    </div>
+                    {creatingTaskProjectId === p.id ? (
+                      <form
+                        className="project-inline-task-form"
+                        onSubmit={(event) => void createInlineTask(event, p)}
+                      >
+                        <label className="project-inline-task-field project-inline-task-title-field">
+                          <span>Название</span>
+                          <input
+                            value={taskTitle}
+                            onChange={(event) => setTaskTitle(event.target.value)}
+                            placeholder="Что нужно сделать"
+                            autoFocus
+                            required
+                          />
+                        </label>
+                        <label className="project-inline-task-field">
+                          <span>Описание</span>
+                          <textarea
+                            value={taskDescription}
+                            onChange={(event) => setTaskDescription(event.target.value)}
+                            placeholder="Коротко опишите результат"
+                            rows={2}
+                          />
+                        </label>
+                        <div className="project-inline-task-field">
+                          <span>Срок</span>
+                          <DueDatePicker
+                            value={taskDueDate}
+                            onChange={setTaskDueDate}
+                            status="todo"
+                            timeZone={dueTz}
+                          />
+                        </div>
+                        <div className="project-inline-task-form-actions">
+                          <button type="button" className="btn btn-ghost" onClick={closeTaskForm}>
+                            Отмена
+                          </button>
+                          <button className="btn btn-primary" disabled={taskBusy}>
+                            {taskBusy ? "Создаём…" : "Создать задачу"}
+                          </button>
+                        </div>
+                      </form>
+                    ) : null}
                     {inlineLoadingId === p.id ? (
                       <div className="project-inline-tasks-empty">
                         <span className="data-loading-spinner" aria-hidden />
